@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "59100482110",
+    "project_id": "booking-register-aadd3",
+    "storage_bucket": "booking-register-aadd3.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:59100482110:android:2f435bb0fc323063421f6f",
+        "android_client_info": {
+          "package_name": "com.bookingregister.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD-6qmsesdXMzA8Jt7b1V_O2msojy79cpQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:59100482110:android:11752c22fefc6e94421f6f",
+        "android_client_info": {
+          "package_name": "com.example.bookingregister"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD-6qmsesdXMzA8Jt7b1V_O2msojy79cpQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

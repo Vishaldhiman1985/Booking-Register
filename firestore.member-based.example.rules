@@ -1,0 +1,73 @@
+﻿rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function memberPath(hotelId) {
+      return /databases/$(database)/documents/hotelAccounts/$(hotelId)/members/$(request.auth.uid);
+    }
+
+    function accountPath(hotelId) {
+      return /databases/$(database)/documents/hotelAccounts/$(hotelId);
+    }
+
+    function isActiveMember(hotelId) {
+      return signedIn()
+        && exists(memberPath(hotelId))
+        && get(memberPath(hotelId)).data.active == true;
+    }
+
+    function hasActiveAccess(hotelId) {
+      return signedIn()
+        && exists(accountPath(hotelId))
+        && get(accountPath(hotelId)).data.status in ['TRIALING', 'ACTIVE']
+        && get(accountPath(hotelId)).data.accessUntil > request.time;
+    }
+
+    function canUseHotel(hotelId) {
+      return isActiveMember(hotelId) && hasActiveAccess(hotelId);
+    }
+
+    match /hotelAccounts/{hotelId} {
+      allow read: if isActiveMember(hotelId);
+      allow create, update, delete: if false;
+
+      match /members/{memberUid} {
+        allow read: if isActiveMember(hotelId);
+        allow create, update, delete: if false;
+      }
+    }
+
+    match /hotels/{hotelId} {
+      allow read, create, update, delete: if canUseHotel(hotelId);
+
+      match /rooms/{roomId} {
+        allow read, create, update, delete: if canUseHotel(hotelId);
+      }
+
+      match /managedProperties/{propertyId} {
+        allow read, create, update, delete: if canUseHotel(hotelId);
+      }
+
+      match /roomCategories/{categoryId} {
+        allow read, create, update, delete: if canUseHotel(hotelId);
+      }
+
+      match /bookings/{bookingId} {
+        allow read, create, update, delete: if canUseHotel(hotelId);
+      }
+
+      match /bookingSources/{sourceId} {
+        allow read, create, update, delete: if canUseHotel(hotelId);
+      }
+
+      match /bookingLocks/{lockId} {
+        allow read, create, update, delete: if canUseHotel(hotelId);
+      }
+    }
+  }
+}

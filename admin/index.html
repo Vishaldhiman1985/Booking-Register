@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Booking Register Admin</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Booking Register</p>
+      <h1>Admin</h1>
+    </div>
+    <button id="logoutButton" class="ghost hidden" type="button">Logout</button>
+  </header>
+
+  <main>
+    <section id="loginView" class="panel narrow">
+      <h2>Admin Login</h2>
+      <p class="muted">Use your platform admin Firebase account.</p>
+      <label>
+        Email
+        <input id="emailInput" type="email" autocomplete="email" placeholder="you@example.com">
+      </label>
+      <label>
+        Password
+        <input id="passwordInput" type="password" autocomplete="current-password" placeholder="Password">
+      </label>
+      <button id="loginButton" type="button">Login</button>
+      <p id="loginMessage" class="message"></p>
+    </section>
+
+    <section id="dashboardView" class="hidden">
+      <div class="toolbar">
+        <div>
+          <h2>Hotels</h2>
+          <p id="summaryText" class="muted">Loading accounts...</p>
+        </div>
+        <div class="toolbar-actions">
+          <button id="importButton" class="secondary" type="button">Import Existing Hotels</button>
+          <button id="refreshButton" type="button">Refresh</button>
+        </div>
+      </div>
+
+      <div id="statsRow" class="stats-row"></div>
+
+      <div class="filter-bar">
+        <input id="searchInput" type="search" placeholder="Search hotel, owner email, or hotel id">
+        <select id="statusFilter">
+          <option value="ALL">All statuses</option>
+          <option value="TRIALING">Trial</option>
+          <option value="ACTIVE">Active</option>
+          <option value="PAST_DUE">Past due</option>
+          <option value="SUSPENDED">Suspended</option>
+        </select>
+      </div>
+
+      <div id="hotelList" class="hotel-list"></div>
+      <p id="dashboardMessage" class="message"></p>
+    </section>
+  </main>
+
+  <template id="hotelCardTemplate">
+    <article class="hotel-card">
+      <div class="hotel-main">
+        <div>
+          <h3 class="hotel-name"></h3>
+          <p class="hotel-id muted"></p>
+          <p class="owner-email muted"></p>
+        </div>
+        <span class="status-pill"></span>
+      </div>
+
+      <div class="metrics">
+        <div>
+          <span>Users</span>
+          <strong class="users"></strong>
+        </div>
+        <div>
+          <span>Access Until</span>
+          <strong class="access-until"></strong>
+        </div>
+        <div>
+          <span>Plan</span>
+          <strong class="plan-id"></strong>
+        </div>
+      </div>
+
+      <div class="controls">
+        <label>
+          Status
+          <select class="status-select">
+            <option value="TRIALING">Trial</option>
+            <option value="ACTIVE">Active</option>
+            <option value="PAST_DUE">Past due</option>
+            <option value="SUSPENDED">Suspended</option>
+          </select>
+        </label>
+        <label>
+          Max users
+          <input class="max-users-input" type="number" min="1" max="50">
+        </label>
+        <label>
+          Access days
+          <input class="access-days-input" type="number" min="1" max="730" value="31">
+        </label>
+        <button class="save-button" type="button">Save</button>
+      </div>
+    </article>
+  </template>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

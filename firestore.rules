@@ -1,0 +1,185 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function memberPath(hotelId) {
+      return /databases/$(database)/documents/hotelAccounts/$(hotelId)/members/$(request.auth.uid);
+    }
+
+    function accountPath(hotelId) {
+      return /databases/$(database)/documents/hotelAccounts/$(hotelId);
+    }
+
+    function memberData(hotelId) {
+      return get(memberPath(hotelId)).data;
+    }
+
+    function memberRole(hotelId) {
+      return memberData(hotelId).role;
+    }
+
+    function isActiveMember(hotelId) {
+      return signedIn()
+        && exists(memberPath(hotelId))
+        && memberData(hotelId).active == true;
+    }
+
+    function hasActiveAccess(hotelId) {
+      return signedIn()
+        && exists(accountPath(hotelId))
+        && get(accountPath(hotelId)).data.status in ['TRIALING', 'ACTIVE']
+        && get(accountPath(hotelId)).data.accessUntil > request.time;
+    }
+
+    function canReadHotel(hotelId) {
+      return isActiveMember(hotelId) && hasActiveAccess(hotelId);
+    }
+
+    function canOperateHotel(hotelId) {
+      return canReadHotel(hotelId) && memberRole(hotelId) in ['OWNER', 'MANAGER', 'STAFF'];
+    }
+
+    function canManageHotel(hotelId) {
+      return canReadHotel(hotelId) && memberRole(hotelId) in ['OWNER', 'MANAGER'];
+    }
+
+    function canOwnHotel(hotelId) {
+      return canReadHotel(hotelId) && memberRole(hotelId) == 'OWNER';
+    }
+
+    function scopedToHotel(hotelId) {
+      return request.resource.data.hotelRemoteId == hotelId;
+    }
+
+    function existingScopedToHotel(hotelId) {
+      return resource.data.hotelRemoteId == hotelId;
+    }
+
+    match /hotelAccounts/{hotelId} {
+      allow read: if isActiveMember(hotelId);
+      allow create, update, delete: if false;
+
+      match /members/{memberUid} {
+        allow read: if isActiveMember(hotelId);
+        allow create, update, delete: if false;
+      }
+    }
+
+    match /hotels/{hotelId} {
+      allow read: if canReadHotel(hotelId);
+      allow create, update: if canManageHotel(hotelId);
+      allow delete: if canOwnHotel(hotelId);
+
+      match /rooms/{roomId} {
+        allow read: if canReadHotel(hotelId);
+        allow create, update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
+        allow delete: if canManageHotel(hotelId);
+      }
+
+      match /managedProperties/{propertyId} {
+        allow read: if canReadHotel(hotelId);
+        allow create, update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
+        allow delete: if canManageHotel(hotelId);
+      }
+
+      match /roomCategories/{categoryId} {
+        allow read: if canReadHotel(hotelId);
+        allow create, update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
+        allow delete: if canManageHotel(hotelId);
+      }
+
+      match /bookings/{bookingId} {
+        allow read: if canReadHotel(hotelId);
+        allow create, update: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
+        allow delete: if canOperateHotel(hotelId);
+      }
+
+      match /bookingPayments/{paymentId} {
+        allow read: if canReadHotel(hotelId);
+        allow create: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
+        allow update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
+        allow delete: if canManageHotel(hotelId) && existingScopedToHotel(hotelId);
+      }
+
+      match /bookingFinancialLines/{lineId} {
+        allow read: if canReadHotel(hotelId);
+        allow create: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
+        allow update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
+        allow delete: if canManageHotel(hotelId) && existingScopedToHotel(hotelId);
+      }
+
+      match /bookingAccountingCharges/{chargeId} {
+        allow read: if canReadHotel(hotelId);
+        allow create: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
+        allow update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
+        allow delete: if canManageHotel(hotelId) && existingScopedToHotel(hotelId);
+      }
+
+      match /foodMenuItems/{itemId} {
+        allow read: if canReadHotel(hotelId);
+        allow create, update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
+        allow delete: if canManageHotel(hotelId);
+      }
+
+      match /serviceMenuItems/{itemId} {
+        allow read: if canReadHotel(hotelId);
+        allow create, update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
+        allow delete: if canManageHotel(hotelId);
+      }
+
+      match /foodGstCategories/{categoryId} {
+        allow read: if canReadHotel(hotelId);
+        allow create, update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
+        allow delete: if canManageHotel(hotelId);
+      }
+
+      match /foodOrders/{orderId} {
+        allow read: if canReadHotel(hotelId);
+        allow create, update: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
+        allow delete: if canOperateHotel(hotelId);
+      }
+
+      match /foodOrderItems/{itemId} {
+        allow read: if canReadHotel(hotelId);
+        allow create, update: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
+        allow delete: if canOperateHotel(hotelId);
+      }
+
+      match /foodBills/{billId} {
+        allow read: if canReadHotel(hotelId);
+        allow create: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
+        allow update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
+        allow delete: if canManageHotel(hotelId) && existingScopedToHotel(hotelId);
+      }
+
+      match /foodBillItems/{itemId} {
+        allow read: if canReadHotel(hotelId);
+        allow create: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
+        allow update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
+        allow delete: if canManageHotel(hotelId) && existingScopedToHotel(hotelId);
+      }
+
+      match /invoiceCounters/{counterId} {
+        allow read: if canManageHotel(hotelId);
+        allow create, update, delete: if false;
+      }
+
+      match /bookingSources/{sourceId} {
+        allow read: if canReadHotel(hotelId);
+        allow create, update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
+        allow delete: if canManageHotel(hotelId);
+      }
+
+      match /bookingLocks/{lockId} {
+        allow read: if canReadHotel(hotelId);
+        allow create, update: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
+        allow delete: if canOperateHotel(hotelId);
+      }
+    }
+  }
+}
