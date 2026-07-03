@@ -399,6 +399,8 @@ class FoodBillingRepository(
 
         val now = System.currentTimeMillis()
         val orderRemoteId = existing?.remoteId ?: "${hotelRemoteId}_food_order_${UUID.randomUUID()}"
+        val existingItems = foodOrderItemDao.getItemsForOrder(hotelRemoteId, orderRemoteId)
+        val existingItemsById = existingItems.associateBy { it.remoteId }
 
         val propertyRemoteId = existing?.propertyRemoteId
             ?: booking?.propertyRemoteId
@@ -409,12 +411,13 @@ class FoodBillingRepository(
         val discountRatio = if (subtotal > 0.0) discount / subtotal else 0.0
 
         val normalizedItems = activeItems.map { item ->
+            val stored = existingItemsById[item.remoteId]
             val lineSubtotal = item.quantity * item.unitPrice
             val taxable = lineSubtotal * (1.0 - discountRatio)
             val gst = 0.0
 
             item.copy(
-                localId = item.localId,
+                localId = stored?.localId ?: item.localId,
                 remoteId = item.remoteId.ifBlank { "${orderRemoteId}_item_${UUID.randomUUID()}" },
                 hotelRemoteId = hotelRemoteId,
                 orderRemoteId = orderRemoteId,
@@ -425,9 +428,26 @@ class FoodBillingRepository(
                 isDeleted = false,
                 syncState = SyncState.PENDING,
                 lastSyncError = null,
-                baseRevision = item.baseRevision.takeIf { it > 0 } ?: item.revision
+                lastSyncedAt = stored?.lastSyncedAt,
+                revision = stored?.revision ?: item.revision,
+                baseRevision = stored?.baseRevision?.takeIf { it > 0 }
+                    ?: stored?.revision
+                    ?: item.baseRevision.takeIf { it > 0 }
+                    ?: item.revision
             )
         }
+        val incomingItemIds = normalizedItems.map { it.remoteId }.toSet()
+        val deletedItems = existingItems
+            .filter { it.remoteId !in incomingItemIds }
+            .map { stored ->
+                stored.copy(
+                    updatedAt = now,
+                    isDeleted = true,
+                    syncState = SyncState.PENDING,
+                    lastSyncError = null,
+                    baseRevision = stored.baseRevision.takeIf { it > 0 } ?: stored.revision
+                )
+            }
 
         val taxableAmount = (subtotal - discount).coerceAtLeast(0.0)
         val gstAmount = normalizedItems.sumOf { it.lineGst }
@@ -466,10 +486,11 @@ class FoodBillingRepository(
             updatedByUid = existing?.updatedByUid
         )
 
-        foodOrderDao.upsert(order)
-
-        normalizedItems.forEach { item ->
-            foodOrderItemDao.upsert(item)
+        db.withTransaction {
+            foodOrderDao.upsert(order)
+            (deletedItems + normalizedItems).forEach { item ->
+                foodOrderItemDao.upsert(item)
+            }
         }
 
         enqueueBackgroundSync()

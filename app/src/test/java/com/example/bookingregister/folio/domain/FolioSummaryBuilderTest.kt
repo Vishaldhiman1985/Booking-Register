@@ -10,6 +10,8 @@ import com.example.bookingregister.data.entities.FoodOrderEntity
 import com.example.bookingregister.data.entities.FoodOrderStatus
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import com.example.bookingregister.authoritativeFoodItems
+import com.example.bookingregister.authoritativeRoomLines
 
 class FolioSummaryBuilderTest {
     private val miniFolioBuilder = MiniFolioBuilder()
@@ -22,7 +24,7 @@ class FolioSummaryBuilderTest {
             payment(amount = 6_000.0, stay = 5_000.0, food = 1_000.0)
         )
 
-        val summary = FolioSummaryBuilder.build(booking, payments, foodOrders)
+        val summary = summary(booking, payments, foodOrders)
 
         assertEquals(5_000.0, summary.stayTotal, 0.01)
         assertEquals(2_000.0, summary.foodTotal, 0.01)
@@ -46,7 +48,7 @@ class FolioSummaryBuilderTest {
             )
         )
 
-        val summary = FolioSummaryBuilder.build(booking, payments, foodOrders)
+        val summary = summary(booking, payments, foodOrders)
 
         assertEquals(0.0, summary.stayPaid, 0.01)
         assertEquals(280.0, summary.foodPaid, 0.01)
@@ -67,7 +69,7 @@ class FolioSummaryBuilderTest {
             payment(remoteId = "old_food_payment", amount = 500.0, food = 500.0, paymentMillis = 1_500L)
         )
 
-        val summary = FolioSummaryBuilder.build(booking, payments, foodOrders)
+        val summary = summary(booking, payments, foodOrders)
 
         assertEquals(2_600.0, summary.stayPaid, 0.01)
         assertEquals(780.0, summary.foodTotal, 0.01)
@@ -84,7 +86,7 @@ class FolioSummaryBuilderTest {
             foodOrder(remoteId = "cancelled_food", total = 500.0, status = FoodOrderStatus.CANCELLED)
         )
 
-        val summary = FolioSummaryBuilder.build(booking, emptyList(), foodOrders)
+        val summary = summary(booking, emptyList(), foodOrders)
 
         assertEquals(80.0, summary.foodTotal, 0.01)
         assertEquals(2_680.0, summary.grandTotal, 0.01)
@@ -104,13 +106,15 @@ class FolioSummaryBuilderTest {
             payment(remoteId = "food", amount = 500.0, food = 500.0)
         )
 
-        val summary = FolioSummaryBuilder.build(booking, payments, foodOrders)
+        val summary = summary(booking, payments, foodOrders)
         val folio = requireNotNull(
             miniFolioBuilder.buildForBooking(
                 booking = booking,
                 activeRoomIds = setOf("room_1"),
                 bookingPayments = payments,
-                foodOrders = foodOrders
+                foodOrders = foodOrders,
+                foodOrderItems = authoritativeFoodItems(foodOrders),
+                bookingFinancialLines = authoritativeRoomLines(booking)
             )
         )
 
@@ -154,7 +158,9 @@ class FolioSummaryBuilderTest {
             booking = booking,
             payments = emptyList(),
             foodOrders = foodOrders,
-            accountingCharges = charges
+            foodOrderItems = authoritativeFoodItems(foodOrders),
+            accountingCharges = charges,
+            bookingFinancialLines = authoritativeRoomLines(booking)
         )
 
         assertEquals(4_500.0, summary.stayBalance, 0.01)
@@ -190,6 +196,18 @@ class FolioSummaryBuilderTest {
         assertEquals("Payment received", paymentLines.single().description)
         assertEquals(1_000.0, folio.totalPayments, 0.01)
     }
+
+    private fun summary(
+        booking: BookingEntity,
+        payments: List<BookingPaymentEntity>,
+        foodOrders: List<FoodOrderEntity>
+    ) = FolioSummaryBuilder.build(
+        booking = booking,
+        payments = payments,
+        foodOrders = foodOrders,
+        foodOrderItems = authoritativeFoodItems(foodOrders),
+        bookingFinancialLines = authoritativeRoomLines(booking)
+    )
 
     private fun booking(receivable: Double): BookingEntity = BookingEntity(
         remoteId = "booking_1",

@@ -13,6 +13,19 @@ class MiniFolioBuilderTest {
     private val builder = MiniFolioBuilder()
 
     @Test
+    fun missingRoomLinesAreReportedAndNeverMarkedSettled() {
+        val folio = requireNotNull(
+            builder.buildForBooking(
+                booking = booking(),
+                activeRoomIds = setOf("room_1")
+            )
+        )
+
+        assertEquals(MiniFolioStatus.INTEGRITY_ERROR, folio.status)
+        assertTrue(folio.integrityErrors.any { it.contains("Missing room-night") })
+    }
+
+    @Test
     fun allocatedCorrectionUsesCorrectionDescription() {
         val folio = builder.buildForBooking(
             booking = booking(),

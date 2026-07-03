@@ -7,6 +7,8 @@ import com.example.bookingregister.data.entities.BookingPaymentEntity
 import com.example.bookingregister.data.entities.BookingPaymentType
 import com.example.bookingregister.data.entities.FoodOrderEntity
 import com.example.bookingregister.folio.domain.FolioSummaryBuilder
+import com.example.bookingregister.authoritativeFoodItems
+import com.example.bookingregister.authoritativeRoomLines
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -23,7 +25,11 @@ class BookingFolioScenarioTest {
         val roomPayment = allocatePayment("room_payment", booking, listOf(advance), foodOrders, amount = 4_000.0)
         val foodPayment = allocatePayment("food_payment", booking, listOf(advance, roomPayment), foodOrders, amount = 280.0)
 
-        val summary = FolioSummaryBuilder.build(booking, listOf(advance, roomPayment, foodPayment), foodOrders)
+        val summary = FolioSummaryBuilder.build(
+            booking, listOf(advance, roomPayment, foodPayment), foodOrders,
+            foodOrderItems = authoritativeFoodItems(foodOrders),
+            bookingFinancialLines = authoritativeRoomLines(booking)
+        )
 
         assertEquals(5_000.0, summary.stayTotal, 0.001)
         assertEquals(280.0, summary.foodTotal, 0.001)
@@ -55,7 +61,10 @@ class BookingFolioScenarioTest {
             category = BookingPaymentCategory.STAY
         )
 
-        val summary = FolioSummaryBuilder.build(booking, listOf(advance, roomPayment), emptyList())
+        val summary = FolioSummaryBuilder.build(
+            booking, listOf(advance, roomPayment), emptyList(),
+            bookingFinancialLines = authoritativeRoomLines(booking)
+        )
 
         assertEquals(2_000.0, summary.stayTotal, 0.001)
         assertEquals(2_000.0, summary.stayPaid, 0.001)
@@ -69,7 +78,11 @@ class BookingFolioScenarioTest {
         foodOrders: List<FoodOrderEntity>,
         amount: Double
     ): BookingPaymentEntity {
-        val summary = FolioSummaryBuilder.build(booking, existingPayments, foodOrders)
+        val summary = FolioSummaryBuilder.build(
+            booking, existingPayments, foodOrders,
+            foodOrderItems = authoritativeFoodItems(foodOrders),
+            bookingFinancialLines = authoritativeRoomLines(booking)
+        )
         val allocation = PaymentAllocationPolicy.allocate(
             amount = amount,
             selectedCategory = BookingPaymentCategory.AUTO,

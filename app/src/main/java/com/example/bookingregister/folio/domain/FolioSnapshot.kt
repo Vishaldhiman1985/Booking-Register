@@ -28,7 +28,8 @@ data class FolioSnapshot(
     val damage: FolioBucketSnapshot,
     val generalDiscount: Double,
     val unappliedPaid: Double,
-    val lines: List<MiniFolioLine>
+    val lines: List<MiniFolioLine>,
+    val integrityErrors: List<String> = emptyList()
 ) {
     val grossCharges: Double get() = room.charge + food.charge + service.charge + damage.charge
     val totalDiscount: Double get() = room.discount + food.discount + service.discount + generalDiscount
@@ -91,7 +92,8 @@ class FolioSnapshotBuilder {
             damage = bucketSnapshot(lines, BookingPaymentCategory.DAMAGE, paymentBuckets),
             generalDiscount = lines.discountFor(null),
             unappliedPaid = unappliedPaid,
-            lines = lines
+            lines = lines,
+            integrityErrors = folio?.integrityErrors.orEmpty()
         )
     }
 
@@ -135,11 +137,13 @@ class FolioSnapshotBuilder {
             }
             val allocatedTotal = payment.allocatedStayAmount +
                     payment.allocatedFoodAmount +
-                    payment.allocatedServiceAmount
+                    payment.allocatedServiceAmount +
+                    payment.allocatedDamageAmount
             if (allocatedTotal > 0.0) {
                 totals.addTo(BookingPaymentCategory.STAY, sign * payment.allocatedStayAmount)
                 totals.addTo(BookingPaymentCategory.FOOD, sign * payment.allocatedFoodAmount)
                 totals.addTo(BookingPaymentCategory.SERVICE, sign * payment.allocatedServiceAmount)
+                totals.addTo(BookingPaymentCategory.DAMAGE, sign * payment.allocatedDamageAmount)
             } else {
                 val category = BookingPaymentCategory.normalize(payment.paymentCategory)
                 val bucket = when (category) {

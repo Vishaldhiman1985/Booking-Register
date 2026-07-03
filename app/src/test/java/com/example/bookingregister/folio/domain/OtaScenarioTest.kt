@@ -4,6 +4,7 @@ import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.BookingSourceType
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import com.example.bookingregister.authoritativeRoomLines
 
 class OtaScenarioTest {
 
@@ -27,7 +28,8 @@ class OtaScenarioTest {
         val summary = FolioSummaryBuilder.build(
             booking = booking,
             payments = emptyList(),
-            foodOrders = emptyList()
+            foodOrders = emptyList(),
+            bookingFinancialLines = authoritativeRoomLines(booking)
         )
 
         assertEquals(6_000.0, summary.stayTotal, 0.01)

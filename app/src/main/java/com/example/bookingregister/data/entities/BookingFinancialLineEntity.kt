@@ -53,4 +53,5 @@ object BookingFinancialLineSource {
     const val SIMPLE_AUTO = "SIMPLE_AUTO"
     const val MANUAL = "MANUAL"
     const val OTA_IMPORT = "OTA_IMPORT"
+    const val LEGACY_MIGRATION = "LEGACY_MIGRATION"
 }

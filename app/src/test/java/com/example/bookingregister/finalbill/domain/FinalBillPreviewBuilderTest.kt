@@ -15,6 +15,7 @@ import com.example.bookingregister.data.entities.RoomEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.example.bookingregister.authoritativeRoomLines
 
 class FinalBillPreviewBuilderTest {
     private val builder = FinalBillPreviewBuilder()
@@ -29,6 +30,7 @@ class FinalBillPreviewBuilderTest {
                 payment("room", amount = 4_000.0, stay = 4_000.0),
                 payment("food", amount = 280.0, food = 280.0)
             ),
+            bookingFinancialLines = authoritativeRoomLines(booking()),
             foodOrders = listOf(foodOrder()),
             foodOrderItems = listOf(
                 foodItem("item_1", "Prantha", quantity = 2.0, unitPrice = 100.0, taxable = 190.48, gst = 9.52, total = 200.0),
@@ -64,8 +66,9 @@ class FinalBillPreviewBuilderTest {
             booking = booking(),
             rooms = listOf(room()),
             bookingPayments = emptyList(),
+            bookingFinancialLines = authoritativeRoomLines(booking()),
             foodOrders = listOf(foodOrder(status = FoodOrderStatus.BILLED, total = 280.0)),
-            foodOrderItems = listOf(foodItem("item_1", "Prantha", quantity = 2.0, unitPrice = 100.0, taxable = 190.48, gst = 9.52, total = 200.0))
+            foodOrderItems = listOf(foodItem("item_1", "Prantha", quantity = 2.0, unitPrice = 140.0, taxable = 266.67, gst = 13.33, total = 280.0))
         )
 
         assertEquals(280.0, preview.foodTotal, 0.01)
@@ -83,11 +86,13 @@ class FinalBillPreviewBuilderTest {
                 payment("room", amount = 2_000.0, stay = 2_000.0, paymentMillis = 1_000L),
                 payment("old_food_payment", amount = 500.0, food = 500.0, paymentMillis = 1_500L)
             ),
+            bookingFinancialLines = authoritativeRoomLines(booking(receivable = 2_600.0)),
             foodOrders = listOf(
                 foodOrder(remoteId = "old_order", status = FoodOrderStatus.BILLED_IN_FOLIO, total = 500.0, archivedAt = 2_000L),
                 foodOrder(remoteId = "new_order", total = 280.0, orderMillis = 3_000L)
             ),
             foodOrderItems = listOf(
+                foodItem("old_item", "Old food", quantity = 1.0, unitPrice = 500.0, taxable = 500.0, gst = 0.0, total = 500.0, orderRemoteId = "old_order"),
                 foodItem("item_1", "Prantha", quantity = 2.0, unitPrice = 140.0, taxable = 266.67, gst = 13.33, total = 280.0, orderRemoteId = "new_order")
             )
         )
@@ -106,6 +111,7 @@ class FinalBillPreviewBuilderTest {
             booking = booking(sourceType = BookingSourceType.OTA, expectedPayout = 3_847.62),
             rooms = listOf(room()),
             bookingPayments = emptyList(),
+            bookingFinancialLines = authoritativeRoomLines(booking(sourceType = BookingSourceType.OTA, expectedPayout = 3_847.62)),
             foodOrders = emptyList(),
             foodOrderItems = emptyList()
         )
@@ -122,6 +128,7 @@ class FinalBillPreviewBuilderTest {
             booking = booking(),
             rooms = listOf(room()),
             bookingPayments = emptyList(),
+            bookingFinancialLines = authoritativeRoomLines(booking()),
             accountingCharges = listOf(
                 discount("room_discount", BookingPaymentCategory.STAY, 500.0),
                 discount("food_discount", BookingPaymentCategory.FOOD, 40.0)
@@ -207,7 +214,7 @@ class FinalBillPreviewBuilderTest {
         quantity = quantity,
         unitPrice = unitPrice,
         gstRatePercent = 5.0,
-        lineSubtotal = taxable,
+        lineSubtotal = quantity * unitPrice,
         lineGst = gst,
         lineTotal = total
     )

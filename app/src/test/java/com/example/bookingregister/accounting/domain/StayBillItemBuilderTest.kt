@@ -26,13 +26,15 @@ class StayBillItemBuilderTest {
         assertEquals(5.0, items[0].gstRatePercent, 0.001)
         assertEquals(5_000.0, items[0].taxableAmount, 0.001)
         assertEquals(250.0, items[0].gstAmount, 0.001)
+        assertEquals(5_250.0, items[0].lineTotal, 0.001)
         assertEquals(18.0, items[1].gstRatePercent, 0.001)
         assertEquals(6_822.03, items[1].taxableAmount, 0.001)
         assertEquals(1_227.97, items[1].gstAmount, 0.001)
+        assertEquals(8_050.0, items[1].lineTotal, 0.001)
     }
 
     @Test
-    fun fallbackUsesStoredBookingRoomTaxWhenDetailedLinesAreMissing() {
+    fun missingLinesDoNotCreateStayBillItemsFromBookingCache() {
         val items = StayBillItemBuilder.build(
             billRemoteId = "bill_1",
             hotelRemoteId = "hotel_1",
@@ -44,10 +46,7 @@ class StayBillItemBuilderTest {
             idFactory = sequentialIds()
         )
 
-        assertEquals(1, items.size)
-        assertEquals(4_761.90, items.single().taxableAmount, 0.001)
-        assertEquals(238.10, items.single().gstAmount, 0.001)
-        assertEquals(5_000.0, items.single().lineTotal, 0.001)
+        assertEquals(0, items.size)
     }
 
     @Test
@@ -73,7 +72,7 @@ class StayBillItemBuilderTest {
     }
 
     @Test
-    fun fallbackOtaStayLineUsesGuestFinalPriceWhenStayTotalIsNetPayout() {
+    fun missingOtaLinesDoNotCreateStayBillItemsFromBookingCache() {
         val items = StayBillItemBuilder.build(
             billRemoteId = "bill_1",
             hotelRemoteId = "hotel_1",
@@ -85,10 +84,7 @@ class StayBillItemBuilderTest {
             idFactory = sequentialIds()
         )
 
-        val item = items.single()
-        assertEquals(2_095.24, item.taxableAmount, 0.001)
-        assertEquals(104.76, item.gstAmount, 0.001)
-        assertEquals(2_200.0, item.lineTotal, 0.001)
+        assertEquals(0, items.size)
     }
 
     private fun booking(roomRevenue: Double, propertyTax: Double): BookingEntity = BookingEntity(

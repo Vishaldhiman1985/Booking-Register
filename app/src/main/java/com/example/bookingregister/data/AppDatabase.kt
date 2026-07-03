@@ -13,6 +13,7 @@ import com.example.bookingregister.data.dao.BookingDao
 import com.example.bookingregister.data.dao.BookingFinancialLineDao
 import com.example.bookingregister.data.dao.BookingPaymentDao
 import com.example.bookingregister.data.dao.BookingSourceDao
+import com.example.bookingregister.data.dao.BookingSyncOutboxDao
 import com.example.bookingregister.data.dao.FoodBillDao
 import com.example.bookingregister.data.dao.FoodBillItemDao
 import com.example.bookingregister.data.dao.FoodGstCategoryDao
@@ -29,6 +30,7 @@ import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.BookingFinancialLineEntity
 import com.example.bookingregister.data.entities.BookingPaymentEntity
 import com.example.bookingregister.data.entities.BookingSourceEntity
+import com.example.bookingregister.data.entities.BookingSyncOutboxEntity
 import com.example.bookingregister.data.entities.FoodBillEntity
 import com.example.bookingregister.data.entities.FoodBillItemEntity
 import com.example.bookingregister.data.entities.FoodGstCategoryEntity
@@ -61,8 +63,9 @@ import com.example.bookingregister.data.entities.RoomGstSlabEntity
         FoodBillItemEntity::class,
         ServiceMenuItemEntity::class,
         RoomGstSlabEntity::class,
+        BookingSyncOutboxEntity::class,
     ],
-    version = 29,
+    version = 33,
     exportSchema = true
 )
 @TypeConverters(AppConverters::class)
@@ -76,6 +79,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun bookingFinancialLineDao(): BookingFinancialLineDao
     abstract fun bookingPaymentDao(): BookingPaymentDao
     abstract fun bookingSourceDao(): BookingSourceDao
+    abstract fun bookingSyncOutboxDao(): BookingSyncOutboxDao
     abstract fun foodGstCategoryDao(): FoodGstCategoryDao
     abstract fun foodMenuItemDao(): FoodMenuItemDao
     abstract fun foodOrderDao(): FoodOrderDao
@@ -385,6 +389,28 @@ abstract class AppDatabase : RoomDatabase() {
                 ensureColumn(database, "booking_financial_lines", "cessAmount", "REAL NOT NULL DEFAULT 0.0")
             }
         }
+
+        private val MIGRATION_29_30 = object : Migration(29, 30) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                ensureColumn(database, "booking_accounting_charges", "linkedFinalBillId", "TEXT")
+                ensureColumn(database, "booking_accounting_charges", "archivedAt", "INTEGER")
+            }
+        }
+        private val MIGRATION_30_31 = object : Migration(30, 31) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                ensureColumn(database, "booking_payments", "allocatedDamageAmount", "REAL NOT NULL DEFAULT 0.0")
+            }
+        }
+        private val MIGRATION_31_32 = object : Migration(31, 32) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                ensureColumn(database, "bookings", "pricingStatus", "TEXT NOT NULL DEFAULT 'CONFIRMED'")
+            }
+        }
+        private val MIGRATION_32_33 = object : Migration(32, 33) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                ensureBookingSyncOutboxSchema(database)
+            }
+        }
         fun allMigrations(): Array<Migration> = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -413,8 +439,30 @@ abstract class AppDatabase : RoomDatabase() {
             MIGRATION_25_26,
             MIGRATION_26_27,
             MIGRATION_27_28,
-            MIGRATION_28_29
+            MIGRATION_28_29,
+            MIGRATION_29_30,
+            MIGRATION_30_31,
+            MIGRATION_31_32,
+            MIGRATION_32_33
         )
+
+        private fun ensureBookingSyncOutboxSchema(database: SupportSQLiteDatabase) {
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS booking_sync_outbox (
+                    operationId TEXT NOT NULL PRIMARY KEY,
+                    hotelRemoteId TEXT NOT NULL,
+                    bookingRemoteId TEXT NOT NULL,
+                    createdAt INTEGER NOT NULL,
+                    attemptCount INTEGER NOT NULL DEFAULT 0,
+                    lastError TEXT
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_booking_sync_outbox_hotelRemoteId ON booking_sync_outbox(hotelRemoteId)")
+            database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_booking_sync_outbox_bookingRemoteId ON booking_sync_outbox(bookingRemoteId)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_booking_sync_outbox_hotelRemoteId_createdAt ON booking_sync_outbox(hotelRemoteId, createdAt)")
+        }
 
         private fun ensureBookingSourcePropertySchema(database: SupportSQLiteDatabase) {
             ensureColumn(database, "booking_sources", "propertyRemoteId", "TEXT")
@@ -471,6 +519,7 @@ abstract class AppDatabase : RoomDatabase() {
             ensureColumn(database, "booking_payments", "allocatedStayAmount", "REAL NOT NULL DEFAULT 0.0")
             ensureColumn(database, "booking_payments", "allocatedFoodAmount", "REAL NOT NULL DEFAULT 0.0")
             ensureColumn(database, "booking_payments", "allocatedServiceAmount", "REAL NOT NULL DEFAULT 0.0")
+            ensureColumn(database, "booking_payments", "allocatedDamageAmount", "REAL NOT NULL DEFAULT 0.0")
             ensureColumn(database, "booking_payments", "unappliedAmount", "REAL NOT NULL DEFAULT 0.0")
             database.execSQL("UPDATE booking_payments SET paymentCategory = 'STAY' WHERE paymentCategory = 'AUTO' AND paymentType IN ('ADVANCE', 'PAYMENT') AND allocatedStayAmount = 0.0 AND allocatedFoodAmount = 0.0 AND allocatedServiceAmount = 0.0")
             database.execSQL("UPDATE booking_payments SET allocatedStayAmount = amount WHERE paymentType IN ('ADVANCE', 'PAYMENT') AND allocatedStayAmount = 0.0 AND allocatedFoodAmount = 0.0 AND allocatedServiceAmount = 0.0")
@@ -590,6 +639,7 @@ abstract class AppDatabase : RoomDatabase() {
                     paid REAL NOT NULL DEFAULT 0.0,
                     balance REAL NOT NULL DEFAULT 0.0,
                     paymentStatus TEXT NOT NULL DEFAULT 'NOT_PAID',
+                    pricingStatus TEXT NOT NULL DEFAULT 'CONFIRMED',
                     bookingStatus TEXT NOT NULL DEFAULT 'RESERVED',
                     actualCheckInAt INTEGER,
                     actualCheckOutAt INTEGER,
@@ -622,6 +672,7 @@ abstract class AppDatabase : RoomDatabase() {
                     allocatedStayAmount REAL NOT NULL DEFAULT 0.0,
                     allocatedFoodAmount REAL NOT NULL DEFAULT 0.0,
                     allocatedServiceAmount REAL NOT NULL DEFAULT 0.0,
+                    allocatedDamageAmount REAL NOT NULL DEFAULT 0.0,
                     paymentMillis INTEGER NOT NULL DEFAULT 0,
                     method TEXT,
                     note TEXT,
@@ -750,6 +801,7 @@ abstract class AppDatabase : RoomDatabase() {
             ensureColumn(database, "bookings", "paid", "REAL NOT NULL DEFAULT 0.0")
             ensureColumn(database, "bookings", "balance", "REAL NOT NULL DEFAULT 0.0")
             ensureColumn(database, "bookings", "paymentStatus", "TEXT NOT NULL DEFAULT 'NOT_PAID'")
+            ensureColumn(database, "bookings", "pricingStatus", "TEXT NOT NULL DEFAULT 'CONFIRMED'")
             ensureColumn(database, "bookings", "bookingStatus", "TEXT NOT NULL DEFAULT 'RESERVED'")
             ensureColumn(database, "bookings", "actualCheckInAt", "INTEGER")
             ensureColumn(database, "bookings", "actualCheckOutAt", "INTEGER")

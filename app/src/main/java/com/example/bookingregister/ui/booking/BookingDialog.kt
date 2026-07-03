@@ -52,6 +52,9 @@ import com.example.bookingregister.finalbill.domain.FinalBillPreviewBuilder
 import com.example.bookingregister.finalbill.domain.FinalBillTextFormatter
 import com.example.bookingregister.folio.domain.FolioSummaryBuilder
 import com.example.bookingregister.booking.domain.BookingStatus
+import com.example.bookingregister.booking.domain.BookingPricingStatus
+import com.example.bookingregister.booking.domain.BookingSavePreparation
+import com.example.bookingregister.booking.domain.BookingPaymentSourcePolicy
 import com.example.bookingregister.source.domain.SourceSettlementCalculator
 import com.example.bookingregister.tax.domain.HotelGstCalculator
 import com.example.bookingregister.ui.food.FoodBillingActivity
@@ -81,11 +84,11 @@ class BookingDialog(
     private val selectedCheckInMillis: Long,
     private val existingBooking: BookingEntity?,
     private val canEditBooking: Boolean = true,
-    private val onBookingSaved: (BookingEntity, (SaveResult) -> Unit) -> Unit,
+    private val roomRateLocked: Boolean = false,
+    private val onBookingSaved: (BookingEntity, List<BookingFinancialLineEntity>, (SaveResult) -> Unit) -> Unit,
     private val onBookingDeleted: (BookingEntity) -> Unit,
     private val onPaymentSaved: (BookingEntity, Double, String, String, String?, (SaveResult) -> Unit) -> Unit,
     private val onAccountingChargeSaved: (BookingEntity, String, Double, String, String?, String?, (SaveResult) -> Unit) -> Unit,
-    private val onFinancialLinesSaved: (BookingEntity, List<BookingFinancialLineEntity>, (SaveResult) -> Unit) -> Unit,
     private val onFinalBillGenerated: (BookingEntity, (SaveResult) -> Unit) -> Unit
 ) {
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
@@ -159,7 +162,8 @@ class BookingDialog(
     private val foodButton: Button = dialogView.findViewById(R.id.btnBookingFood)
     private val serviceButton: Button = dialogView.findViewById(R.id.btnBookingService)
     private var bookingEditMode = existingBooking == null && canEditBooking
-    private var forceComplimentary = existingBooking?.paymentStatus == PaymentStatus.COMPLIMENTARY
+    private var forceComplimentary = existingBooking?.paymentStatus == PaymentStatus.COMPLIMENTARY ||
+            existingBooking?.pricingStatus == BookingPricingStatus.COMPLIMENTARY
     private var priceSummaryExpanded = true
     private var paymentHistoryExpanded = false
     private var ledgerEntriesExpanded = false
@@ -221,46 +225,42 @@ class BookingDialog(
                 Toast.makeText(context, "Tap Edit before changing booking details.", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            val booking = buildBooking()
+            val booking = prepareBookingForSave()
             if (booking == null) {
                 Toast.makeText(context, "Please check booking details", Toast.LENGTH_SHORT).show()
             } else {
-                ensureRoomNightFinancialLinesForBooking(booking)
                 setSaving(true)
-                onBookingSaved(booking) { result ->
+                onBookingSaved(booking, draftFinancialLines) { result ->
+                    setSaving(false)
                     when (result) {
                         is SaveResult.Success -> {
-                            if (shouldSaveFinancialLines(booking)) {
-                                onFinancialLinesSaved(booking, draftFinancialLines) { lineResult ->
-                                    setSaving(false)
-                                    when (lineResult) {
-                                        is SaveResult.Success -> {
-                                            Toast.makeText(context, "Booking saved", Toast.LENGTH_SHORT).show()
-                                            dialog.dismiss()
-                                        }
-                                        is SaveResult.Conflict -> Toast.makeText(context, lineResult.message, Toast.LENGTH_LONG).show()
-                                        is SaveResult.Error -> Toast.makeText(context, lineResult.message, Toast.LENGTH_LONG).show()
-                                    }
-                                }
-                            } else {
-                                setSaving(false)
-                                Toast.makeText(context, "Booking saved", Toast.LENGTH_SHORT).show()
-                                dialog.dismiss()
-                            }
+                            Toast.makeText(context, "Booking saved", Toast.LENGTH_SHORT).show()
+                            dialog.dismiss()
                         }
                         is SaveResult.Conflict -> {
-                            setSaving(false)
                             Toast.makeText(context, "Updated version loaded. Please try again.", Toast.LENGTH_SHORT).show()
                             dialog.dismiss()
                         }
                         is SaveResult.Error -> {
-                            setSaving(false)
                             Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
                         }
                     }
                 }
             }
         }
+    }
+
+    private fun prepareBookingForSave(): BookingEntity? {
+        return BookingSavePreparation.prepare(
+            buildBooking = ::buildBooking,
+            refreshFinancialLines = { booking ->
+                if (BookingPricingStatus.isPending(booking.pricingStatus)) {
+                    draftFinancialLines = emptyList()
+                } else {
+                    ensureRoomNightFinancialLinesForBooking(booking)
+                }
+            }
+        )
     }
 
     fun isShowing(): Boolean = dialog.isShowing
@@ -348,7 +348,14 @@ class BookingDialog(
         val defaultCheckout = existingBooking?.checkOutMillis ?: selectedCheckInMillis + DAY_MILLIS
         checkOut.setText(dateFormat.format(Date(defaultCheckout)))
         updateDateRangeText()
-        bookingTotal.setText(amountText(existingBooking?.grossCharges?.takeIf { it > 0.0 } ?: existingBooking?.receivable ?: existingBooking?.rate))
+        bookingTotal.setText(
+            if (existingBooking == null || BookingPricingStatus.isPending(existingBooking.pricingStatus)) ""
+            else amountText(
+                existingBooking.grossCharges.takeIf { it > 0.0 }
+                    ?: existingBooking.receivable.takeIf { it > 0.0 }
+                    ?: existingBooking.rate
+            )
+        )
         propertyTax.setText(amountText(existingBooking?.propertyTax ?: currentFinancialSummary().propertyTax))
         advancePaid.setText(amountText(existingPaymentEntries.takeIf { it.isNotEmpty() }?.let { stayPaymentTotal(it) } ?: existingBooking?.paid))
         balance.setText(amountText(existingBooking?.copy(paid = existingPaymentEntries.takeIf { it.isNotEmpty() }?.let { stayPaymentTotal(it) } ?: existingBooking.paid)?.withCalculatedPayment()?.balance))
@@ -465,6 +472,10 @@ class BookingDialog(
             Toast.makeText(context, "Save booking before generating bill", Toast.LENGTH_SHORT).show()
             return
         }
+        if (BookingPricingStatus.isPending(booking.pricingStatus)) {
+            Toast.makeText(context, "Enter and save the room rate before generating the final bill", Toast.LENGTH_LONG).show()
+            return
+        }
 
         val preview = currentFinalBillPreview(booking)
 
@@ -479,7 +490,7 @@ class BookingDialog(
             accountingCharges = existingAccountingCharges,
             foodOrders = foodOrders,
             foodOrderItems = foodOrderItems,
-            bookingFinancialLines = existingFinancialLines
+            bookingFinancialLines = draftFinancialLines
         )
     }
 
@@ -613,7 +624,8 @@ class BookingDialog(
             bookingPayments = existingPaymentEntries,
             accountingCharges = existingAccountingCharges,
             foodOrders = foodOrders,
-            foodOrderItems = foodOrderItems
+            foodOrderItems = foodOrderItems,
+            bookingFinancialLines = draftFinancialLines
         )
         renderFinancialDashboard(preview)
         paymentHistory.text = FinalBillTextFormatter.formatBalanceSummary(preview)
@@ -963,6 +975,8 @@ class BookingDialog(
 
     private fun applyBookingEditMode() {
         val editable = bookingEditMode && canEditBooking
+        val initialAdvanceEditable = editable &&
+                BookingPaymentSourcePolicy.canEditInitialAdvance(existingBooking)
         val fields = listOf(
             guestName,
             guestMobile,
@@ -977,8 +991,28 @@ class BookingDialog(
             field.isEnabled = editable
             field.alpha = if (editable) 1f else 0.82f
         }
+        bookingTotal.isEnabled = editable && !roomRateLocked
+        propertyTax.isEnabled = editable && !roomRateLocked
+        advancePaid.isEnabled = initialAdvanceEditable &&
+                selectedStatus() == PaymentStatus.PARTIALLY_PAID
+        bookingTotal.alpha = if (editable && !roomRateLocked) 1f else 0.82f
+        propertyTax.alpha = if (editable && !roomRateLocked) 1f else 0.82f
+        detailedOtaRatesButton.isEnabled = editable && !roomRateLocked
+        detailedOtaRatesButton.alpha = if (editable && !roomRateLocked) 1f else 0.45f
+        bookingTotalLayout.helperText = if (roomRateLocked) {
+            "Room rate locked after final bill"
+        } else if (existingBooking?.let { BookingPricingStatus.isPending(it.pricingStatus) } == true) {
+            "Rate pending — booking remains confirmed and rooms stay reserved"
+        } else {
+            null
+        }
+        advancePaidLayout.helperText = if (existingBooking != null) {
+            "Calculated from payment history. Use Add Payment."
+        } else {
+            null
+        }
         sourceSpinner.isEnabled = editable
-        paymentStatusSpinner.isEnabled = editable
+        paymentStatusSpinner.isEnabled = initialAdvanceEditable
         checkInDateCard.isEnabled = editable
         checkOutDateCard.isEnabled = editable
         dateRange.isEnabled = editable
@@ -1271,7 +1305,10 @@ class BookingDialog(
         }
     }
 
-    private fun buildBooking(): BookingEntity? {
+    private fun buildBooking(
+        forcedRemoteId: String? = null,
+        forcedBookingUuid: String? = null
+    ): BookingEntity? {
         val guest = guestName.text.toString().trim()
         if (guest.isBlank()) return null
         val source = selectedSourceOrNull()
@@ -1285,6 +1322,19 @@ class BookingDialog(
         if (selectedRoomIds.isEmpty()) return null
 
         val isOta = source.sourceType == BookingSourceType.OTA
+        val amountWasEntered = bookingTotal.text.toString().trim().isNotEmpty()
+        val pricingStatus = when {
+            forceComplimentary || selectedStatus() == PaymentStatus.COMPLIMENTARY -> BookingPricingStatus.COMPLIMENTARY
+            amountWasEntered -> BookingPricingStatus.CONFIRMED
+            else -> BookingPricingStatus.PENDING
+        }
+        if (existingBooking != null &&
+            !BookingPricingStatus.isPending(existingBooking.pricingStatus) &&
+            pricingStatus == BookingPricingStatus.PENDING
+        ) {
+            Toast.makeText(context, "A confirmed room rate cannot be cleared", Toast.LENGTH_LONG).show()
+            return null
+        }
         val settlement = currentSettlement(source)
         val total = collectableTotal(source, settlement)
         val paid = if (isOta) 0.0 else existingPaymentEntries.takeIf { it.isNotEmpty() }?.let { stayPaymentTotal(it) }
@@ -1299,8 +1349,13 @@ class BookingDialog(
 
         return BookingEntity(
             localId = existingBooking?.localId ?: 0,
-            remoteId = existingBooking?.remoteId?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString(),
-            bookingUuid = existingBooking?.bookingUuid?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString(),
+            remoteId = existingBooking?.remoteId?.takeIf { it.isNotBlank() }
+                ?: forcedRemoteId
+                ?: UUID.randomUUID().toString(),
+
+            bookingUuid = existingBooking?.bookingUuid?.takeIf { it.isNotBlank() }
+                ?: forcedBookingUuid
+                ?: UUID.randomUUID().toString(),
             hotelRemoteId = hotelRemoteId,
             propertyRemoteId = selectedBookingPropertyRemoteId(),
             guestName = guest,
@@ -1317,6 +1372,7 @@ class BookingDialog(
             receivable = total,
             paid = paid,
             paymentStatus = if (isOta) PaymentStatus.FULLY_PAID else selectedStatus(),
+            pricingStatus = pricingStatus,
             bookingStatus = existingBooking?.bookingStatus?.ifBlank { BookingStatus.RESERVED }
                 ?: BookingStatus.RESERVED,
             actualCheckInAt = existingBooking?.actualCheckInAt,
@@ -1524,12 +1580,18 @@ class BookingDialog(
     }
 
     private fun syncMoneyFieldsFromPaymentLedger(): Boolean {
+        val booking = existingBooking ?: return false
         if (existingPaymentEntries.isEmpty() || selectedStatus() == PaymentStatus.COMPLIMENTARY) return false
-        val totalValue = collectableTotal().coerceAtLeast(0.0)
-        val paidValue = stayPaymentTotal(existingPaymentEntries).coerceAtLeast(0.0)
+
+        val preview = currentFinalBillPreview(booking)
+
+        val paidValue = preview.roomPaid.coerceAtLeast(0.0)
+        val balanceValue = preview.roomBalance.coerceAtLeast(0.0)
+
         advancePaid.setTextIfChanged(amountText(paidValue))
         advancePaid.isEnabled = false
-        balance.setTextIfChanged(amountText((totalValue - paidValue).coerceAtLeast(0.0)))
+        balance.setTextIfChanged(amountText(balanceValue))
+
         return true
     }
 
@@ -1655,7 +1717,7 @@ class BookingDialog(
     }
 
     private fun paymentCategoryOptions(booking: BookingEntity): List<String> {
-        return if (booking.sourceType == BookingSourceType.OTA) {
+        return if (booking.sourceType == BookingSourceType.OTA || BookingPricingStatus.isPending(booking.pricingStatus)) {
             listOf(BookingPaymentCategory.FOOD, BookingPaymentCategory.SERVICE, BookingPaymentCategory.DAMAGE)
         } else {
             BookingPaymentCategory.selectable
@@ -1697,8 +1759,10 @@ class BookingDialog(
     }
 
     private fun setMoneyFieldsEditable(isEditable: Boolean) {
-        bookingTotal.isEnabled = isEditable
-        advancePaid.isEnabled = isEditable && selectedStatus() == PaymentStatus.PARTIALLY_PAID
+        bookingTotal.isEnabled = isEditable && !roomRateLocked
+        advancePaid.isEnabled = isEditable &&
+                BookingPaymentSourcePolicy.canEditInitialAdvance(existingBooking) &&
+                selectedStatus() == PaymentStatus.PARTIALLY_PAID
         balance.isEnabled = false
         listOf(bookingTotal, advancePaid, balance).forEach { field ->
             field.setTextColor(Color.parseColor("#24212A"))
@@ -1770,10 +1834,6 @@ class BookingDialog(
                 tcsPercent > 0.0 || tdsPercent > 0.0 || fixedFee > 0.0
     }
 
-    private fun shouldSaveFinancialLines(booking: BookingEntity): Boolean {
-        return draftFinancialLines.isNotEmpty() || existingFinancialLines.isNotEmpty()
-    }
-
     private fun currentFinancialSummary(): BookingFinancialSummary {
         return financialCalculator.summarize(
             lines = draftFinancialLines,
@@ -1784,26 +1844,6 @@ class BookingDialog(
         )
     }
     private fun ensureRoomNightFinancialLinesForBooking(booking: BookingEntity) {
-        val existingLineKeys = draftFinancialLines
-            .filter { !it.isDeleted }
-            .map { it.roomRemoteId to it.businessDateMillis }
-            .toSet()
-
-        val expectedLineKeys = selectedRoomIds.flatMap { roomId ->
-            selectedStayDates().map { dateMillis -> roomId to dateMillis }
-        }.toSet()
-
-        val existingGrossTotal = draftFinancialLines
-            .filter { !it.isDeleted }
-            .sumOf { it.grossAmount }
-
-        val enteredGrossTotal = bookingTotal.numberValue().coerceAtLeast(0.0)
-
-        val structureUnchanged = draftFinancialLines.isNotEmpty() && existingLineKeys == expectedLineKeys
-        val amountUnchanged = kotlin.math.abs(existingGrossTotal - enteredGrossTotal) <= 0.01
-
-        if (structureUnchanged && amountUnchanged) return
-
         val stayDates = selectedStayDates()
         val selectedRooms = rooms.filter { selectedRoomIds.contains(it.remoteId) }
 
@@ -1813,15 +1853,35 @@ class BookingDialog(
         if (roomNightCount <= 0) return
 
         val grossTotal = bookingTotal.numberValue().coerceAtLeast(0.0)
-        if (grossTotal <= 0.0) return
+        val activeExistingLines = draftFinancialLines.filter { !it.isDeleted }
+
+        val expectedLineKeys = selectedRooms.flatMap { room ->
+            stayDates.map { dateMillis -> room.remoteId to dateMillis }
+        }.toSet()
+
+        val existingLineKeys = activeExistingLines
+            .map { it.roomRemoteId to it.businessDateMillis }
+            .toSet()
+
+        val existingGrossTotal = activeExistingLines.sumOf { it.grossAmount.coerceAtLeast(0.0) }
+
+        val sameRoomsAndDates = existingLineKeys == expectedLineKeys
+        val sameAmount = kotlin.math.abs(existingGrossTotal - grossTotal) <= 0.01
+
+        if (sameRoomsAndDates && sameAmount) return
 
         val grossPerRoomNight = grossTotal / roomNightCount
         val now = System.currentTimeMillis()
 
         draftFinancialLines = selectedRooms.flatMap { room ->
             stayDates.map { dateMillis ->
+                val existingLine = activeExistingLines.firstOrNull {
+                    it.roomRemoteId == room.remoteId &&
+                            it.businessDateMillis == dateMillis
+                }
+
                 financialCalculator.lineFromGross(
-                    remoteId = UUID.randomUUID().toString(),
+                    remoteId = existingLine?.remoteId ?: UUID.randomUUID().toString(),
                     hotelRemoteId = hotelRemoteId,
                     bookingRemoteId = booking.remoteId,
                     roomRemoteId = room.remoteId,
@@ -1831,9 +1891,16 @@ class BookingDialog(
                     source = BookingFinancialLineSource.MANUAL,
                     roomGstSlabs = roomGstSlabs
                 ).copy(
-                    propertyRemoteId = room.propertyRemoteId?.takeIf { it.isNotBlank() },
+                    localId = existingLine?.localId ?: 0,
+                    propertyRemoteId = room.propertyRemoteId?.takeIf { it.isNotBlank() }
+                        ?: existingLine?.propertyRemoteId,
                     updatedAt = now,
-                    syncState = "PENDING"
+                    syncState = "PENDING",
+                    lastSyncedAt = existingLine?.lastSyncedAt,
+                    revision = existingLine?.revision ?: 0,
+                    baseRevision = existingLine?.baseRevision?.takeIf { it > 0 }
+                        ?: existingLine?.revision
+                        ?: 0
                 )
             }
         }
@@ -1882,7 +1949,8 @@ class BookingDialog(
     private fun stayPaymentTotal(payments: List<BookingPaymentEntity>): Double {
         return payments.filter { !it.isDeleted }.sumOf { payment ->
             val sign = if (payment.isNegativePayment()) -1.0 else 1.0
-            val allocated = payment.allocatedStayAmount + payment.allocatedFoodAmount + payment.allocatedServiceAmount
+            val allocated = payment.allocatedStayAmount + payment.allocatedFoodAmount +
+                    payment.allocatedServiceAmount + payment.allocatedDamageAmount
             val stayAmount = if (allocated > 0.0) {
                 payment.allocatedStayAmount
             } else if (payment.paymentCategory == BookingPaymentCategory.FOOD || payment.paymentCategory == BookingPaymentCategory.SERVICE) {
@@ -1898,8 +1966,9 @@ class BookingDialog(
         val summary = FolioSummaryBuilder.build(
             booking = booking,
             payments = existingPaymentEntries,
-            foodOrders = foodOrders,
-            accountingCharges = existingAccountingCharges
+            foodOrders = foodOrders.filter { it.bookingRemoteId == booking.remoteId },
+            accountingCharges = existingAccountingCharges,
+            bookingFinancialLines = draftFinancialLines
         )
         val paid = existingPaymentEntries.takeIf { it.isNotEmpty() }?.let { paymentTotal(it) } ?: booking.paid
         val overpaid = (paid - summary.grandTotal).coerceAtLeast(0.0)

@@ -43,6 +43,16 @@ interface BookingFinancialLineDao {
 
     @Query("""
         SELECT * FROM booking_financial_lines
+        WHERE hotelRemoteId = :hotelRemoteId AND bookingRemoteId = :bookingRemoteId
+        ORDER BY businessDateMillis ASC, roomRemoteId ASC
+    """)
+    suspend fun getAllLinesForBooking(
+        hotelRemoteId: String,
+        bookingRemoteId: String
+    ): List<BookingFinancialLineEntity>
+
+    @Query("""
+        SELECT * FROM booking_financial_lines
         WHERE hotelRemoteId = :hotelRemoteId
         AND syncState != 'SYNCED'
         ORDER BY updatedAt ASC

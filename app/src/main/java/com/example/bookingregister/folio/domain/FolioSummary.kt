@@ -6,6 +6,7 @@ import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.BookingPaymentCategory
 import com.example.bookingregister.data.entities.BookingPaymentEntity
 import com.example.bookingregister.data.entities.FoodOrderEntity
+import com.example.bookingregister.data.entities.FoodOrderItemEntity
 import com.example.bookingregister.data.entities.BookingFinancialLineEntity
 
 data class FolioSummary(
@@ -22,7 +23,8 @@ data class FolioSummary(
     val stayDiscount: Double = 0.0,
     val foodDiscount: Double = 0.0,
     val serviceDiscount: Double = 0.0,
-    val generalDiscount: Double = 0.0
+    val generalDiscount: Double = 0.0,
+    val integrityErrors: List<String> = emptyList()
 ) {
     val grandCharges: Double get() = stayTotal + foodTotal + serviceTotal + damageTotal
     val grandTotal: Double get() = (grandCharges - discountTotal).coerceAtLeast(0.0)
@@ -37,8 +39,8 @@ data class FolioSummary(
     val grandBalance: Double get() = (grandTotal - totalPaid).coerceAtLeast(0.0)
     val guestCredit: Double get() = (totalPaid - grandTotal).coerceAtLeast(0.0)
 
-    val chargeBuckets: ChargeBuckets get() = ChargeBuckets(stayNetTotal, foodNetTotal, serviceNetTotal)
-    val paidBuckets: ChargeBuckets get() = ChargeBuckets(stayPaid, foodPaid, servicePaid)
+    val chargeBuckets: ChargeBuckets get() = ChargeBuckets(stayNetTotal, foodNetTotal, serviceNetTotal, damageTotal)
+    val paidBuckets: ChargeBuckets get() = ChargeBuckets(stayPaid, foodPaid, servicePaid, damagePaid)
 }
 
 object FolioSummaryBuilder {
@@ -48,6 +50,7 @@ object FolioSummaryBuilder {
         booking: BookingEntity,
         payments: List<BookingPaymentEntity>,
         foodOrders: List<FoodOrderEntity>,
+        foodOrderItems: List<FoodOrderItemEntity> = emptyList(),
         accountingCharges: List<BookingAccountingChargeEntity> = emptyList(),
         bookingFinancialLines: List<BookingFinancialLineEntity> = emptyList(),
         serviceTotal: Double = 0.0,
@@ -58,6 +61,7 @@ object FolioSummaryBuilder {
             payments = payments,
             accountingCharges = accountingCharges,
             foodOrders = foodOrders,
+            foodOrderItems = foodOrderItems,
             bookingFinancialLines = bookingFinancialLines
         )
         return FolioSummary(
@@ -74,7 +78,8 @@ object FolioSummaryBuilder {
             stayDiscount = snapshot.room.discount,
             foodDiscount = snapshot.food.discount,
             serviceDiscount = snapshot.service.discount,
-            generalDiscount = snapshot.generalDiscount
+            generalDiscount = snapshot.generalDiscount,
+            integrityErrors = snapshot.integrityErrors
         )
     }
 }

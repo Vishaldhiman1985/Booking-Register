@@ -7,6 +7,8 @@ import com.example.bookingregister.folio.domain.MiniFolioBuilder
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.util.Calendar
+import com.example.bookingregister.authoritativePaymentRows
+import com.example.bookingregister.authoritativeRoomLines
 
 class RevenueLedgerBuilderTest {
     private val folioBuilder = MiniFolioBuilder()
@@ -26,9 +28,14 @@ class RevenueLedgerBuilderTest {
             updatedAt = day(2026, Calendar.MAY, 10)
         )
 
-        val entries = builder.build(listOf(room101, room102), listOf(booking))
+        val folios = folioBuilder.build(
+            listOf(room101, room102), listOf(booking),
+            bookingPayments = authoritativePaymentRows(booking),
+            bookingFinancialLines = authoritativeRoomLines(booking)
+        )
+        val entries = builder.build(folios)
         val roomRevenueEntries = entries.filter { it.type == RevenueLedgerEntryType.ROOM_REVENUE }
-        val folio = folioBuilder.build(listOf(room101, room102), listOf(booking)).single()
+        val folio = folios.single()
 
         assertEquals(6000.0, folio.totalCharges, 0.001)
         assertEquals(4000.0, folio.totalPayments, 0.001)
@@ -49,7 +56,12 @@ class RevenueLedgerBuilderTest {
             paid = 0.0
         )
 
-        val entries = builder.build(listOf(room101), listOf(booking))
+        val entries = builder.build(
+            folioBuilder.build(
+                listOf(room101), listOf(booking),
+                bookingFinancialLines = authoritativeRoomLines(booking)
+            )
+        )
         val summary = calculator.summarize(
             entries,
             DateRange(

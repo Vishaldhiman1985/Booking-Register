@@ -1,0 +1,3348 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 30,
+    "identityHash": "5a9bbd3e42c39ce64d5e7fbac88a5442",
+    "entities": [
+      {
+        "tableName": "hotels",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`remoteId` TEXT NOT NULL, `hotelName` TEXT NOT NULL, `gstNumber` TEXT, `address` TEXT, `phone` TEXT, `updatedAt` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `syncState` TEXT NOT NULL, `lastSyncError` TEXT, `lastSyncedAt` INTEGER, `revision` INTEGER NOT NULL, `baseRevision` INTEGER NOT NULL, `updatedByUid` TEXT, PRIMARY KEY(`remoteId`))",
+        "fields": [
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelName",
+            "columnName": "hotelName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gstNumber",
+            "columnName": "gstNumber",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "address",
+            "columnName": "address",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "phone",
+            "columnName": "phone",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseRevision",
+            "columnName": "baseRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedByUid",
+            "columnName": "updatedByUid",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "remoteId"
+          ]
+        }
+      },
+      {
+        "tableName": "managed_properties",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `remoteId` TEXT NOT NULL, `hotelRemoteId` TEXT NOT NULL, `propertyName` TEXT NOT NULL, `legalName` TEXT, `gstNumber` TEXT, `address` TEXT, `phone` TEXT, `email` TEXT, `invoicePrefix` TEXT, `state` TEXT, `sortOrder` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `syncState` TEXT NOT NULL, `lastSyncError` TEXT, `lastSyncedAt` INTEGER, `revision` INTEGER NOT NULL, `baseRevision` INTEGER NOT NULL, `updatedByUid` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelRemoteId",
+            "columnName": "hotelRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "propertyName",
+            "columnName": "propertyName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "legalName",
+            "columnName": "legalName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "gstNumber",
+            "columnName": "gstNumber",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "address",
+            "columnName": "address",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "phone",
+            "columnName": "phone",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "email",
+            "columnName": "email",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "invoicePrefix",
+            "columnName": "invoicePrefix",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sortOrder",
+            "columnName": "sortOrder",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseRevision",
+            "columnName": "baseRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedByUid",
+            "columnName": "updatedByUid",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_managed_properties_remoteId",
+            "unique": true,
+            "columnNames": [
+              "remoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_managed_properties_remoteId` ON `${TABLE_NAME}` (`remoteId`)"
+          },
+          {
+            "name": "index_managed_properties_hotelRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_managed_properties_hotelRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`)"
+          },
+          {
+            "name": "index_managed_properties_hotelRemoteId_propertyName",
+            "unique": true,
+            "columnNames": [
+              "hotelRemoteId",
+              "propertyName"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_managed_properties_hotelRemoteId_propertyName` ON `${TABLE_NAME}` (`hotelRemoteId`, `propertyName`)"
+          },
+          {
+            "name": "index_managed_properties_hotelRemoteId_sortOrder",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId",
+              "sortOrder"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_managed_properties_hotelRemoteId_sortOrder` ON `${TABLE_NAME}` (`hotelRemoteId`, `sortOrder`)"
+          }
+        ]
+      },
+      {
+        "tableName": "room_categories",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `remoteId` TEXT NOT NULL, `hotelRemoteId` TEXT NOT NULL, `categoryName` TEXT NOT NULL, `categoryColor` TEXT NOT NULL, `sortOrder` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `syncState` TEXT NOT NULL, `lastSyncError` TEXT, `lastSyncedAt` INTEGER, `revision` INTEGER NOT NULL, `baseRevision` INTEGER NOT NULL, `updatedByUid` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelRemoteId",
+            "columnName": "hotelRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryName",
+            "columnName": "categoryName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryColor",
+            "columnName": "categoryColor",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sortOrder",
+            "columnName": "sortOrder",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseRevision",
+            "columnName": "baseRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedByUid",
+            "columnName": "updatedByUid",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_room_categories_remoteId",
+            "unique": true,
+            "columnNames": [
+              "remoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_room_categories_remoteId` ON `${TABLE_NAME}` (`remoteId`)"
+          },
+          {
+            "name": "index_room_categories_hotelRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_room_categories_hotelRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`)"
+          },
+          {
+            "name": "index_room_categories_hotelRemoteId_categoryName",
+            "unique": true,
+            "columnNames": [
+              "hotelRemoteId",
+              "categoryName"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_room_categories_hotelRemoteId_categoryName` ON `${TABLE_NAME}` (`hotelRemoteId`, `categoryName`)"
+          },
+          {
+            "name": "index_room_categories_sortOrder",
+            "unique": false,
+            "columnNames": [
+              "sortOrder"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_room_categories_sortOrder` ON `${TABLE_NAME}` (`sortOrder`)"
+          }
+        ]
+      },
+      {
+        "tableName": "rooms",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `remoteId` TEXT NOT NULL, `hotelRemoteId` TEXT NOT NULL, `roomName` TEXT NOT NULL, `categoryName` TEXT NOT NULL, `categoryColor` TEXT NOT NULL, `categorySortOrder` INTEGER NOT NULL, `propertyRemoteId` TEXT, `sortOrder` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `syncState` TEXT NOT NULL, `lastSyncError` TEXT, `lastSyncedAt` INTEGER, `revision` INTEGER NOT NULL, `baseRevision` INTEGER NOT NULL, `updatedByUid` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelRemoteId",
+            "columnName": "hotelRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "roomName",
+            "columnName": "roomName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryName",
+            "columnName": "categoryName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryColor",
+            "columnName": "categoryColor",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categorySortOrder",
+            "columnName": "categorySortOrder",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "propertyRemoteId",
+            "columnName": "propertyRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sortOrder",
+            "columnName": "sortOrder",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseRevision",
+            "columnName": "baseRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedByUid",
+            "columnName": "updatedByUid",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_rooms_remoteId",
+            "unique": true,
+            "columnNames": [
+              "remoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_rooms_remoteId` ON `${TABLE_NAME}` (`remoteId`)"
+          },
+          {
+            "name": "index_rooms_hotelRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_rooms_hotelRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`)"
+          },
+          {
+            "name": "index_rooms_propertyRemoteId",
+            "unique": false,
+            "columnNames": [
+              "propertyRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_rooms_propertyRemoteId` ON `${TABLE_NAME}` (`propertyRemoteId`)"
+          },
+          {
+            "name": "index_rooms_categorySortOrder_categoryName",
+            "unique": false,
+            "columnNames": [
+              "categorySortOrder",
+              "categoryName"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_rooms_categorySortOrder_categoryName` ON `${TABLE_NAME}` (`categorySortOrder`, `categoryName`)"
+          }
+        ]
+      },
+      {
+        "tableName": "bookings",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `remoteId` TEXT NOT NULL, `bookingUuid` TEXT NOT NULL, `hotelRemoteId` TEXT NOT NULL, `propertyRemoteId` TEXT, `guestName` TEXT NOT NULL, `guestMobile` TEXT, `sourceName` TEXT, `sourceRemoteId` TEXT, `sourceType` TEXT NOT NULL, `adultCount` INTEGER NOT NULL, `childCount` INTEGER NOT NULL, `checkInMillis` INTEGER NOT NULL, `checkOutMillis` INTEGER NOT NULL, `roomRemoteIds` TEXT NOT NULL, `rate` REAL NOT NULL, `receivable` REAL NOT NULL, `paid` REAL NOT NULL, `balance` REAL NOT NULL, `paymentStatus` TEXT NOT NULL, `grossCharges` REAL NOT NULL, `roomRevenue` REAL NOT NULL, `propertyTax` REAL NOT NULL, `commissionAmount` REAL NOT NULL, `commissionTax` REAL NOT NULL, `sourceFee` REAL NOT NULL, `tdsAmount` REAL NOT NULL, `tcsAmount` REAL NOT NULL, `expectedPayout` REAL NOT NULL, `bookingStatus` TEXT NOT NULL, `actualCheckInAt` INTEGER, `actualCheckOutAt` INTEGER, `checkoutNote` TEXT, `reopenNote` TEXT, `reopenedAt` INTEGER, `notes` TEXT, `updatedAt` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `syncState` TEXT NOT NULL, `lastSyncError` TEXT, `lastSyncedAt` INTEGER, `revision` INTEGER NOT NULL, `baseRevision` INTEGER NOT NULL, `updatedByUid` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bookingUuid",
+            "columnName": "bookingUuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelRemoteId",
+            "columnName": "hotelRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "propertyRemoteId",
+            "columnName": "propertyRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "guestName",
+            "columnName": "guestName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "guestMobile",
+            "columnName": "guestMobile",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sourceName",
+            "columnName": "sourceName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sourceRemoteId",
+            "columnName": "sourceRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sourceType",
+            "columnName": "sourceType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "adultCount",
+            "columnName": "adultCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "childCount",
+            "columnName": "childCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "checkInMillis",
+            "columnName": "checkInMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "checkOutMillis",
+            "columnName": "checkOutMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "roomRemoteIds",
+            "columnName": "roomRemoteIds",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rate",
+            "columnName": "rate",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "receivable",
+            "columnName": "receivable",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "paid",
+            "columnName": "paid",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "balance",
+            "columnName": "balance",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "paymentStatus",
+            "columnName": "paymentStatus",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "grossCharges",
+            "columnName": "grossCharges",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "roomRevenue",
+            "columnName": "roomRevenue",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "propertyTax",
+            "columnName": "propertyTax",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "commissionAmount",
+            "columnName": "commissionAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "commissionTax",
+            "columnName": "commissionTax",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceFee",
+            "columnName": "sourceFee",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tdsAmount",
+            "columnName": "tdsAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tcsAmount",
+            "columnName": "tcsAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "expectedPayout",
+            "columnName": "expectedPayout",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bookingStatus",
+            "columnName": "bookingStatus",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "actualCheckInAt",
+            "columnName": "actualCheckInAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "actualCheckOutAt",
+            "columnName": "actualCheckOutAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "checkoutNote",
+            "columnName": "checkoutNote",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "reopenNote",
+            "columnName": "reopenNote",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "reopenedAt",
+            "columnName": "reopenedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseRevision",
+            "columnName": "baseRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedByUid",
+            "columnName": "updatedByUid",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_bookings_remoteId",
+            "unique": true,
+            "columnNames": [
+              "remoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_bookings_remoteId` ON `${TABLE_NAME}` (`remoteId`)"
+          },
+          {
+            "name": "index_bookings_bookingUuid",
+            "unique": true,
+            "columnNames": [
+              "bookingUuid"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_bookings_bookingUuid` ON `${TABLE_NAME}` (`bookingUuid`)"
+          },
+          {
+            "name": "index_bookings_hotelRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_bookings_hotelRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`)"
+          },
+          {
+            "name": "index_bookings_hotelRemoteId_bookingStatus",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId",
+              "bookingStatus"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_bookings_hotelRemoteId_bookingStatus` ON `${TABLE_NAME}` (`hotelRemoteId`, `bookingStatus`)"
+          },
+          {
+            "name": "index_bookings_propertyRemoteId",
+            "unique": false,
+            "columnNames": [
+              "propertyRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_bookings_propertyRemoteId` ON `${TABLE_NAME}` (`propertyRemoteId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "booking_accounting_charges",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `remoteId` TEXT NOT NULL, `hotelRemoteId` TEXT NOT NULL, `bookingRemoteId` TEXT NOT NULL, `chargeType` TEXT NOT NULL, `accountBucket` TEXT, `amount` REAL NOT NULL, `description` TEXT NOT NULL, `reason` TEXT, `hsnSacCode` TEXT, `gstRatePercent` REAL NOT NULL, `taxInclusive` INTEGER NOT NULL, `taxableAmount` REAL, `linkedFinalBillId` TEXT, `archivedAt` INTEGER, `approvedBy` TEXT, `createdBy` TEXT, `chargeMillis` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `syncState` TEXT NOT NULL, `lastSyncError` TEXT, `lastSyncedAt` INTEGER, `revision` INTEGER NOT NULL, `baseRevision` INTEGER NOT NULL, `updatedByUid` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelRemoteId",
+            "columnName": "hotelRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bookingRemoteId",
+            "columnName": "bookingRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chargeType",
+            "columnName": "chargeType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accountBucket",
+            "columnName": "accountBucket",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "amount",
+            "columnName": "amount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "description",
+            "columnName": "description",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reason",
+            "columnName": "reason",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "hsnSacCode",
+            "columnName": "hsnSacCode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "gstRatePercent",
+            "columnName": "gstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "taxInclusive",
+            "columnName": "taxInclusive",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "taxableAmount",
+            "columnName": "taxableAmount",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "linkedFinalBillId",
+            "columnName": "linkedFinalBillId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "archivedAt",
+            "columnName": "archivedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "approvedBy",
+            "columnName": "approvedBy",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdBy",
+            "columnName": "createdBy",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "chargeMillis",
+            "columnName": "chargeMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseRevision",
+            "columnName": "baseRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedByUid",
+            "columnName": "updatedByUid",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_booking_accounting_charges_remoteId",
+            "unique": true,
+            "columnNames": [
+              "remoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_booking_accounting_charges_remoteId` ON `${TABLE_NAME}` (`remoteId`)"
+          },
+          {
+            "name": "index_booking_accounting_charges_hotelRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_booking_accounting_charges_hotelRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`)"
+          },
+          {
+            "name": "index_booking_accounting_charges_bookingRemoteId",
+            "unique": false,
+            "columnNames": [
+              "bookingRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_booking_accounting_charges_bookingRemoteId` ON `${TABLE_NAME}` (`bookingRemoteId`)"
+          },
+          {
+            "name": "index_booking_accounting_charges_chargeType",
+            "unique": false,
+            "columnNames": [
+              "chargeType"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_booking_accounting_charges_chargeType` ON `${TABLE_NAME}` (`chargeType`)"
+          },
+          {
+            "name": "index_booking_accounting_charges_hotelRemoteId_bookingRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId",
+              "bookingRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_booking_accounting_charges_hotelRemoteId_bookingRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`, `bookingRemoteId`)"
+          },
+          {
+            "name": "index_booking_accounting_charges_hotelRemoteId_chargeMillis",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId",
+              "chargeMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_booking_accounting_charges_hotelRemoteId_chargeMillis` ON `${TABLE_NAME}` (`hotelRemoteId`, `chargeMillis`)"
+          }
+        ]
+      },
+      {
+        "tableName": "booking_financial_lines",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `remoteId` TEXT NOT NULL, `hotelRemoteId` TEXT NOT NULL, `bookingRemoteId` TEXT NOT NULL, `roomRemoteId` TEXT NOT NULL, `propertyRemoteId` TEXT, `businessDateMillis` INTEGER NOT NULL, `grossAmount` REAL NOT NULL, `taxableAmount` REAL NOT NULL, `gstRatePercent` REAL NOT NULL, `gstAmount` REAL NOT NULL, `hsnSacCode` TEXT, `slabRemoteId` TEXT, `slabName` TEXT, `cgstRatePercent` REAL NOT NULL, `sgstRatePercent` REAL NOT NULL, `cessRatePercent` REAL NOT NULL, `cgstAmount` REAL NOT NULL, `sgstAmount` REAL NOT NULL, `cessAmount` REAL NOT NULL, `source` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `syncState` TEXT NOT NULL, `lastSyncError` TEXT, `lastSyncedAt` INTEGER, `revision` INTEGER NOT NULL, `baseRevision` INTEGER NOT NULL, `updatedByUid` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelRemoteId",
+            "columnName": "hotelRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bookingRemoteId",
+            "columnName": "bookingRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "roomRemoteId",
+            "columnName": "roomRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "propertyRemoteId",
+            "columnName": "propertyRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "businessDateMillis",
+            "columnName": "businessDateMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "grossAmount",
+            "columnName": "grossAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "taxableAmount",
+            "columnName": "taxableAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gstRatePercent",
+            "columnName": "gstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gstAmount",
+            "columnName": "gstAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hsnSacCode",
+            "columnName": "hsnSacCode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "slabRemoteId",
+            "columnName": "slabRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "slabName",
+            "columnName": "slabName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "cgstRatePercent",
+            "columnName": "cgstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sgstRatePercent",
+            "columnName": "sgstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cessRatePercent",
+            "columnName": "cessRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cgstAmount",
+            "columnName": "cgstAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sgstAmount",
+            "columnName": "sgstAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cessAmount",
+            "columnName": "cessAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseRevision",
+            "columnName": "baseRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedByUid",
+            "columnName": "updatedByUid",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_booking_financial_lines_remoteId",
+            "unique": true,
+            "columnNames": [
+              "remoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_booking_financial_lines_remoteId` ON `${TABLE_NAME}` (`remoteId`)"
+          },
+          {
+            "name": "index_booking_financial_lines_hotelRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_booking_financial_lines_hotelRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`)"
+          },
+          {
+            "name": "index_booking_financial_lines_bookingRemoteId",
+            "unique": false,
+            "columnNames": [
+              "bookingRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_booking_financial_lines_bookingRemoteId` ON `${TABLE_NAME}` (`bookingRemoteId`)"
+          },
+          {
+            "name": "index_booking_financial_lines_propertyRemoteId",
+            "unique": false,
+            "columnNames": [
+              "propertyRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_booking_financial_lines_propertyRemoteId` ON `${TABLE_NAME}` (`propertyRemoteId`)"
+          },
+          {
+            "name": "index_booking_financial_lines_hotelRemoteId_bookingRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId",
+              "bookingRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_booking_financial_lines_hotelRemoteId_bookingRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`, `bookingRemoteId`)"
+          },
+          {
+            "name": "index_booking_financial_lines_hotelRemoteId_propertyRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId",
+              "propertyRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_booking_financial_lines_hotelRemoteId_propertyRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`, `propertyRemoteId`)"
+          },
+          {
+            "name": "index_booking_financial_lines_hotelRemoteId_businessDateMillis",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId",
+              "businessDateMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_booking_financial_lines_hotelRemoteId_businessDateMillis` ON `${TABLE_NAME}` (`hotelRemoteId`, `businessDateMillis`)"
+          }
+        ]
+      },
+      {
+        "tableName": "booking_payments",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `remoteId` TEXT NOT NULL, `hotelRemoteId` TEXT NOT NULL, `bookingRemoteId` TEXT NOT NULL, `paymentType` TEXT NOT NULL, `paymentCategory` TEXT NOT NULL, `amount` REAL NOT NULL, `allocatedStayAmount` REAL NOT NULL, `allocatedFoodAmount` REAL NOT NULL, `allocatedServiceAmount` REAL NOT NULL, `unappliedAmount` REAL NOT NULL, `paymentMillis` INTEGER NOT NULL, `method` TEXT, `note` TEXT, `updatedAt` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `syncState` TEXT NOT NULL, `lastSyncError` TEXT, `lastSyncedAt` INTEGER, `revision` INTEGER NOT NULL, `baseRevision` INTEGER NOT NULL, `updatedByUid` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelRemoteId",
+            "columnName": "hotelRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bookingRemoteId",
+            "columnName": "bookingRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "paymentType",
+            "columnName": "paymentType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "paymentCategory",
+            "columnName": "paymentCategory",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "amount",
+            "columnName": "amount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "allocatedStayAmount",
+            "columnName": "allocatedStayAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "allocatedFoodAmount",
+            "columnName": "allocatedFoodAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "allocatedServiceAmount",
+            "columnName": "allocatedServiceAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unappliedAmount",
+            "columnName": "unappliedAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "paymentMillis",
+            "columnName": "paymentMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "method",
+            "columnName": "method",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "note",
+            "columnName": "note",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseRevision",
+            "columnName": "baseRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedByUid",
+            "columnName": "updatedByUid",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_booking_payments_remoteId",
+            "unique": true,
+            "columnNames": [
+              "remoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_booking_payments_remoteId` ON `${TABLE_NAME}` (`remoteId`)"
+          },
+          {
+            "name": "index_booking_payments_hotelRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_booking_payments_hotelRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`)"
+          },
+          {
+            "name": "index_booking_payments_bookingRemoteId",
+            "unique": false,
+            "columnNames": [
+              "bookingRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_booking_payments_bookingRemoteId` ON `${TABLE_NAME}` (`bookingRemoteId`)"
+          },
+          {
+            "name": "index_booking_payments_paymentCategory",
+            "unique": false,
+            "columnNames": [
+              "paymentCategory"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_booking_payments_paymentCategory` ON `${TABLE_NAME}` (`paymentCategory`)"
+          },
+          {
+            "name": "index_booking_payments_hotelRemoteId_bookingRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId",
+              "bookingRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_booking_payments_hotelRemoteId_bookingRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`, `bookingRemoteId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "booking_sources",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `remoteId` TEXT NOT NULL, `hotelRemoteId` TEXT NOT NULL, `propertyRemoteId` TEXT, `sourceName` TEXT NOT NULL, `sourceType` TEXT NOT NULL, `commissionPercent` REAL NOT NULL, `commissionGstPercent` REAL NOT NULL, `tcsPercent` REAL NOT NULL, `tdsPercent` REAL NOT NULL, `fixedFee` REAL NOT NULL, `isActive` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `syncState` TEXT NOT NULL, `lastSyncError` TEXT, `lastSyncedAt` INTEGER, `revision` INTEGER NOT NULL, `baseRevision` INTEGER NOT NULL, `updatedByUid` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelRemoteId",
+            "columnName": "hotelRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "propertyRemoteId",
+            "columnName": "propertyRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sourceName",
+            "columnName": "sourceName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceType",
+            "columnName": "sourceType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "commissionPercent",
+            "columnName": "commissionPercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "commissionGstPercent",
+            "columnName": "commissionGstPercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tcsPercent",
+            "columnName": "tcsPercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tdsPercent",
+            "columnName": "tdsPercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fixedFee",
+            "columnName": "fixedFee",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isActive",
+            "columnName": "isActive",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseRevision",
+            "columnName": "baseRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedByUid",
+            "columnName": "updatedByUid",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_booking_sources_remoteId",
+            "unique": true,
+            "columnNames": [
+              "remoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_booking_sources_remoteId` ON `${TABLE_NAME}` (`remoteId`)"
+          },
+          {
+            "name": "index_booking_sources_hotelRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_booking_sources_hotelRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`)"
+          },
+          {
+            "name": "index_booking_sources_propertyRemoteId",
+            "unique": false,
+            "columnNames": [
+              "propertyRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_booking_sources_propertyRemoteId` ON `${TABLE_NAME}` (`propertyRemoteId`)"
+          },
+          {
+            "name": "index_booking_sources_hotelRemoteId_propertyRemoteId_sourceName",
+            "unique": true,
+            "columnNames": [
+              "hotelRemoteId",
+              "propertyRemoteId",
+              "sourceName"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_booking_sources_hotelRemoteId_propertyRemoteId_sourceName` ON `${TABLE_NAME}` (`hotelRemoteId`, `propertyRemoteId`, `sourceName`)"
+          }
+        ]
+      },
+      {
+        "tableName": "food_gst_categories",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `remoteId` TEXT NOT NULL, `hotelRemoteId` TEXT NOT NULL, `categoryName` TEXT NOT NULL, `hsnSacCode` TEXT, `gstRatePercent` REAL NOT NULL, `cgstRatePercent` REAL NOT NULL, `sgstRatePercent` REAL NOT NULL, `cessRatePercent` REAL NOT NULL, `taxType` TEXT NOT NULL, `itcType` TEXT, `description` TEXT, `isDefault` INTEGER NOT NULL, `isActive` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `syncState` TEXT NOT NULL, `lastSyncError` TEXT, `lastSyncedAt` INTEGER, `revision` INTEGER NOT NULL, `baseRevision` INTEGER NOT NULL, `updatedByUid` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelRemoteId",
+            "columnName": "hotelRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryName",
+            "columnName": "categoryName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hsnSacCode",
+            "columnName": "hsnSacCode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "gstRatePercent",
+            "columnName": "gstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cgstRatePercent",
+            "columnName": "cgstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sgstRatePercent",
+            "columnName": "sgstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cessRatePercent",
+            "columnName": "cessRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "taxType",
+            "columnName": "taxType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itcType",
+            "columnName": "itcType",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "description",
+            "columnName": "description",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isDefault",
+            "columnName": "isDefault",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isActive",
+            "columnName": "isActive",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseRevision",
+            "columnName": "baseRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedByUid",
+            "columnName": "updatedByUid",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_food_gst_categories_remoteId",
+            "unique": true,
+            "columnNames": [
+              "remoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_food_gst_categories_remoteId` ON `${TABLE_NAME}` (`remoteId`)"
+          },
+          {
+            "name": "index_food_gst_categories_hotelRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_gst_categories_hotelRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`)"
+          },
+          {
+            "name": "index_food_gst_categories_hotelRemoteId_categoryName",
+            "unique": true,
+            "columnNames": [
+              "hotelRemoteId",
+              "categoryName"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_food_gst_categories_hotelRemoteId_categoryName` ON `${TABLE_NAME}` (`hotelRemoteId`, `categoryName`)"
+          }
+        ]
+      },
+      {
+        "tableName": "food_menu_items",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `remoteId` TEXT NOT NULL, `hotelRemoteId` TEXT NOT NULL, `propertyRemoteId` TEXT, `itemName` TEXT NOT NULL, `categoryName` TEXT, `price` REAL NOT NULL, `gstCategoryRemoteId` TEXT, `gstRatePercent` REAL NOT NULL, `isActive` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `syncState` TEXT NOT NULL, `lastSyncError` TEXT, `lastSyncedAt` INTEGER, `revision` INTEGER NOT NULL, `baseRevision` INTEGER NOT NULL, `updatedByUid` TEXT, `gstCategoryName` TEXT, `hsnSacCode` TEXT, `cgstRatePercent` REAL NOT NULL, `sgstRatePercent` REAL NOT NULL, `cessRatePercent` REAL NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelRemoteId",
+            "columnName": "hotelRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "propertyRemoteId",
+            "columnName": "propertyRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "itemName",
+            "columnName": "itemName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryName",
+            "columnName": "categoryName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "price",
+            "columnName": "price",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gstCategoryRemoteId",
+            "columnName": "gstCategoryRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "gstRatePercent",
+            "columnName": "gstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isActive",
+            "columnName": "isActive",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseRevision",
+            "columnName": "baseRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedByUid",
+            "columnName": "updatedByUid",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "gstCategoryName",
+            "columnName": "gstCategoryName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "hsnSacCode",
+            "columnName": "hsnSacCode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "cgstRatePercent",
+            "columnName": "cgstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sgstRatePercent",
+            "columnName": "sgstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cessRatePercent",
+            "columnName": "cessRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_food_menu_items_remoteId",
+            "unique": true,
+            "columnNames": [
+              "remoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_food_menu_items_remoteId` ON `${TABLE_NAME}` (`remoteId`)"
+          },
+          {
+            "name": "index_food_menu_items_hotelRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_menu_items_hotelRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`)"
+          },
+          {
+            "name": "index_food_menu_items_propertyRemoteId",
+            "unique": false,
+            "columnNames": [
+              "propertyRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_menu_items_propertyRemoteId` ON `${TABLE_NAME}` (`propertyRemoteId`)"
+          },
+          {
+            "name": "index_food_menu_items_hotelRemoteId_itemName",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId",
+              "itemName"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_menu_items_hotelRemoteId_itemName` ON `${TABLE_NAME}` (`hotelRemoteId`, `itemName`)"
+          }
+        ]
+      },
+      {
+        "tableName": "food_orders",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `remoteId` TEXT NOT NULL, `hotelRemoteId` TEXT NOT NULL, `propertyRemoteId` TEXT, `bookingRemoteId` TEXT, `billRemoteId` TEXT, `orderNumber` TEXT, `foodBillingScope` TEXT NOT NULL, `linkedFinalBillId` TEXT, `archivedAt` INTEGER, `roomRemoteId` TEXT, `roomName` TEXT, `guestName` TEXT NOT NULL, `orderMillis` INTEGER NOT NULL, `status` TEXT NOT NULL, `subtotal` REAL NOT NULL, `discountAmount` REAL NOT NULL, `taxableAmount` REAL NOT NULL, `gstAmount` REAL NOT NULL, `totalAmount` REAL NOT NULL, `notes` TEXT, `updatedAt` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `syncState` TEXT NOT NULL, `lastSyncError` TEXT, `lastSyncedAt` INTEGER, `revision` INTEGER NOT NULL, `baseRevision` INTEGER NOT NULL, `updatedByUid` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelRemoteId",
+            "columnName": "hotelRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "propertyRemoteId",
+            "columnName": "propertyRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "bookingRemoteId",
+            "columnName": "bookingRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "billRemoteId",
+            "columnName": "billRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "orderNumber",
+            "columnName": "orderNumber",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "foodBillingScope",
+            "columnName": "foodBillingScope",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "linkedFinalBillId",
+            "columnName": "linkedFinalBillId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "archivedAt",
+            "columnName": "archivedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "roomRemoteId",
+            "columnName": "roomRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "roomName",
+            "columnName": "roomName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "guestName",
+            "columnName": "guestName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderMillis",
+            "columnName": "orderMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "subtotal",
+            "columnName": "subtotal",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "discountAmount",
+            "columnName": "discountAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "taxableAmount",
+            "columnName": "taxableAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gstAmount",
+            "columnName": "gstAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalAmount",
+            "columnName": "totalAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseRevision",
+            "columnName": "baseRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedByUid",
+            "columnName": "updatedByUid",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_food_orders_remoteId",
+            "unique": true,
+            "columnNames": [
+              "remoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_food_orders_remoteId` ON `${TABLE_NAME}` (`remoteId`)"
+          },
+          {
+            "name": "index_food_orders_hotelRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_orders_hotelRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`)"
+          },
+          {
+            "name": "index_food_orders_propertyRemoteId",
+            "unique": false,
+            "columnNames": [
+              "propertyRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_orders_propertyRemoteId` ON `${TABLE_NAME}` (`propertyRemoteId`)"
+          },
+          {
+            "name": "index_food_orders_bookingRemoteId",
+            "unique": false,
+            "columnNames": [
+              "bookingRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_orders_bookingRemoteId` ON `${TABLE_NAME}` (`bookingRemoteId`)"
+          },
+          {
+            "name": "index_food_orders_billRemoteId",
+            "unique": false,
+            "columnNames": [
+              "billRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_orders_billRemoteId` ON `${TABLE_NAME}` (`billRemoteId`)"
+          },
+          {
+            "name": "index_food_orders_foodBillingScope",
+            "unique": false,
+            "columnNames": [
+              "foodBillingScope"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_orders_foodBillingScope` ON `${TABLE_NAME}` (`foodBillingScope`)"
+          },
+          {
+            "name": "index_food_orders_linkedFinalBillId",
+            "unique": false,
+            "columnNames": [
+              "linkedFinalBillId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_orders_linkedFinalBillId` ON `${TABLE_NAME}` (`linkedFinalBillId`)"
+          },
+          {
+            "name": "index_food_orders_roomRemoteId",
+            "unique": false,
+            "columnNames": [
+              "roomRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_orders_roomRemoteId` ON `${TABLE_NAME}` (`roomRemoteId`)"
+          },
+          {
+            "name": "index_food_orders_hotelRemoteId_orderMillis",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId",
+              "orderMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_orders_hotelRemoteId_orderMillis` ON `${TABLE_NAME}` (`hotelRemoteId`, `orderMillis`)"
+          }
+        ]
+      },
+      {
+        "tableName": "food_order_items",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `remoteId` TEXT NOT NULL, `hotelRemoteId` TEXT NOT NULL, `orderRemoteId` TEXT NOT NULL, `menuItemRemoteId` TEXT, `itemName` TEXT NOT NULL, `quantity` REAL NOT NULL, `unitPrice` REAL NOT NULL, `gstRatePercent` REAL NOT NULL, `gstCategoryRemoteId` TEXT, `gstCategoryName` TEXT, `hsnSacCode` TEXT, `cgstRatePercent` REAL NOT NULL, `sgstRatePercent` REAL NOT NULL, `cessRatePercent` REAL NOT NULL, `lineSubtotal` REAL NOT NULL, `lineGst` REAL NOT NULL, `lineTotal` REAL NOT NULL, `isCancelled` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `syncState` TEXT NOT NULL, `lastSyncError` TEXT, `lastSyncedAt` INTEGER, `revision` INTEGER NOT NULL, `baseRevision` INTEGER NOT NULL, `updatedByUid` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelRemoteId",
+            "columnName": "hotelRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderRemoteId",
+            "columnName": "orderRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "menuItemRemoteId",
+            "columnName": "menuItemRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "itemName",
+            "columnName": "itemName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "quantity",
+            "columnName": "quantity",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unitPrice",
+            "columnName": "unitPrice",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gstRatePercent",
+            "columnName": "gstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gstCategoryRemoteId",
+            "columnName": "gstCategoryRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "gstCategoryName",
+            "columnName": "gstCategoryName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "hsnSacCode",
+            "columnName": "hsnSacCode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "cgstRatePercent",
+            "columnName": "cgstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sgstRatePercent",
+            "columnName": "sgstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cessRatePercent",
+            "columnName": "cessRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lineSubtotal",
+            "columnName": "lineSubtotal",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lineGst",
+            "columnName": "lineGst",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lineTotal",
+            "columnName": "lineTotal",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isCancelled",
+            "columnName": "isCancelled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseRevision",
+            "columnName": "baseRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedByUid",
+            "columnName": "updatedByUid",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_food_order_items_remoteId",
+            "unique": true,
+            "columnNames": [
+              "remoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_food_order_items_remoteId` ON `${TABLE_NAME}` (`remoteId`)"
+          },
+          {
+            "name": "index_food_order_items_hotelRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_order_items_hotelRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`)"
+          },
+          {
+            "name": "index_food_order_items_orderRemoteId",
+            "unique": false,
+            "columnNames": [
+              "orderRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_order_items_orderRemoteId` ON `${TABLE_NAME}` (`orderRemoteId`)"
+          },
+          {
+            "name": "index_food_order_items_menuItemRemoteId",
+            "unique": false,
+            "columnNames": [
+              "menuItemRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_order_items_menuItemRemoteId` ON `${TABLE_NAME}` (`menuItemRemoteId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "food_bills",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `remoteId` TEXT NOT NULL, `hotelRemoteId` TEXT NOT NULL, `propertyRemoteId` TEXT, `supplierName` TEXT, `supplierGstin` TEXT, `supplierAddress` TEXT, `supplierPhone` TEXT, `supplierState` TEXT, `propertyDisplayName` TEXT, `billNumber` TEXT NOT NULL, `billMillis` INTEGER NOT NULL, `guestName` TEXT, `guestMobile` TEXT, `guestAddress` TEXT, `guestGstin` TEXT, `roomsIncluded` TEXT NOT NULL, `orderRemoteIds` TEXT NOT NULL, `subtotal` REAL NOT NULL, `discountAmount` REAL NOT NULL, `taxableAmount` REAL NOT NULL, `cgstAmount` REAL NOT NULL, `sgstAmount` REAL NOT NULL, `cessAmount` REAL NOT NULL, `gstAmount` REAL NOT NULL, `grandTotal` REAL NOT NULL, `paymentMode` TEXT, `notes` TEXT, `status` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `syncState` TEXT NOT NULL, `lastSyncError` TEXT, `lastSyncedAt` INTEGER, `revision` INTEGER NOT NULL, `baseRevision` INTEGER NOT NULL, `updatedByUid` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelRemoteId",
+            "columnName": "hotelRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "propertyRemoteId",
+            "columnName": "propertyRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "supplierName",
+            "columnName": "supplierName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "supplierGstin",
+            "columnName": "supplierGstin",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "supplierAddress",
+            "columnName": "supplierAddress",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "supplierPhone",
+            "columnName": "supplierPhone",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "supplierState",
+            "columnName": "supplierState",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "propertyDisplayName",
+            "columnName": "propertyDisplayName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "billNumber",
+            "columnName": "billNumber",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "billMillis",
+            "columnName": "billMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "guestName",
+            "columnName": "guestName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "guestMobile",
+            "columnName": "guestMobile",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "guestAddress",
+            "columnName": "guestAddress",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "guestGstin",
+            "columnName": "guestGstin",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "roomsIncluded",
+            "columnName": "roomsIncluded",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderRemoteIds",
+            "columnName": "orderRemoteIds",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "subtotal",
+            "columnName": "subtotal",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "discountAmount",
+            "columnName": "discountAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "taxableAmount",
+            "columnName": "taxableAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cgstAmount",
+            "columnName": "cgstAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sgstAmount",
+            "columnName": "sgstAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cessAmount",
+            "columnName": "cessAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gstAmount",
+            "columnName": "gstAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "grandTotal",
+            "columnName": "grandTotal",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "paymentMode",
+            "columnName": "paymentMode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseRevision",
+            "columnName": "baseRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedByUid",
+            "columnName": "updatedByUid",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_food_bills_remoteId",
+            "unique": true,
+            "columnNames": [
+              "remoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_food_bills_remoteId` ON `${TABLE_NAME}` (`remoteId`)"
+          },
+          {
+            "name": "index_food_bills_hotelRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_bills_hotelRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`)"
+          },
+          {
+            "name": "index_food_bills_propertyRemoteId",
+            "unique": false,
+            "columnNames": [
+              "propertyRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_bills_propertyRemoteId` ON `${TABLE_NAME}` (`propertyRemoteId`)"
+          },
+          {
+            "name": "index_food_bills_billNumber",
+            "unique": true,
+            "columnNames": [
+              "billNumber"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_food_bills_billNumber` ON `${TABLE_NAME}` (`billNumber`)"
+          },
+          {
+            "name": "index_food_bills_hotelRemoteId_billMillis",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId",
+              "billMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_bills_hotelRemoteId_billMillis` ON `${TABLE_NAME}` (`hotelRemoteId`, `billMillis`)"
+          }
+        ]
+      },
+      {
+        "tableName": "food_bill_items",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `remoteId` TEXT NOT NULL, `hotelRemoteId` TEXT NOT NULL, `billRemoteId` TEXT NOT NULL, `orderRemoteId` TEXT NOT NULL, `orderNumber` TEXT, `orderMillis` INTEGER NOT NULL, `roomName` TEXT, `menuItemRemoteId` TEXT, `itemName` TEXT NOT NULL, `quantity` REAL NOT NULL, `unitPrice` REAL NOT NULL, `lineSubtotal` REAL NOT NULL, `gstCategoryRemoteId` TEXT, `gstCategoryName` TEXT, `hsnSacCode` TEXT, `gstRatePercent` REAL NOT NULL, `cgstRatePercent` REAL NOT NULL, `sgstRatePercent` REAL NOT NULL, `cessRatePercent` REAL NOT NULL, `taxableAmount` REAL NOT NULL, `cgstAmount` REAL NOT NULL, `sgstAmount` REAL NOT NULL, `cessAmount` REAL NOT NULL, `gstAmount` REAL NOT NULL, `lineTotal` REAL NOT NULL, `updatedAt` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `syncState` TEXT NOT NULL, `lastSyncError` TEXT, `lastSyncedAt` INTEGER, `revision` INTEGER NOT NULL, `baseRevision` INTEGER NOT NULL, `updatedByUid` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelRemoteId",
+            "columnName": "hotelRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "billRemoteId",
+            "columnName": "billRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderRemoteId",
+            "columnName": "orderRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderNumber",
+            "columnName": "orderNumber",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "orderMillis",
+            "columnName": "orderMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "roomName",
+            "columnName": "roomName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "menuItemRemoteId",
+            "columnName": "menuItemRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "itemName",
+            "columnName": "itemName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "quantity",
+            "columnName": "quantity",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unitPrice",
+            "columnName": "unitPrice",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lineSubtotal",
+            "columnName": "lineSubtotal",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gstCategoryRemoteId",
+            "columnName": "gstCategoryRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "gstCategoryName",
+            "columnName": "gstCategoryName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "hsnSacCode",
+            "columnName": "hsnSacCode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "gstRatePercent",
+            "columnName": "gstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cgstRatePercent",
+            "columnName": "cgstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sgstRatePercent",
+            "columnName": "sgstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cessRatePercent",
+            "columnName": "cessRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "taxableAmount",
+            "columnName": "taxableAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cgstAmount",
+            "columnName": "cgstAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sgstAmount",
+            "columnName": "sgstAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cessAmount",
+            "columnName": "cessAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gstAmount",
+            "columnName": "gstAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lineTotal",
+            "columnName": "lineTotal",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseRevision",
+            "columnName": "baseRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedByUid",
+            "columnName": "updatedByUid",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_food_bill_items_remoteId",
+            "unique": true,
+            "columnNames": [
+              "remoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_food_bill_items_remoteId` ON `${TABLE_NAME}` (`remoteId`)"
+          },
+          {
+            "name": "index_food_bill_items_hotelRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_bill_items_hotelRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`)"
+          },
+          {
+            "name": "index_food_bill_items_billRemoteId",
+            "unique": false,
+            "columnNames": [
+              "billRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_bill_items_billRemoteId` ON `${TABLE_NAME}` (`billRemoteId`)"
+          },
+          {
+            "name": "index_food_bill_items_orderRemoteId",
+            "unique": false,
+            "columnNames": [
+              "orderRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_bill_items_orderRemoteId` ON `${TABLE_NAME}` (`orderRemoteId`)"
+          },
+          {
+            "name": "index_food_bill_items_roomName",
+            "unique": false,
+            "columnNames": [
+              "roomName"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_food_bill_items_roomName` ON `${TABLE_NAME}` (`roomName`)"
+          }
+        ]
+      },
+      {
+        "tableName": "service_menu_items",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `remoteId` TEXT NOT NULL, `hotelRemoteId` TEXT NOT NULL, `propertyRemoteId` TEXT, `serviceName` TEXT NOT NULL, `categoryName` TEXT, `description` TEXT, `unitLabel` TEXT, `price` REAL NOT NULL, `sacCode` TEXT, `gstRatePercent` REAL NOT NULL, `taxInclusive` INTEGER NOT NULL, `isActive` INTEGER NOT NULL, `sortOrder` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `syncState` TEXT NOT NULL, `lastSyncError` TEXT, `lastSyncedAt` INTEGER, `revision` INTEGER NOT NULL, `baseRevision` INTEGER NOT NULL, `updatedByUid` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelRemoteId",
+            "columnName": "hotelRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "propertyRemoteId",
+            "columnName": "propertyRemoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "serviceName",
+            "columnName": "serviceName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryName",
+            "columnName": "categoryName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "description",
+            "columnName": "description",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "unitLabel",
+            "columnName": "unitLabel",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "price",
+            "columnName": "price",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sacCode",
+            "columnName": "sacCode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "gstRatePercent",
+            "columnName": "gstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "taxInclusive",
+            "columnName": "taxInclusive",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isActive",
+            "columnName": "isActive",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sortOrder",
+            "columnName": "sortOrder",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseRevision",
+            "columnName": "baseRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedByUid",
+            "columnName": "updatedByUid",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_service_menu_items_remoteId",
+            "unique": true,
+            "columnNames": [
+              "remoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_service_menu_items_remoteId` ON `${TABLE_NAME}` (`remoteId`)"
+          },
+          {
+            "name": "index_service_menu_items_hotelRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_service_menu_items_hotelRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`)"
+          },
+          {
+            "name": "index_service_menu_items_propertyRemoteId",
+            "unique": false,
+            "columnNames": [
+              "propertyRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_service_menu_items_propertyRemoteId` ON `${TABLE_NAME}` (`propertyRemoteId`)"
+          },
+          {
+            "name": "index_service_menu_items_hotelRemoteId_serviceName",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId",
+              "serviceName"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_service_menu_items_hotelRemoteId_serviceName` ON `${TABLE_NAME}` (`hotelRemoteId`, `serviceName`)"
+          }
+        ]
+      },
+      {
+        "tableName": "room_gst_slabs",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `remoteId` TEXT NOT NULL, `hotelRemoteId` TEXT NOT NULL, `slabName` TEXT NOT NULL, `minGrossAmount` REAL NOT NULL, `maxGrossAmount` REAL, `gstRatePercent` REAL NOT NULL, `cgstRatePercent` REAL NOT NULL, `sgstRatePercent` REAL NOT NULL, `cessRatePercent` REAL NOT NULL, `hsnSacCode` TEXT NOT NULL, `notificationRef` TEXT, `effectiveFromMillis` INTEGER NOT NULL, `effectiveToMillis` INTEGER, `isActive` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `syncState` TEXT NOT NULL, `lastSyncError` TEXT, `lastSyncedAt` INTEGER, `revision` INTEGER NOT NULL, `baseRevision` INTEGER NOT NULL, `updatedByUid` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelRemoteId",
+            "columnName": "hotelRemoteId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "slabName",
+            "columnName": "slabName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "minGrossAmount",
+            "columnName": "minGrossAmount",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "maxGrossAmount",
+            "columnName": "maxGrossAmount",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "gstRatePercent",
+            "columnName": "gstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cgstRatePercent",
+            "columnName": "cgstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sgstRatePercent",
+            "columnName": "sgstRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cessRatePercent",
+            "columnName": "cessRatePercent",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hsnSacCode",
+            "columnName": "hsnSacCode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notificationRef",
+            "columnName": "notificationRef",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "effectiveFromMillis",
+            "columnName": "effectiveFromMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "effectiveToMillis",
+            "columnName": "effectiveToMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "isActive",
+            "columnName": "isActive",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedAt",
+            "columnName": "lastSyncedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseRevision",
+            "columnName": "baseRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedByUid",
+            "columnName": "updatedByUid",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_room_gst_slabs_remoteId",
+            "unique": true,
+            "columnNames": [
+              "remoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_room_gst_slabs_remoteId` ON `${TABLE_NAME}` (`remoteId`)"
+          },
+          {
+            "name": "index_room_gst_slabs_hotelRemoteId",
+            "unique": false,
+            "columnNames": [
+              "hotelRemoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_room_gst_slabs_hotelRemoteId` ON `${TABLE_NAME}` (`hotelRemoteId`)"
+          },
+          {
+            "name": "index_room_gst_slabs_effectiveFromMillis",
+            "unique": false,
+            "columnNames": [
+              "effectiveFromMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_room_gst_slabs_effectiveFromMillis` ON `${TABLE_NAME}` (`effectiveFromMillis`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '5a9bbd3e42c39ce64d5e7fbac88a5442')"
+    ]
+  }
+}

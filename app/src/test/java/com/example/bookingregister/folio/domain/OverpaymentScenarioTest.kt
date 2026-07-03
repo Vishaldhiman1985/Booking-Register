@@ -4,6 +4,7 @@ import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.BookingPaymentEntity
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import com.example.bookingregister.authoritativeRoomLines
 
 class OverpaymentScenarioTest {
 
@@ -36,7 +37,8 @@ class OverpaymentScenarioTest {
         val summary = FolioSummaryBuilder.build(
             booking = booking,
             payments = payments,
-            foodOrders = emptyList()
+            foodOrders = emptyList(),
+            bookingFinancialLines = authoritativeRoomLines(booking)
         )
 
         assertEquals(7_500.0, summary.grandTotal, 0.01)

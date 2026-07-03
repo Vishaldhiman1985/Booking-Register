@@ -647,6 +647,7 @@ class CloudSyncManager(
                     "allocatedStayAmount" to payment.allocatedStayAmount,
                     "allocatedFoodAmount" to payment.allocatedFoodAmount,
                     "allocatedServiceAmount" to payment.allocatedServiceAmount,
+                    "allocatedDamageAmount" to payment.allocatedDamageAmount,
                     "unappliedAmount" to payment.unappliedAmount,
                     "paymentMillis" to payment.paymentMillis,
                     "method" to payment.method,
@@ -677,6 +678,15 @@ class CloudSyncManager(
                     "taxableAmount" to line.taxableAmount,
                     "gstRatePercent" to line.gstRatePercent,
                     "gstAmount" to line.gstAmount,
+                    "hsnSacCode" to line.hsnSacCode,
+                    "slabRemoteId" to line.slabRemoteId,
+                    "slabName" to line.slabName,
+                    "cgstRatePercent" to line.cgstRatePercent,
+                    "sgstRatePercent" to line.sgstRatePercent,
+                    "cessRatePercent" to line.cessRatePercent,
+                    "cgstAmount" to line.cgstAmount,
+                    "sgstAmount" to line.sgstAmount,
+                    "cessAmount" to line.cessAmount,
                     "source" to line.source,
                     "updatedAt" to line.updatedAt,
                     "isDeleted" to line.isDeleted,
@@ -706,6 +716,8 @@ class CloudSyncManager(
                     "gstRatePercent" to charge.gstRatePercent,
                     "taxInclusive" to charge.taxInclusive,
                     "taxableAmount" to charge.taxableAmount,
+                    "linkedFinalBillId" to charge.linkedFinalBillId,
+                    "archivedAt" to charge.archivedAt,
                     "approvedBy" to charge.approvedBy,
                     "createdBy" to charge.createdBy,
                     "chargeMillis" to charge.chargeMillis,
@@ -962,6 +974,93 @@ class CloudSyncManager(
         return pushBookingDirect(normalized)
     }
 
+    /** Writes the operational booking, its room locks, and all room-night accounting rows atomically. */
+    suspend fun pushBookingAggregate(
+        booking: BookingEntity,
+        financialLines: List<BookingFinancialLineEntity>
+    ): BookingAggregateWriteResult {
+        val normalized = booking.withCalculatedPayment()
+        val bookingDoc = hotelDoc.collection("bookings").document(normalized.remoteId)
+        val newLockIds = lockIdsFor(normalized)
+        require(financialLines.size + newLockIds.size <= MAX_AGGREGATE_READS) {
+            "Booking has too many room-night rows for one atomic sync"
+        }
+        require(financialLines.all { it.bookingRemoteId == booking.remoteId }) {
+            "Financial line belongs to another booking"
+        }
+        return firestore.runTransaction { transaction ->
+            val existingBooking = transaction.get(bookingDoc)
+            val remoteRevision = existingBooking.getLongCompat("revision") ?: 0
+            if (existingBooking.exists() && remoteRevision != normalized.baseRevision) {
+                throw BookingConflictException("This booking was changed on another device. Refresh before saving.")
+            }
+
+            val lockSnapshots = newLockIds.associateWith { lockId ->
+                transaction.get(hotelDoc.collection("bookingLocks").document(lockId))
+            }
+            lockSnapshots.forEach { (_, snapshot) ->
+                val lockedBy = snapshot.getStringCompat("bookingRemoteId")
+                val lockDeleted = snapshot.getBooleanCompat("isDeleted") ?: false
+                if (snapshot.exists() && !lockDeleted && lockedBy != normalized.remoteId) {
+                    throw BookingConflictException("Selected room is already booked for these dates")
+                }
+            }
+
+            val lineSnapshots = financialLines.associateWith { line ->
+                transaction.get(hotelDoc.collection("bookingFinancialLines").document(line.remoteId))
+            }
+            lineSnapshots.forEach { (line, snapshot) ->
+                val lineRemoteRevision = snapshot.getLongCompat("revision") ?: 0
+                if (snapshot.exists() && lineRemoteRevision != line.baseRevision) {
+                    throw BookingConflictException("Room-night accounting changed on another device. Refresh before saving.")
+                }
+            }
+
+            val oldLockIds = if (existingBooking.exists()) {
+                val oldRoomIds = (existingBooking.get("roomRemoteIds") as? List<*>)
+                    ?.mapNotNull { it as? String }.orEmpty()
+                lockIdsFor(
+                    roomRemoteIds = oldRoomIds,
+                    checkInMillis = existingBooking.getLongCompat("checkInMillis") ?: normalized.checkInMillis,
+                    checkOutMillis = existingBooking.getLongCompat("checkOutMillis") ?: normalized.checkOutMillis
+                )
+            } else emptySet()
+
+            val uid = currentUid()
+            val nextBookingRevision = remoteRevision + 1
+            oldLockIds.minus(newLockIds).forEach { lockId ->
+                transaction.delete(hotelDoc.collection("bookingLocks").document(lockId))
+            }
+            transaction.set(bookingDoc, normalized.toCloudMap(nextBookingRevision, uid))
+            newLockIds.forEach { lockId ->
+                val parts = lockId.split("_")
+                transaction.set(
+                    hotelDoc.collection("bookingLocks").document(lockId),
+                    mapOf(
+                        "hotelRemoteId" to hotelRemoteId,
+                        "bookingRemoteId" to normalized.remoteId,
+                        "roomRemoteId" to parts.dropLast(1).joinToString("_"),
+                        "dateMillis" to (parts.lastOrNull()?.toLongOrNull() ?: 0L),
+                        "isDeleted" to false,
+                        "updatedAt" to normalized.updatedAt,
+                        "updatedByUid" to uid,
+                        "serverUpdatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }
+            val lineRevisions = lineSnapshots.mapValues { (_, snapshot) ->
+                (snapshot.getLongCompat("revision") ?: 0) + 1
+            }
+            lineRevisions.forEach { (line, revision) ->
+                transaction.set(
+                    hotelDoc.collection("bookingFinancialLines").document(line.remoteId),
+                    line.toCloudMap(revision, uid)
+                )
+            }
+            BookingAggregateWriteResult(nextBookingRevision, lineRevisions.mapKeys { it.key.remoteId }, uid)
+        }.await()
+    }
+
     private suspend fun pushBookingDirect(booking: BookingEntity): CloudWriteResult {
         val normalized = booking.withCalculatedPayment()
         val bookingDoc = hotelDoc.collection("bookings").document(normalized.remoteId)
@@ -1209,6 +1308,7 @@ class CloudSyncManager(
             "advancePaid" to normalized.paid,
             "balance" to normalized.balance,
             "paymentStatus" to normalized.paymentStatus,
+            "pricingStatus" to normalized.pricingStatus,
             "bookingStatus" to lifecycleStatus,
             "actualCheckInAt" to normalized.actualCheckInAt,
             "actualCheckOutAt" to normalized.actualCheckOutAt,
@@ -1223,6 +1323,33 @@ class CloudSyncManager(
             "serverUpdatedAt" to FieldValue.serverTimestamp()
         )
     }
+
+    private fun BookingFinancialLineEntity.toCloudMap(revision: Long, uid: String?): Map<String, Any?> = mapOf(
+        "hotelRemoteId" to hotelRemoteId,
+        "bookingRemoteId" to bookingRemoteId,
+        "roomRemoteId" to roomRemoteId,
+        "propertyRemoteId" to propertyRemoteId,
+        "businessDateMillis" to businessDateMillis,
+        "grossAmount" to grossAmount,
+        "taxableAmount" to taxableAmount,
+        "gstRatePercent" to gstRatePercent,
+        "gstAmount" to gstAmount,
+        "hsnSacCode" to hsnSacCode,
+        "slabRemoteId" to slabRemoteId,
+        "slabName" to slabName,
+        "cgstRatePercent" to cgstRatePercent,
+        "sgstRatePercent" to sgstRatePercent,
+        "cessRatePercent" to cessRatePercent,
+        "cgstAmount" to cgstAmount,
+        "sgstAmount" to sgstAmount,
+        "cessAmount" to cessAmount,
+        "source" to source,
+        "updatedAt" to updatedAt,
+        "isDeleted" to isDeleted,
+        "revision" to revision,
+        "updatedByUid" to uid,
+        "serverUpdatedAt" to FieldValue.serverTimestamp()
+    )
 
     private fun BookingEntity.toCallableMap(): Map<String, Any?> {
         val normalized = withCalculatedPayment()
@@ -1260,6 +1387,7 @@ class CloudSyncManager(
             "advancePaid" to normalized.paid,
             "balance" to normalized.balance,
             "paymentStatus" to normalized.paymentStatus,
+            "pricingStatus" to normalized.pricingStatus,
             "bookingStatus" to lifecycleStatus,
             "actualCheckInAt" to normalized.actualCheckInAt,
             "actualCheckOutAt" to normalized.actualCheckOutAt,
@@ -1307,6 +1435,7 @@ class CloudSyncManager(
                 ?: 0.0,
             balance = getDoubleCompat("balance") ?: 0.0,
             paymentStatus = getStringCompat("paymentStatus") ?: PaymentStatus.NOT_PAID,
+            pricingStatus = getStringCompat("pricingStatus") ?: com.example.bookingregister.booking.domain.BookingPricingStatus.CONFIRMED,
             grossCharges = getDoubleCompat("grossCharges") ?: 0.0,
             roomRevenue = getDoubleCompat("roomRevenue") ?: getDoubleCompat("receivable") ?: 0.0,
             propertyTax = getDoubleCompat("propertyTax") ?: 0.0,
@@ -1347,6 +1476,7 @@ class CloudSyncManager(
             allocatedStayAmount = getDoubleCompat("allocatedStayAmount") ?: 0.0,
             allocatedFoodAmount = getDoubleCompat("allocatedFoodAmount") ?: 0.0,
             allocatedServiceAmount = getDoubleCompat("allocatedServiceAmount") ?: 0.0,
+            allocatedDamageAmount = getDoubleCompat("allocatedDamageAmount") ?: 0.0,
             unappliedAmount = getDoubleCompat("unappliedAmount") ?: 0.0,
             paymentMillis = getLongCompat("paymentMillis") ?: System.currentTimeMillis(),
             method = getStringCompat("method"),
@@ -1375,6 +1505,15 @@ class CloudSyncManager(
             taxableAmount = getDoubleCompat("taxableAmount") ?: 0.0,
             gstRatePercent = getDoubleCompat("gstRatePercent") ?: 0.0,
             gstAmount = getDoubleCompat("gstAmount") ?: 0.0,
+            hsnSacCode = getStringCompat("hsnSacCode"),
+            slabRemoteId = getStringCompat("slabRemoteId"),
+            slabName = getStringCompat("slabName"),
+            cgstRatePercent = getDoubleCompat("cgstRatePercent") ?: 0.0,
+            sgstRatePercent = getDoubleCompat("sgstRatePercent") ?: 0.0,
+            cessRatePercent = getDoubleCompat("cessRatePercent") ?: 0.0,
+            cgstAmount = getDoubleCompat("cgstAmount") ?: 0.0,
+            sgstAmount = getDoubleCompat("sgstAmount") ?: 0.0,
+            cessAmount = getDoubleCompat("cessAmount") ?: 0.0,
             source = getStringCompat("source") ?: "MANUAL",
             updatedAt = getLongCompat("updatedAt") ?: System.currentTimeMillis(),
             isDeleted = getBooleanCompat("isDeleted") ?: false,
@@ -1402,6 +1541,8 @@ class CloudSyncManager(
             gstRatePercent = getDoubleCompat("gstRatePercent") ?: 0.0,
             taxInclusive = getBooleanCompat("taxInclusive") ?: true,
             taxableAmount = getDoubleCompat("taxableAmount"),
+            linkedFinalBillId = getStringCompat("linkedFinalBillId"),
+            archivedAt = getLongCompat("archivedAt"),
             approvedBy = getStringCompat("approvedBy"),
             createdBy = getStringCompat("createdBy"),
             chargeMillis = getLongCompat("chargeMillis") ?: System.currentTimeMillis(),
@@ -1745,11 +1886,18 @@ class CloudSyncManager(
 
     companion object {
         private const val DAY_MILLIS = 24L * 60L * 60L * 1000L
+        private const val MAX_AGGREGATE_READS = 450
     }
 }
 
 data class CloudWriteResult(
     val revision: Long,
+    val updatedByUid: String?
+)
+
+data class BookingAggregateWriteResult(
+    val bookingRevision: Long,
+    val financialLineRevisions: Map<String, Long>,
     val updatedByUid: String?
 )
 

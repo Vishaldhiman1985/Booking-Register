@@ -7,6 +7,8 @@ import com.example.bookingregister.data.entities.FoodOrderEntity
 import com.example.bookingregister.data.entities.FoodOrderStatus
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import com.example.bookingregister.authoritativeFoodItems
+import com.example.bookingregister.authoritativeRoomLines
 
 class WalkInScenarioTest {
 
@@ -38,7 +40,9 @@ class WalkInScenarioTest {
         val summary = FolioSummaryBuilder.build(
             booking = booking,
             payments = payments,
-            foodOrders = foodOrders
+            foodOrders = foodOrders,
+            foodOrderItems = authoritativeFoodItems(foodOrders),
+            bookingFinancialLines = authoritativeRoomLines(booking)
         )
 
         assertEquals(6_000.0, summary.stayTotal, 0.01)
@@ -63,7 +67,8 @@ class WalkInScenarioTest {
             foodBillingScope = FoodBillingScope.IN_HOUSE_BOOKING,
             status = FoodOrderStatus.OPEN,
             orderMillis = 1_000L,
-            totalAmount = total
+            totalAmount = total,
+            subtotal = total
         )
 
     private fun payment(

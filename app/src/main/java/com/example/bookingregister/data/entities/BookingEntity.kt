@@ -4,6 +4,7 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.example.bookingregister.booking.domain.BookingStatus
+import com.example.bookingregister.booking.domain.BookingPricingStatus
 
 @Entity(
     tableName = "bookings",
@@ -42,6 +43,7 @@ data class BookingEntity(
     val paid: Double = 0.0,
     val balance: Double = 0.0,
     val paymentStatus: String = "NOT_PAID",
+    val pricingStatus: String = BookingPricingStatus.CONFIRMED,
 
     val grossCharges: Double = 0.0,
     val roomRevenue: Double = 0.0,

@@ -6,9 +6,10 @@ import kotlin.math.min
 data class ChargeBuckets(
     val stay: Double = 0.0,
     val food: Double = 0.0,
-    val service: Double = 0.0
+    val service: Double = 0.0,
+    val damage: Double = 0.0
 ) {
-    val total: Double get() = stay + food + service
+    val total: Double get() = stay + food + service + damage
 }
 
 data class PaymentAllocation(
@@ -16,9 +17,10 @@ data class PaymentAllocation(
     val stayAmount: Double,
     val foodAmount: Double,
     val serviceAmount: Double,
+    val damageAmount: Double,
     val unappliedAmount: Double
 ) {
-    val appliedTotal: Double get() = stayAmount + foodAmount + serviceAmount
+    val appliedTotal: Double get() = stayAmount + foodAmount + serviceAmount + damageAmount
 }
 
 object PaymentAllocationPolicy {
@@ -33,6 +35,7 @@ object PaymentAllocationPolicy {
         var stay = 0.0
         var food = 0.0
         var service = 0.0
+        var damage = 0.0
 
         fun applyTo(openBalance: Double): Double {
             if (remaining <= 0.0) return 0.0
@@ -44,6 +47,7 @@ object PaymentAllocationPolicy {
         val stayBalance = charges.stay - alreadyPaid.stay
         val foodBalance = charges.food - alreadyPaid.food
         val serviceBalance = charges.service - alreadyPaid.service
+        val damageBalance = charges.damage - alreadyPaid.damage
 
         fun applyStay() {
             stay += applyTo(stayBalance - stay)
@@ -55,6 +59,9 @@ object PaymentAllocationPolicy {
 
         fun applyService() {
             service += applyTo(serviceBalance - service)
+        }
+        fun applyDamage() {
+            damage += applyTo(damageBalance - damage)
         }
 
         when (category) {
@@ -69,11 +76,12 @@ object PaymentAllocationPolicy {
                 applyService()
                 applyFood()
             }
-            BookingPaymentCategory.DAMAGE -> Unit
+            BookingPaymentCategory.DAMAGE -> applyDamage()
             else -> {
                 applyStay()
                 applyFood()
                 applyService()
+                applyDamage()
             }
         }
 
@@ -82,6 +90,7 @@ object PaymentAllocationPolicy {
             stayAmount = stay,
             foodAmount = food,
             serviceAmount = service,
+            damageAmount = damage,
             unappliedAmount = remaining.coerceAtLeast(0.0)
         )
     }

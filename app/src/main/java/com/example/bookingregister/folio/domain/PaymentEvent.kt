@@ -1,6 +1,7 @@
 package com.example.bookingregister.folio.domain
 
-import com.example.bookingregister.data.entities.BookingEntity
+import com.example.bookingregister.data.entities.BookingPaymentEntity
+import com.example.bookingregister.data.entities.BookingPaymentType
 
 object PaymentEventType {
     const val ADVANCE = "ADVANCE"
@@ -22,19 +23,25 @@ data class PaymentEvent(
 )
 
 class PaymentTimelineBuilder {
-    fun fromCurrentBookingAggregate(booking: BookingEntity): List<PaymentEvent> {
-        if (booking.paid <= 0.0) return emptyList()
-        return listOf(
+    fun fromPayments(payments: List<BookingPaymentEntity>): List<PaymentEvent> {
+        return payments.filter { !it.isDeleted }.map { payment ->
             PaymentEvent(
-                remoteId = "${booking.remoteId}_aggregate_paid",
-                bookingRemoteId = booking.remoteId,
-                hotelRemoteId = booking.hotelRemoteId,
-                type = PaymentEventType.PAYMENT,
-                amount = booking.paid,
-                businessDateMillis = booking.updatedAt.takeIf { it > 0 } ?: booking.checkInMillis,
-                note = "Current total paid"
+                remoteId = payment.remoteId,
+                bookingRemoteId = payment.bookingRemoteId,
+                hotelRemoteId = payment.hotelRemoteId,
+                type = when (payment.paymentType) {
+                    BookingPaymentType.ADVANCE -> PaymentEventType.ADVANCE
+                    BookingPaymentType.REFUND -> PaymentEventType.REFUND
+                    BookingPaymentType.ADJUSTMENT -> PaymentEventType.ADJUSTMENT
+                    else -> PaymentEventType.PAYMENT
+                },
+                amount = payment.amount,
+                businessDateMillis = payment.paymentMillis,
+                note = payment.note,
+                createdAt = payment.updatedAt,
+                createdByUid = payment.updatedByUid
             )
-        )
+        }
     }
 
     fun paidTotal(events: List<PaymentEvent>): Double {

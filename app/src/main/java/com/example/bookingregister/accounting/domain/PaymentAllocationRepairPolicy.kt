@@ -44,5 +44,6 @@ object PaymentAllocationRepairPolicy {
                 allocatedStayAmount > 0.0 &&
                 allocatedFoodAmount == 0.0 &&
                 allocatedServiceAmount == 0.0
+                && allocatedDamageAmount == 0.0
     }
 }

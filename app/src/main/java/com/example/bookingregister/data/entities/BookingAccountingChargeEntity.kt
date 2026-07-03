@@ -30,6 +30,8 @@ data class BookingAccountingChargeEntity(
     val gstRatePercent: Double = 0.0,
     val taxInclusive: Boolean = true,
     val taxableAmount: Double? = null,
+    val linkedFinalBillId: String? = null,
+    val archivedAt: Long? = null,
     val approvedBy: String? = null,
     val createdBy: String? = null,
     val chargeMillis: Long = System.currentTimeMillis(),

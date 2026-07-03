@@ -5,7 +5,8 @@ data class MiniFolio(
     val hotelRemoteId: String,
     val guestName: String,
     val status: String,
-    val lines: List<MiniFolioLine>
+    val lines: List<MiniFolioLine>,
+    val integrityErrors: List<String> = emptyList()
 ) {
     val totalCharges: Double
         get() = lines.filter { it.kind == MiniFolioLineKind.CHARGE }.sumOf { it.amount }
@@ -27,4 +28,6 @@ object MiniFolioStatus {
     const val OPEN = "OPEN"
     const val SETTLED = "SETTLED"
     const val CANCELLED = "CANCELLED"
+    const val INTEGRITY_ERROR = "INTEGRITY_ERROR"
+    const val PRICING_PENDING = "PRICING_PENDING"
 }

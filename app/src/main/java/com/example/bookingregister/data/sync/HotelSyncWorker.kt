@@ -37,6 +37,7 @@ class HotelSyncWorker(
             db.roomDao().getUnsyncedRooms(hotelRemoteId).isNotEmpty() ||
             db.bookingSourceDao().getUnsyncedSources(hotelRemoteId).isNotEmpty() ||
             db.bookingDao().getUnsyncedBookings(hotelRemoteId).isNotEmpty() ||
+            db.bookingSyncOutboxDao().countPending(hotelRemoteId) > 0 ||
             db.bookingPaymentDao().getUnsyncedPayments(hotelRemoteId).isNotEmpty() ||
             db.bookingFinancialLineDao().getUnsyncedLines(hotelRemoteId).isNotEmpty() ||
             db.foodGstCategoryDao().getUnsyncedCategories(hotelRemoteId).isNotEmpty() ||

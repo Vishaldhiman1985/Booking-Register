@@ -13,6 +13,9 @@ import com.example.bookingregister.data.entities.FoodOrderStatus
 import com.example.bookingregister.data.entities.RoomEntity
 import kotlin.math.roundToLong
 import com.example.bookingregister.data.entities.BookingFinancialLineEntity
+import com.example.bookingregister.accounting.domain.RoomNightFinancialIntegrity
+import com.example.bookingregister.accounting.domain.FoodOrderIntegrity
+import com.example.bookingregister.booking.domain.BookingPricingStatus
 
 class MiniFolioBuilder {
     fun build(
@@ -58,6 +61,20 @@ class MiniFolioBuilder {
         val bookedRoomIds = booking.roomRemoteIds.filter { it in activeRoomIds }
         if (bookedRoomIds.isEmpty()) return null
 
+        val integrityErrors = mutableListOf<String>()
+        val roomIntegrity = RoomNightFinancialIntegrity.validate(booking, bookingFinancialLines)
+        if (!roomIntegrity.isValid) integrityErrors += roomIntegrity.errors
+        if (bookingPayments.none { !it.isDeleted } && booking.paid > 0.0) {
+            integrityErrors += "Missing authoritative payment rows"
+        }
+        val bookingFoodOrders = foodOrders.filter {
+            !it.isDeleted && it.bookingRemoteId == booking.remoteId && it.status != FoodOrderStatus.CANCELLED
+        }
+        val foodItemsByOrder = foodOrderItems.groupBy { it.orderRemoteId }
+        bookingFoodOrders.forEach { order ->
+            integrityErrors += FoodOrderIntegrity.validate(order, foodItemsByOrder[order.remoteId].orEmpty())
+        }
+
         val lines = mutableListOf<MiniFolioLine>()
         lines += roomChargeLines(booking, bookedRoomIds, bookingFinancialLines)
         lines += foodChargeLines(booking, foodOrders, foodOrderItems)
@@ -69,11 +86,17 @@ class MiniFolioBuilder {
             hotelRemoteId = booking.hotelRemoteId,
             guestName = booking.guestName,
             status = MiniFolioStatus.OPEN,
-            lines = lines
+            lines = lines,
+            integrityErrors = integrityErrors.distinct()
         )
 
         return folio.copy(
-            status = if (folio.balance <= 0.01) MiniFolioStatus.SETTLED else MiniFolioStatus.OPEN
+            status = when {
+                folio.integrityErrors.isNotEmpty() -> MiniFolioStatus.INTEGRITY_ERROR
+                BookingPricingStatus.isPending(booking.pricingStatus) -> MiniFolioStatus.PRICING_PENDING
+                folio.balance <= 0.01 -> MiniFolioStatus.SETTLED
+                else -> MiniFolioStatus.OPEN
+            }
         )
     }
 
@@ -95,61 +118,18 @@ class MiniFolioBuilder {
                     .thenBy { it.remoteId }
             )
 
-        if (validFinancialLines.isNotEmpty()) {
-            return validFinancialLines.map { line ->
-                MiniFolioLine(
-                    bookingRemoteId = booking.remoteId,
-                    businessDateMillis = BusinessDates.startOfDay(line.businessDateMillis),
-                    type = MiniFolioLineType.ROOM_CHARGE,
-                    kind = MiniFolioLineKind.CHARGE,
-                    amount = line.grossAmount,
-                    description = "Room charge",
-                    roomRemoteId = line.roomRemoteId,
-                    accountBucket = BookingPaymentCategory.STAY
-                )
-            }
+        return validFinancialLines.map { line ->
+            MiniFolioLine(
+                bookingRemoteId = booking.remoteId,
+                businessDateMillis = BusinessDates.startOfDay(line.businessDateMillis),
+                type = MiniFolioLineType.ROOM_CHARGE,
+                kind = MiniFolioLineKind.CHARGE,
+                amount = line.grossAmount,
+                description = "Room charge",
+                roomRemoteId = line.roomRemoteId,
+                accountBucket = BookingPaymentCategory.STAY
+            )
         }
-
-        val stayNights = BusinessDates.stayNights(booking.checkInMillis, booking.checkOutMillis)
-        val roomNightCount = stayNights * bookedRoomIds.size
-
-        val revenueAmount = booking.grossCharges
-            .takeIf { it > 0.0 }
-            ?: booking.receivable.takeIf { it > 0.0 }
-            ?: booking.rate
-
-        if (roomNightCount <= 0 || revenueAmount <= 0.0) return emptyList()
-
-        val totalMinor = (revenueAmount * 100).roundToLong()
-        val baseMinor = totalMinor / roomNightCount
-        var remainder = totalMinor % roomNightCount
-        val lines = mutableListOf<MiniFolioLine>()
-
-        var nightStart = BusinessDates.startOfDay(booking.checkInMillis)
-        repeat(stayNights) {
-            bookedRoomIds.forEach { roomId ->
-                val extraMinor = if (remainder > 0) {
-                    remainder -= 1
-                    1
-                } else {
-                    0
-                }
-
-                lines += MiniFolioLine(
-                    bookingRemoteId = booking.remoteId,
-                    businessDateMillis = nightStart,
-                    type = MiniFolioLineType.ROOM_CHARGE,
-                    kind = MiniFolioLineKind.CHARGE,
-                    amount = (baseMinor + extraMinor) / 100.0,
-                    description = "Room charge",
-                    roomRemoteId = roomId,
-                    accountBucket = BookingPaymentCategory.STAY
-                )
-            }
-            nightStart += BusinessDates.DAY_MILLIS
-        }
-
-        return lines
     }
 
     private fun foodChargeLines(
@@ -179,9 +159,10 @@ class MiniFolioBuilder {
                 .roundToLong()
                 .coerceAtLeast(1)
 
-            val grossAmount = order.subtotal.takeIf { it > 0.0 }
-                ?: order.totalAmount.takeIf { it > 0.0 }
-                ?: order.taxableAmount
+            val orderItems = itemsByOrder[order.remoteId].orEmpty()
+            val grossAmount = orderItems.sumOf { item ->
+                item.lineSubtotal.takeIf { it > 0.0 } ?: (item.quantity * item.unitPrice)
+            }
 
             if (grossAmount > 0.0) {
                 lines += MiniFolioLine(
@@ -264,21 +245,6 @@ class MiniFolioBuilder {
             return validPayments.flatMap { payment ->
                 payment.toFolioPaymentLines(booking.remoteId)
             }
-        }
-
-        // Backward compatibility for old bookings without payment rows.
-        if (booking.paid > 0.0) {
-            return listOf(
-                MiniFolioLine(
-                    bookingRemoteId = booking.remoteId,
-                    businessDateMillis = BusinessDates.startOfDay(booking.updatedAt),
-                    type = MiniFolioLineType.PAYMENT_RECEIVED,
-                    kind = MiniFolioLineKind.PAYMENT,
-                    amount = booking.paid,
-                    description = "Payment received",
-                    accountBucket = BookingPaymentCategory.STAY
-                )
-            )
         }
 
         return emptyList()

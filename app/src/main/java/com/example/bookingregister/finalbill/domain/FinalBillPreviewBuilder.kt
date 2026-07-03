@@ -52,7 +52,7 @@ class FinalBillPreviewBuilder {
                     gstRatePercent = line.gstRatePercent,
                     gstAmount = line.gstAmount,
                     totalAmount = line.grossAmount,
-                    hsnSacCode = null
+                    hsnSacCode = line.hsnSacCode
                 )
             }
 

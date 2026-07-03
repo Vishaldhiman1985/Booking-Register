@@ -224,12 +224,20 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
     }
 
     override fun onEmptyCellClicked(room: RoomEntity, dateMillis: Long) {
-        showBookingDialog(existing = null, selectedRoom = room, selectedCheckInMillis = dateMillis)
+        showBookingDialog(existing = null, selectedRoom = room, selectedCheckInMillis = dateMillis, roomRateLocked = false)
     }
 
     override fun onBookingClicked(booking: BookingEntity) {
         val selectedRoom = rooms.firstOrNull { booking.roomRemoteIds.contains(it.remoteId) }
-        showBookingDialog(existing = booking, selectedRoom = selectedRoom, selectedCheckInMillis = booking.checkInMillis)
+        lifecycleScope.launch {
+            val roomRateLocked = repository.isRoomRateLocked(booking.remoteId)
+            showBookingDialog(
+                existing = booking,
+                selectedRoom = selectedRoom,
+                selectedCheckInMillis = booking.checkInMillis,
+                roomRateLocked = roomRateLocked
+            )
+        }
     }
 
     private fun observeLocalData() {
@@ -1159,7 +1167,8 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
     private fun showBookingDialog(
         existing: BookingEntity?,
         selectedRoom: RoomEntity?,
-        selectedCheckInMillis: Long
+        selectedCheckInMillis: Long,
+        roomRateLocked: Boolean
     ) {
         val canEditBooking = AccountPermission.EDIT_BOOKINGS in currentPermissions
         if (existing == null && !canEditBooking) {
@@ -1193,9 +1202,10 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             selectedCheckInMillis = selectedCheckInMillis,
             existingBooking = existing,
             canEditBooking = canEditBooking,
-            onBookingSaved = { booking, onResult ->
+            roomRateLocked = roomRateLocked,
+            onBookingSaved = { booking, lines, onResult ->
                 lifecycleScope.launch {
-                    onResult(repository.saveBooking(booking))
+                    onResult(repository.saveBookingWithFinancialLines(booking, lines))
                 }
             },
             onBookingDeleted = { repository.deleteBooking(it) },
@@ -1216,11 +1226,6 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                             accountBucket = accountBucket
                         )
                     )
-                }
-            },
-            onFinancialLinesSaved = { booking, lines, onResult ->
-                lifecycleScope.launch {
-                    onResult(repository.saveBookingFinancialLines(booking, lines))
                 }
             },
             onFinalBillGenerated = { booking, onResult ->

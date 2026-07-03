@@ -8,6 +8,7 @@ import com.example.bookingregister.data.entities.BookingPaymentEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.example.bookingregister.authoritativeRoomLines
 
 class BookingAccountingChargeFolioTest {
     private val builder = MiniFolioBuilder()
@@ -22,7 +23,8 @@ class BookingAccountingChargeFolioTest {
                     charge("service_1", BookingAccountingChargeType.SERVICE_CHARGE, 800.0, "Bonfire"),
                     charge("damage_1", BookingAccountingChargeType.DAMAGE_CHARGE, 1_000.0, "Broken glass"),
                     charge("discount_1", BookingAccountingChargeType.DISCOUNT, 500.0, "Discount - Approved by Manager")
-                )
+                ),
+                bookingFinancialLines = authoritativeRoomLines(booking())
             )
         )
 
@@ -49,7 +51,8 @@ class BookingAccountingChargeFolioTest {
                 charge("service_1", BookingAccountingChargeType.SERVICE_CHARGE, 800.0, "Bonfire"),
                 charge("damage_1", BookingAccountingChargeType.DAMAGE_CHARGE, 1_000.0, "Broken glass"),
                 charge("discount_1", BookingAccountingChargeType.DISCOUNT, 500.0, "Discount - Approved by Manager")
-            )
+            ),
+            bookingFinancialLines = authoritativeRoomLines(booking())
         )
 
         assertEquals(3_000.0, summary.stayTotal, 0.01)

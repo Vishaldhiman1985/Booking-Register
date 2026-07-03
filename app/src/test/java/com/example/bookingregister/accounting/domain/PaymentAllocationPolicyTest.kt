@@ -76,5 +76,33 @@ class PaymentAllocationPolicyTest {
         assertEquals(0.0, allocation.serviceAmount, 0.01)
         assertEquals(500.0, allocation.unappliedAmount, 0.01)
     }
+
+    @Test
+    fun explicitDamagePaymentAllocatesOnlyToDamage() {
+        val allocation = PaymentAllocationPolicy.allocate(
+            amount = 600.0,
+            selectedCategory = BookingPaymentCategory.DAMAGE,
+            charges = ChargeBuckets(stay = 5_000.0, damage = 400.0)
+        )
+
+        assertEquals(0.0, allocation.stayAmount, 0.01)
+        assertEquals(400.0, allocation.damageAmount, 0.01)
+        assertEquals(200.0, allocation.unappliedAmount, 0.01)
+    }
+
+    @Test
+    fun autoAllocatesDamageAfterStayFoodAndService() {
+        val allocation = PaymentAllocationPolicy.allocate(
+            amount = 650.0,
+            selectedCategory = BookingPaymentCategory.AUTO,
+            charges = ChargeBuckets(stay = 100.0, food = 150.0, service = 200.0, damage = 300.0)
+        )
+
+        assertEquals(100.0, allocation.stayAmount, 0.01)
+        assertEquals(150.0, allocation.foodAmount, 0.01)
+        assertEquals(200.0, allocation.serviceAmount, 0.01)
+        assertEquals(200.0, allocation.damageAmount, 0.01)
+        assertEquals(0.0, allocation.unappliedAmount, 0.01)
+    }
 }
 

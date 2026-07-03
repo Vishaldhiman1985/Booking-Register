@@ -26,6 +26,7 @@ data class BookingPaymentEntity(
     val allocatedStayAmount: Double = 0.0,
     val allocatedFoodAmount: Double = 0.0,
     val allocatedServiceAmount: Double = 0.0,
+    val allocatedDamageAmount: Double = 0.0,
     val unappliedAmount: Double = 0.0,
     val paymentMillis: Long = System.currentTimeMillis(),
     val method: String? = null,
