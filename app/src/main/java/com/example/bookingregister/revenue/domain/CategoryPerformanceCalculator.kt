@@ -4,6 +4,7 @@ import com.example.bookingregister.common.domain.BusinessDates
 import com.example.bookingregister.common.domain.DateRange
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.RoomEntity
+import com.example.bookingregister.room.domain.RoomLifecyclePolicy
 
 class CategoryPerformanceCalculator {
     fun calculate(
@@ -11,15 +12,14 @@ class CategoryPerformanceCalculator {
         bookings: List<BookingEntity>,
         range: DateRange
     ): List<CategoryPerformanceSummary> {
-        val activeRooms = rooms.filter { !it.isDeleted }
+        val activeRooms = rooms.filter { RoomLifecyclePolicy.availableNights(it, range) > 0 }
         val roomsById = activeRooms.associateBy { it.remoteId }
-        val rangeDays = BusinessDates.rangeDays(range)
         val totals = activeRooms
             .groupBy { it.categoryName }
             .mapValues { (_, categoryRooms) ->
                 CategoryAccumulator(
                     categoryColor = categoryRooms.firstOrNull()?.categoryColor ?: "#6F86A6",
-                    availableRoomNights = categoryRooms.size * rangeDays
+                    availableRoomNights = categoryRooms.sumOf { RoomLifecyclePolicy.availableNights(it, range) }
                 )
             }
             .toMutableMap()

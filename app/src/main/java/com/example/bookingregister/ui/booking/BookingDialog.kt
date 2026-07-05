@@ -46,6 +46,7 @@ import com.example.bookingregister.data.entities.FoodOrderEntity
 import com.example.bookingregister.data.entities.FoodOrderItemEntity
 import com.example.bookingregister.data.entities.ManagedPropertyEntity
 import com.example.bookingregister.data.entities.RoomEntity
+import com.example.bookingregister.room.domain.RoomLifecycleStatus
 import com.example.bookingregister.data.withCalculatedPayment
 import com.example.bookingregister.finalbill.domain.FinalBillPreview
 import com.example.bookingregister.finalbill.domain.FinalBillPreviewBuilder
@@ -2041,6 +2042,8 @@ class BookingDialog(
         val checkInMillis = parseDate(checkIn.text.toString().trim()) ?: selectedCheckInMillis
         val checkOutMillis = parseDate(checkOut.text.toString().trim()) ?: (checkInMillis + DAY_MILLIS)
         return rooms.filter { room ->
+            val isExistingRoom = existingBooking?.roomRemoteIds?.contains(room.remoteId) == true
+            (isExistingRoom || RoomLifecycleStatus.normalize(room.lifecycleStatus) == RoomLifecycleStatus.ACTIVE) &&
             bookings.none { booking ->
                 !booking.isDeleted &&
                         booking.remoteId != existingBooking?.remoteId &&

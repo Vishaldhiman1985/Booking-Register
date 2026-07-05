@@ -80,6 +80,12 @@ interface BookingFinancialLineDao {
     suspend fun countAllLines(hotelRemoteId: String): Int
 
     @Query("""
+        SELECT COUNT(*) FROM booking_financial_lines
+        WHERE hotelRemoteId = :hotelRemoteId AND roomRemoteId = :roomRemoteId
+    """)
+    suspend fun countForRoom(hotelRemoteId: String, roomRemoteId: String): Int
+
+    @Query("""
         SELECT MAX(updatedAt) FROM booking_financial_lines
         WHERE hotelRemoteId = :hotelRemoteId
     """)

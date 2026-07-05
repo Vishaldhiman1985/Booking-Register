@@ -3,6 +3,7 @@ package com.example.bookingregister.data.entities
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import com.example.bookingregister.room.domain.RoomLifecycleStatus
 
 @Entity(
     tableName = "rooms",
@@ -26,6 +27,11 @@ data class RoomEntity(
     val categorySortOrder: Int = 0,
     val propertyRemoteId: String? = null,
     val sortOrder: Int = 0,
+
+    val lifecycleStatus: String = RoomLifecycleStatus.ACTIVE,
+    val lifecycleReason: String? = null,
+    val disabledAtMillis: Long? = null,
+    val retiredAtMillis: Long? = null,
 
     val updatedAt: Long = System.currentTimeMillis(),
     val isDeleted: Boolean = false,

@@ -19,6 +19,8 @@ import com.example.bookingregister.data.repository.PaymentStatus
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.BookingSourceType
 import com.example.bookingregister.data.entities.RoomEntity
+import com.example.bookingregister.room.domain.RoomLifecyclePolicy
+import com.example.bookingregister.room.domain.RoomLifecycleStatus
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -208,6 +210,7 @@ class BookingChartView @JvmOverloads constructor(
                     when (lockedDragAxis) {
                         DragAxis.HORIZONTAL -> {
                             horizontalScroll = clamp(horizontalScroll + distanceX, 0f, maxHorizontalScroll)
+                            rebuildChartRowsForViewport()
                             notifyVisibleMonth()
                             invalidate()
                         }
@@ -267,7 +270,7 @@ class BookingChartView @JvmOverloads constructor(
     fun setData(r: List<RoomEntity>, b: List<BookingEntity>) {
         rooms = r
         bookings = b
-        chartRows = buildChartRows(r)
+        rebuildChartRowsForViewport()
         recalculateScrollBounds()
         invalidate()
     }
@@ -281,6 +284,7 @@ class BookingChartView @JvmOverloads constructor(
 
     fun scrollToDay(index: Int) {
         horizontalScroll = clamp(index * dayColumnWidth, 0f, maxHorizontalScroll)
+        rebuildChartRowsForViewport()
         notifyVisibleMonth()
         invalidate()
     }
@@ -330,6 +334,7 @@ class BookingChartView @JvmOverloads constructor(
         if (scroller.computeScrollOffset()) {
             horizontalScroll = scroller.currX.toFloat()
             verticalScroll = scroller.currY.toFloat()
+            rebuildChartRowsForViewport()
             notifyVisibleMonth()
             postInvalidateOnAnimation()
         }
@@ -348,6 +353,7 @@ class BookingChartView @JvmOverloads constructor(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         recalculateScrollBounds()
+        rebuildChartRowsForViewport()
         notifyVisibleMonth()
     }
 
@@ -445,8 +451,13 @@ class BookingChartView @JvmOverloads constructor(
     }
 
     private fun drawRoomRow(canvas: Canvas, room: RoomEntity, top: Float, bottom: Float) {
+        val displayName = when (RoomLifecycleStatus.normalize(room.lifecycleStatus)) {
+            RoomLifecycleStatus.RETIRED -> "${room.roomName} [Retired]"
+            RoomLifecycleStatus.DISABLED -> "${room.roomName} [Disabled]"
+            else -> room.roomName
+        }
         val roomName = TextUtils.ellipsize(
-            room.roomName,
+            displayName,
             TextPaint(roomTextPaint),
             roomColumnWidth - dpToPx(16f),
             TextUtils.TruncateAt.END
@@ -731,6 +742,50 @@ class BookingChartView @JvmOverloads constructor(
     private fun notifyVisibleMonth() {
         val columnIndex = max(0, (horizontalScroll / dayColumnWidth).toInt())
         visibleMonthLabel = monthYearFormat.format(getDateForColumn(columnIndex))
+    }
+
+    private fun rebuildChartRowsForViewport() {
+        val startColumn = max(0, (horizontalScroll / dayColumnWidth).toInt())
+        val visibleColumns = ceil(((width - roomColumnWidth).coerceAtLeast(dayColumnWidth)) / dayColumnWidth)
+            .toInt()
+            .coerceAtLeast(1)
+        val endColumn = min(getTotalDayCount() - 1, startColumn + visibleColumns)
+        val windowStart = startOfDay(getDateForColumn(startColumn).time)
+        val windowEnd = startOfDay(getDateForColumn(endColumn).time) + dayMillis
+        val now = startOfDay(System.currentTimeMillis())
+
+        val visibleRooms = rooms.filter { room ->
+            RoomLifecyclePolicy.isVisibleInChartWindow(
+                room = room,
+                bookings = bookings,
+                windowStartMillis = windowStart,
+                windowEndMillis = windowEnd,
+                nowMillis = now
+            )
+        }.toMutableList()
+
+        val knownRoomIds = rooms.mapTo(mutableSetOf()) { it.remoteId }
+        bookings.asSequence()
+            .filter { !it.isDeleted && it.checkInMillis < windowEnd && it.checkOutMillis > windowStart }
+            .flatMap { booking ->
+                booking.roomRemoteIds.asSequence()
+                    .filterNot { it in knownRoomIds }
+                    .map { missingId -> booking to missingId }
+            }
+            .distinctBy { it.second }
+            .map { (booking, missingId) ->
+                RoomEntity(
+                    remoteId = missingId,
+                    hotelRemoteId = booking.hotelRemoteId,
+                    propertyRemoteId = booking.propertyRemoteId,
+                    roomName = "Unavailable room (${missingId.takeLast(6)})",
+                    lifecycleStatus = RoomLifecycleStatus.RETIRED
+                )
+            }
+            .forEach { visibleRooms += it }
+
+        chartRows = buildChartRows(visibleRooms)
+        recalculateScrollBounds()
     }
 
     private fun buildChartRows(sourceRooms: List<RoomEntity>): List<ChartRow> {

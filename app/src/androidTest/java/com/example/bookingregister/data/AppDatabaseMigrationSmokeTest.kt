@@ -30,7 +30,7 @@ class AppDatabaseMigrationSmokeTest {
         val db = openWithProductionMigrations(dbName)
         try {
             assertNotNull(db.hotelDao())
-            assertEquals(18, db.openHelper.readableDatabase.version)
+            assertEquals(34, db.openHelper.readableDatabase.version)
         } finally {
             db.close()
         }
@@ -101,7 +101,7 @@ class AppDatabaseMigrationSmokeTest {
             assertNotNull(payment)
             assertEquals("STAY", payment?.paymentCategory)
             assertEquals(1500.0, payment?.allocatedStayAmount ?: 0.0, 0.001)
-            assertEquals(18, db.openHelper.readableDatabase.version)
+            assertEquals(34, db.openHelper.readableDatabase.version)
         } finally {
             db.close()
         }

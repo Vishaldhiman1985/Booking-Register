@@ -36,6 +36,9 @@ interface BookingDao {
     """)
     suspend fun getBookings(hotelRemoteId: String): List<BookingEntity>
 
+    @Query("SELECT * FROM bookings WHERE hotelRemoteId = :hotelRemoteId")
+    suspend fun getAllBookingsIncludingDeleted(hotelRemoteId: String): List<BookingEntity>
+
     @Query("""
         SELECT * FROM bookings
         WHERE hotelRemoteId = :hotelRemoteId

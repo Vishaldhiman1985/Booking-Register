@@ -4,6 +4,7 @@ import com.example.bookingregister.common.domain.BusinessDates
 import com.example.bookingregister.common.domain.DateRange
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.RoomEntity
+import com.example.bookingregister.room.domain.RoomLifecyclePolicy
 
 class OccupancyCalculator {
     fun occupancyPercent(
@@ -11,13 +12,14 @@ class OccupancyCalculator {
         bookings: List<BookingEntity>,
         range: DateRange
     ): Int {
-        val activeRoomIds = rooms
-            .filter { !it.isDeleted }
+        val availableRooms = rooms
+            .filter { RoomLifecyclePolicy.availableNights(it, range) > 0 }
+        val activeRoomIds = availableRooms
             .map { it.remoteId }
             .toSet()
         if (activeRoomIds.isEmpty()) return 0
 
-        val availableRoomNights = activeRoomIds.size * BusinessDates.rangeDays(range)
+        val availableRoomNights = availableRooms.sumOf { RoomLifecyclePolicy.availableNights(it, range) }
         if (availableRoomNights <= 0) return 0
 
         val occupiedRoomNights = bookings

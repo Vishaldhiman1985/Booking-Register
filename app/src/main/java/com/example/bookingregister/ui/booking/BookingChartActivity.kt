@@ -52,6 +52,7 @@ import com.example.bookingregister.ui.reporting.RevenueReportActivity
 import com.example.bookingregister.ui.login.LoginActivity
 import com.example.bookingregister.ui.views.BookingChartView
 import com.example.bookingregister.ui.views.BookingDaysProvider
+import com.example.bookingregister.room.domain.RoomLifecycleStatus
 import com.google.android.material.button.MaterialButton
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.delay
@@ -224,6 +225,10 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
     }
 
     override fun onEmptyCellClicked(room: RoomEntity, dateMillis: Long) {
+        if (RoomLifecycleStatus.normalize(room.lifecycleStatus) != RoomLifecycleStatus.ACTIVE) {
+            Toast.makeText(this, "This room is not available for new bookings.", Toast.LENGTH_SHORT).show()
+            return
+        }
         showBookingDialog(existing = null, selectedRoom = room, selectedCheckInMillis = dateMillis, roomRateLocked = false)
     }
 
@@ -1346,7 +1351,10 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             return
         }
 
-        val roomNames = visibleRooms.map { it.roomName }.toTypedArray()
+        val roomNames = visibleRooms.map { room ->
+            val status = RoomLifecycleStatus.normalize(room.lifecycleStatus)
+            if (status == RoomLifecycleStatus.ACTIVE) room.roomName else "${room.roomName}  [$status]"
+        }.toTypedArray()
 
         AlertDialog.Builder(this)
             .setTitle(property?.let { "Manage Rooms - ${it.propertyName}" } ?: "Manage Rooms")
@@ -1361,22 +1369,38 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
     }
 
     private fun showRoomOptions(room: RoomEntity, property: ManagedPropertyEntity? = null) {
-        val options = arrayOf("Edit", "Move Up", "Move Down", "Delete")
+        val status = RoomLifecycleStatus.normalize(room.lifecycleStatus)
+        val options = when (status) {
+            RoomLifecycleStatus.ACTIVE -> arrayOf("Edit", "Move Up", "Move Down", "Disable", "Retire", "Delete")
+            RoomLifecycleStatus.DISABLED -> arrayOf("Reactivate", "Retire", "Delete", "View reason")
+            else -> arrayOf("View retirement details")
+        }
 
         AlertDialog.Builder(this)
             .setTitle(room.roomName)
             .setItems(options) { _, which ->
-                when (which) {
-                    0 -> showEditRoomDialog(room, property)
-                    1 -> {
-                        repository.moveRoom(room, -1)
-                        showManageRoomsDialog(property)
+                when (status) {
+                    RoomLifecycleStatus.ACTIVE -> when (which) {
+                        0 -> showEditRoomDialog(room, property)
+                        1 -> {
+                            repository.moveRoom(room, -1)
+                            showManageRoomsDialog(property)
+                        }
+                        2 -> {
+                            repository.moveRoom(room, 1)
+                            showManageRoomsDialog(property)
+                        }
+                        3 -> showRoomLifecycleReasonDialog(room, RoomLifecycleStatus.DISABLED, property)
+                        4 -> showRoomLifecycleReasonDialog(room, RoomLifecycleStatus.RETIRED, property)
+                        5 -> confirmDeleteRoom(room, property)
                     }
-                    2 -> {
-                        repository.moveRoom(room, 1)
-                        showManageRoomsDialog(property)
+                    RoomLifecycleStatus.DISABLED -> when (which) {
+                        0 -> runRoomLifecycleAction(property) { repository.reactivateRoom(room) }
+                        1 -> showRoomLifecycleReasonDialog(room, RoomLifecycleStatus.RETIRED, property)
+                        2 -> confirmDeleteRoom(room, property)
+                        3 -> showRoomLifecycleDetails(room)
                     }
-                    3 -> confirmDeleteRoom(room, property)
+                    else -> showRoomLifecycleDetails(room)
                 }
             }
             .setNegativeButton("Back") { _, _ ->
@@ -1434,15 +1458,77 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
     private fun confirmDeleteRoom(room: RoomEntity, property: ManagedPropertyEntity? = null) {
         AlertDialog.Builder(this)
             .setTitle("Delete Room")
-            .setMessage("This room will be removed from future bookings. Old bookings will remain safe.")
+            .setMessage("Delete is allowed only when this room has no booking or billing history.")
             .setPositiveButton("Delete") { _, _ ->
-                repository.deleteRoom(room)
-                showManageRoomsDialog(property)
+                runRoomLifecycleAction(property) { repository.deleteRoom(room) }
             }
             .setNegativeButton("Cancel") { _, _ ->
                 showRoomOptions(room, property)
             }
             .show()
+    }
+
+    private fun showRoomLifecycleReasonDialog(
+        room: RoomEntity,
+        targetStatus: String,
+        property: ManagedPropertyEntity?
+    ) {
+        val reason = EditText(this).apply {
+            hint = "Mandatory reason"
+            setSingleLine(false)
+            minLines = 2
+        }
+        val action = if (targetStatus == RoomLifecycleStatus.RETIRED) "Retire" else "Disable"
+        AlertDialog.Builder(this)
+            .setTitle("$action ${room.roomName}")
+            .setMessage("Current and future bookings must first be moved, cancelled, or checked out.")
+            .setView(reason)
+            .setPositiveButton(action) { _, _ ->
+                runRoomLifecycleAction(property) {
+                    if (targetStatus == RoomLifecycleStatus.RETIRED) {
+                        repository.retireRoom(room, reason.text.toString())
+                    } else {
+                        repository.disableRoom(room, reason.text.toString())
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showRoomLifecycleDetails(room: RoomEntity) {
+        val status = RoomLifecycleStatus.normalize(room.lifecycleStatus)
+        AlertDialog.Builder(this)
+            .setTitle("${room.roomName} - $status")
+            .setMessage(room.lifecycleReason?.takeIf { it.isNotBlank() } ?: "No reason recorded.")
+            .setPositiveButton("Close", null)
+            .show()
+    }
+
+    private fun runRoomLifecycleAction(
+        property: ManagedPropertyEntity?,
+        action: suspend () -> SaveResult
+    ) {
+        lifecycleScope.launch {
+            when (val result = action()) {
+                is SaveResult.Success -> Toast.makeText(
+                    this@BookingChartActivity,
+                    "Room updated safely.",
+                    Toast.LENGTH_SHORT
+                ).show()
+                is SaveResult.Error -> AlertDialog.Builder(this@BookingChartActivity)
+                    .setTitle("Room not changed")
+                    .setMessage(result.message)
+                    .setPositiveButton("OK", null)
+                    .show()
+                is SaveResult.Conflict -> AlertDialog.Builder(this@BookingChartActivity)
+                    .setTitle("Room not changed")
+                    .setMessage(result.message)
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+            showManageRoomsDialog(property)
+        }
     }
     private fun exportBookingsCsv(filterType: String) {
         lifecycleScope.launch {

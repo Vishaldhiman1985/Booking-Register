@@ -55,6 +55,9 @@ import com.example.bookingregister.data.sync.SyncWorkScheduler
 import com.example.bookingregister.data.sync.SyncAcknowledgementPolicy
 import com.example.bookingregister.data.withCalculatedPayment
 import com.example.bookingregister.tax.domain.FoodGstCalculator
+import com.example.bookingregister.room.domain.RoomHistoryFacts
+import com.example.bookingregister.room.domain.RoomLifecyclePolicy
+import com.example.bookingregister.room.domain.RoomLifecycleStatus
 
 
 
@@ -2152,19 +2155,120 @@ class BookingRepository(
         }
     }
 
-    fun deleteRoom(room: RoomEntity) {
-        scope.launch {
-            val deleted = room.copy(
+    suspend fun deleteRoom(room: RoomEntity): SaveResult {
+        val now = System.currentTimeMillis()
+        val result = db.withTransaction {
+            val current = roomDao.getByRemoteId(room.remoteId)
+                ?: return@withTransaction SaveResult.Error("Room not found.")
+            val history = roomHistoryFacts(current.remoteId)
+            RoomLifecyclePolicy.deleteError(history)?.let {
+                return@withTransaction SaveResult.Error(it)
+            }
+            val deleted = current.copy(
                 isDeleted = true,
-                updatedAt = System.currentTimeMillis(),
+                updatedAt = now,
                 syncState = SyncState.PENDING,
                 lastSyncError = null,
-                baseRevision = room.baseRevision.takeIf { it > 0 } ?: room.revision
+                baseRevision = current.baseRevision.takeIf { it > 0 } ?: current.revision
             )
-
             roomDao.upsert(deleted)
-            pushRoomAndMark(deleted)
+            SaveResult.Success(syncPending = true)
         }
+        if (result is SaveResult.Success) enqueueBackgroundSync()
+        return result
+    }
+
+    suspend fun disableRoom(room: RoomEntity, reason: String): SaveResult =
+        changeRoomLifecycle(room, RoomLifecycleStatus.DISABLED, reason)
+
+    suspend fun retireRoom(room: RoomEntity, reason: String): SaveResult =
+        changeRoomLifecycle(room, RoomLifecycleStatus.RETIRED, reason)
+
+    suspend fun reactivateRoom(room: RoomEntity): SaveResult {
+        val now = System.currentTimeMillis()
+        val result = db.withTransaction {
+            val current = roomDao.getByRemoteId(room.remoteId)
+                ?: return@withTransaction SaveResult.Error("Room not found.")
+            if (RoomLifecycleStatus.normalize(current.lifecycleStatus) == RoomLifecycleStatus.RETIRED) {
+                return@withTransaction SaveResult.Error("A retired room cannot be reactivated.")
+            }
+            roomDao.upsert(
+                current.copy(
+                    lifecycleStatus = RoomLifecycleStatus.ACTIVE,
+                    lifecycleReason = null,
+                    disabledAtMillis = null,
+                    updatedAt = now,
+                    syncState = SyncState.PENDING,
+                    lastSyncError = null,
+                    baseRevision = current.baseRevision.takeIf { it > 0 } ?: current.revision
+                )
+            )
+            SaveResult.Success(syncPending = true)
+        }
+        if (result is SaveResult.Success) enqueueBackgroundSync()
+        return result
+    }
+
+    private suspend fun changeRoomLifecycle(
+        room: RoomEntity,
+        targetStatus: String,
+        reason: String
+    ): SaveResult {
+        val cleanReason = reason.trim()
+        val now = System.currentTimeMillis()
+        val result = db.withTransaction {
+            val current = roomDao.getByRemoteId(room.remoteId)
+                ?: return@withTransaction SaveResult.Error("Room not found.")
+            if (RoomLifecycleStatus.normalize(current.lifecycleStatus) == RoomLifecycleStatus.RETIRED) {
+                return@withTransaction SaveResult.Error("This room is permanently retired.")
+            }
+            val allBookings = bookingDao.getAllBookingsIncludingDeleted(hotelRemoteId)
+            val blocking = RoomLifecyclePolicy.blockingBookings(current.remoteId, allBookings, now)
+            RoomLifecyclePolicy.inactiveTransitionError(targetStatus, cleanReason, blocking)?.let {
+                return@withTransaction SaveResult.Error(it)
+            }
+            if (targetStatus == RoomLifecycleStatus.RETIRED) {
+                val unbilledPastBooking = allBookings
+                    .filter {
+                        !it.isDeleted &&
+                            current.remoteId in it.roomRemoteIds &&
+                            it.checkOutMillis <= now
+                    }
+                    .firstOrNull { pastBooking ->
+                        foodBillDao.getFinalBillForBooking(
+                            hotelRemoteId,
+                            "${pastBooking.remoteId}_final_bill_"
+                        ) == null
+                    }
+                RoomLifecyclePolicy.retirementBillingError(unbilledPastBooking != null)?.let {
+                    return@withTransaction SaveResult.Error(it)
+                }
+            }
+            roomDao.upsert(
+                current.copy(
+                    lifecycleStatus = targetStatus,
+                    lifecycleReason = cleanReason,
+                    disabledAtMillis = if (targetStatus == RoomLifecycleStatus.DISABLED) now else current.disabledAtMillis,
+                    retiredAtMillis = if (targetStatus == RoomLifecycleStatus.RETIRED) now else null,
+                    updatedAt = now,
+                    syncState = SyncState.PENDING,
+                    lastSyncError = null,
+                    baseRevision = current.baseRevision.takeIf { it > 0 } ?: current.revision
+                )
+            )
+            SaveResult.Success(syncPending = true)
+        }
+        if (result is SaveResult.Success) enqueueBackgroundSync()
+        return result
+    }
+
+    private suspend fun roomHistoryFacts(roomRemoteId: String): RoomHistoryFacts {
+        val bookings = bookingDao.getAllBookingsIncludingDeleted(hotelRemoteId)
+        return RoomHistoryFacts(
+            bookingCount = bookings.count { roomRemoteId in it.roomRemoteIds },
+            financialLineCount = bookingFinancialLineDao.countForRoom(hotelRemoteId, roomRemoteId),
+            foodOrderCount = foodOrderDao.countForRoom(hotelRemoteId, roomRemoteId)
+        )
     }
 
     private suspend fun checkedInRoomConflict(booking: BookingEntity): BookingEntity? {

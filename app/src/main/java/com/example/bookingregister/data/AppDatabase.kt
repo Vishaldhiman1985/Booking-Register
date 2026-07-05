@@ -65,7 +65,7 @@ import com.example.bookingregister.data.entities.RoomGstSlabEntity
         RoomGstSlabEntity::class,
         BookingSyncOutboxEntity::class,
     ],
-    version = 33,
+    version = 34,
     exportSchema = true
 )
 @TypeConverters(AppConverters::class)
@@ -411,6 +411,14 @@ abstract class AppDatabase : RoomDatabase() {
                 ensureBookingSyncOutboxSchema(database)
             }
         }
+        private val MIGRATION_33_34 = object : Migration(33, 34) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                ensureColumn(database, "rooms", "lifecycleStatus", "TEXT NOT NULL DEFAULT 'ACTIVE'")
+                ensureColumn(database, "rooms", "lifecycleReason", "TEXT")
+                ensureColumn(database, "rooms", "disabledAtMillis", "INTEGER")
+                ensureColumn(database, "rooms", "retiredAtMillis", "INTEGER")
+            }
+        }
         fun allMigrations(): Array<Migration> = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -443,7 +451,8 @@ abstract class AppDatabase : RoomDatabase() {
             MIGRATION_29_30,
             MIGRATION_30_31,
             MIGRATION_31_32,
-            MIGRATION_32_33
+            MIGRATION_32_33,
+            MIGRATION_33_34
         )
 
         private fun ensureBookingSyncOutboxSchema(database: SupportSQLiteDatabase) {
@@ -606,6 +615,10 @@ abstract class AppDatabase : RoomDatabase() {
                     categorySortOrder INTEGER NOT NULL DEFAULT 0,
                     propertyRemoteId TEXT,
                     sortOrder INTEGER NOT NULL DEFAULT 0,
+                    lifecycleStatus TEXT NOT NULL DEFAULT 'ACTIVE',
+                    lifecycleReason TEXT,
+                    disabledAtMillis INTEGER,
+                    retiredAtMillis INTEGER,
                     updatedAt INTEGER NOT NULL DEFAULT 0,
                     isDeleted INTEGER NOT NULL DEFAULT 0,
                     syncState TEXT NOT NULL DEFAULT 'SYNCED',
@@ -774,6 +787,10 @@ abstract class AppDatabase : RoomDatabase() {
             ensureColumn(database, "rooms", "categorySortOrder", "INTEGER NOT NULL DEFAULT 0")
             ensureColumn(database, "rooms", "propertyRemoteId", "TEXT")
             ensureColumn(database, "rooms", "sortOrder", "INTEGER NOT NULL DEFAULT 0")
+            ensureColumn(database, "rooms", "lifecycleStatus", "TEXT NOT NULL DEFAULT 'ACTIVE'")
+            ensureColumn(database, "rooms", "lifecycleReason", "TEXT")
+            ensureColumn(database, "rooms", "disabledAtMillis", "INTEGER")
+            ensureColumn(database, "rooms", "retiredAtMillis", "INTEGER")
             ensureColumn(database, "rooms", "updatedAt", "INTEGER NOT NULL DEFAULT 0")
             ensureColumn(database, "rooms", "isDeleted", "INTEGER NOT NULL DEFAULT 0")
 

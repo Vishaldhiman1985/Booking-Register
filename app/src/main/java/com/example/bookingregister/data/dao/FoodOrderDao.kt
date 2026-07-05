@@ -46,6 +46,12 @@ interface FoodOrderDao {
     @Query("SELECT COUNT(*) FROM food_orders WHERE hotelRemoteId = :hotelRemoteId")
     suspend fun countAllOrders(hotelRemoteId: String): Int
 
+    @Query("""
+        SELECT COUNT(*) FROM food_orders
+        WHERE hotelRemoteId = :hotelRemoteId AND roomRemoteId = :roomRemoteId
+    """)
+    suspend fun countForRoom(hotelRemoteId: String, roomRemoteId: String): Int
+
     @Query("SELECT MAX(updatedAt) FROM food_orders WHERE hotelRemoteId = :hotelRemoteId")
     suspend fun maxUpdatedAt(hotelRemoteId: String): Long?
 
