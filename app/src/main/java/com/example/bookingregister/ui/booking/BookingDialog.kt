@@ -1854,6 +1854,10 @@ class BookingDialog(
         if (roomNightCount <= 0) return
 
         val grossTotal = bookingTotal.numberValue().coerceAtLeast(0.0)
+        val grossTotalPaise = kotlin.math.round(grossTotal * 100.0)
+            .toLong()
+            .coerceAtLeast(0L)
+
         val activeExistingLines = draftFinancialLines.filter { !it.isDeleted }
 
         val expectedLineKeys = selectedRooms.flatMap { room ->
@@ -1865,45 +1869,57 @@ class BookingDialog(
             .toSet()
 
         val existingGrossTotal = activeExistingLines.sumOf { it.grossAmount.coerceAtLeast(0.0) }
+        val existingGrossTotalPaise = kotlin.math.round(existingGrossTotal * 100.0)
+            .toLong()
+            .coerceAtLeast(0L)
 
         val sameRoomsAndDates = existingLineKeys == expectedLineKeys
-        val sameAmount = kotlin.math.abs(existingGrossTotal - grossTotal) <= 0.01
+        val sameAmount = existingGrossTotalPaise == grossTotalPaise
 
         if (sameRoomsAndDates && sameAmount) return
 
-        val grossPerRoomNight = grossTotal / roomNightCount
+        val roomNightCountLong = roomNightCount.toLong()
+        val baseGrossPaise = grossTotalPaise / roomNightCountLong
+        val remainderPaise = (grossTotalPaise % roomNightCountLong).toInt()
         val now = System.currentTimeMillis()
 
-        draftFinancialLines = selectedRooms.flatMap { room ->
-            stayDates.map { dateMillis ->
-                val existingLine = activeExistingLines.firstOrNull {
-                    it.roomRemoteId == room.remoteId &&
-                            it.businessDateMillis == dateMillis
-                }
+        val roomNightPairs = selectedRooms.flatMap { room ->
+            stayDates.map { dateMillis -> room to dateMillis }
+        }
 
-                financialCalculator.lineFromGross(
-                    remoteId = existingLine?.remoteId ?: UUID.randomUUID().toString(),
-                    hotelRemoteId = hotelRemoteId,
-                    bookingRemoteId = booking.remoteId,
-                    roomRemoteId = room.remoteId,
-                    businessDateMillis = dateMillis,
-                    grossAmount = grossPerRoomNight,
-                    gstEnabled = hotelHasGst,
-                    source = BookingFinancialLineSource.MANUAL,
-                    roomGstSlabs = roomGstSlabs
-                ).copy(
-                    localId = existingLine?.localId ?: 0,
-                    propertyRemoteId = room.propertyRemoteId?.takeIf { it.isNotBlank() }
-                        ?: existingLine?.propertyRemoteId,
-                    updatedAt = now,
-                    syncState = "PENDING",
-                    lastSyncedAt = existingLine?.lastSyncedAt,
-                    revision = existingLine?.revision ?: 0,
-                    baseRevision = existingLine?.baseRevision?.takeIf { it > 0 }
-                        ?: existingLine?.revision
-                        ?: 0
-                )
+        draftFinancialLines = roomNightPairs.mapIndexed { index, pair ->
+            val room = pair.first
+            val dateMillis = pair.second
+            val lineGrossPaise = baseGrossPaise + if (index < remainderPaise) 1L else 0L
+            val lineGrossAmount = lineGrossPaise / 100.0
+
+            val existingLine = activeExistingLines.firstOrNull {
+                it.roomRemoteId == room.remoteId &&
+                        it.businessDateMillis == dateMillis
             }
+
+            financialCalculator.lineFromGross(
+                remoteId = existingLine?.remoteId ?: UUID.randomUUID().toString(),
+                hotelRemoteId = hotelRemoteId,
+                bookingRemoteId = booking.remoteId,
+                roomRemoteId = room.remoteId,
+                businessDateMillis = dateMillis,
+                grossAmount = lineGrossAmount,
+                gstEnabled = hotelHasGst,
+                source = BookingFinancialLineSource.MANUAL,
+                roomGstSlabs = roomGstSlabs
+            ).copy(
+                localId = existingLine?.localId ?: 0,
+                propertyRemoteId = room.propertyRemoteId?.takeIf { it.isNotBlank() }
+                    ?: existingLine?.propertyRemoteId,
+                updatedAt = now,
+                syncState = "PENDING",
+                lastSyncedAt = existingLine?.lastSyncedAt,
+                revision = existingLine?.revision ?: 0,
+                baseRevision = existingLine?.baseRevision?.takeIf { it > 0 }
+                    ?: existingLine?.revision
+                    ?: 0
+            )
         }
     }
     private fun calculatedGst() = gstCalculator.calculate(
