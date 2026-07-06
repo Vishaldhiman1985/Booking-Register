@@ -46,6 +46,9 @@
         <activity
             android:name="com.example.bookingregister.ui.service.ServiceBillingActivity"
             android:exported="false" />
+        <activity
+            android:name="com.example.bookingregister.ui.booking.BookingRecordsActivity"
+            android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

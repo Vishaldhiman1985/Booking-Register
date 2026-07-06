@@ -391,6 +391,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             menu.add("Users")
             menu.add("Share Staff Sheet")
             menu.add("Export Bookings")
+            menu.add("Booking Records")
             menu.add("Logout")
 
             setOnMenuItemClickListener { item ->
@@ -402,6 +403,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                     "Users" -> showAddUserDialog()
                     "Share Staff Sheet" -> shareStaffSheetImage()
                     "Export Bookings" -> showExportOptionsDialog()
+                    "Booking Records" -> openBookingRecords()
                     "Logout" -> logout()
                 }
                 true
@@ -415,6 +417,12 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         startActivity(Intent(this, FoodBillingActivity::class.java).apply {
             putExtra(FoodBillingActivity.EXTRA_HOTEL_REMOTE_ID, repository.hotelRemoteId)
             putExtra(FoodBillingActivity.EXTRA_OPEN_MODE, mode)
+        })
+    }
+
+    private fun openBookingRecords() {
+        startActivity(Intent(this, BookingRecordsActivity::class.java).apply {
+            putExtra(BookingRecordsActivity.EXTRA_HOTEL_REMOTE_ID, repository.hotelRemoteId)
         })
     }
 
