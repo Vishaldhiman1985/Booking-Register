@@ -424,6 +424,9 @@ class BookingRepository(
         ) {
             return SaveResult.Error("Room charges are locked because the final bill has been issued.")
         }
+        validateRoomsForBookingSave(booking, existingBooking)?.let { error ->
+            return error
+        }
 
         val existingFolio = FolioSummaryBuilder.build(
             booking = booking,
@@ -2270,7 +2273,59 @@ class BookingRepository(
             foodOrderCount = foodOrderDao.countForRoom(hotelRemoteId, roomRemoteId)
         )
     }
+    private suspend fun validateRoomsForBookingSave(
+        requestedBooking: BookingEntity,
+        existingBooking: BookingEntity?
+    ): SaveResult? {
+        if (requestedBooking.roomRemoteIds.isEmpty()) {
+            return SaveResult.Error("Select at least one active room for this booking.")
+        }
 
+        val requestedRoomIds = requestedBooking.roomRemoteIds
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+
+        if (requestedRoomIds.size != requestedBooking.roomRemoteIds.size) {
+            return SaveResult.Error("Selected room is invalid. Please choose an active room again.")
+        }
+
+        val existingRoomIds = existingBooking
+            ?.roomRemoteIds
+            .orEmpty()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .toSet()
+
+        val newlyAddedRoomIds = requestedRoomIds.filter { roomRemoteId ->
+            roomRemoteId !in existingRoomIds
+        }
+
+        if (newlyAddedRoomIds.isEmpty()) {
+            return null
+        }
+
+        newlyAddedRoomIds.forEach { roomRemoteId ->
+            val room = roomDao.getByRemoteId(roomRemoteId)
+                ?: return SaveResult.Error("Selected room is no longer available. Please refresh rooms and choose an active room.")
+
+            if (room.hotelRemoteId != hotelRemoteId || room.isDeleted) {
+                return SaveResult.Error("Selected room is deleted or unavailable. Please choose an active room.")
+            }
+
+            val lifecycleStatus = RoomLifecycleStatus.normalize(room.lifecycleStatus)
+
+            if (lifecycleStatus == RoomLifecycleStatus.DISABLED) {
+                return SaveResult.Error("${room.roomName} is disabled. Enable it before creating a new booking.")
+            }
+
+            if (lifecycleStatus == RoomLifecycleStatus.RETIRED) {
+                return SaveResult.Error("${room.roomName} is retired and cannot be used for a new booking.")
+            }
+        }
+
+        return null
+    }
     private suspend fun checkedInRoomConflict(booking: BookingEntity): BookingEntity? {
         if (booking.roomRemoteIds.isEmpty()) return null
         return bookingDao.getBookingsByStatus(
