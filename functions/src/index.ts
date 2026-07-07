@@ -1,6 +1,6 @@
 import { initializeApp } from "firebase-admin/app";
 import { DecodedIdToken, getAuth, UserRecord } from "firebase-admin/auth";
-import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
+import { DocumentSnapshot, FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
 import { CallableRequest, HttpsError, onCall } from "firebase-functions/v2/https";
 import { logger, setGlobalOptions } from "firebase-functions/v2";
 
@@ -686,6 +686,231 @@ export const saveBookingServer = onCall({ invoker: "public" }, async (request) =
     }
 
     return { revision: nextRevision, updatedByUid: requestAuth.uid };
+  });
+
+  return result;
+});
+
+function normaliseBookingFinancialLinePayload(
+  raw: Record<string, unknown>,
+  hotelId: string,
+  bookingRemoteId: string,
+  uid: string
+) {
+  const remoteId = requireString(raw.remoteId, "financial line remoteId");
+  const roomRemoteId = requireString(raw.roomRemoteId, "financial line roomRemoteId");
+  const businessDateMillis = numberValue(raw.businessDateMillis);
+
+  if (businessDateMillis <= 0) {
+    throw new HttpsError("invalid-argument", "Invalid room-night business date.");
+  }
+
+  return {
+    remoteId,
+    baseRevision: numberValue(raw.baseRevision),
+    cloudData: {
+      hotelRemoteId: hotelId,
+      bookingRemoteId,
+      roomRemoteId,
+      propertyRemoteId: raw.propertyRemoteId ? String(raw.propertyRemoteId) : null,
+      businessDateMillis,
+      grossAmount: numberValue(raw.grossAmount),
+      taxableAmount: numberValue(raw.taxableAmount),
+      gstRatePercent: numberValue(raw.gstRatePercent),
+      gstAmount: numberValue(raw.gstAmount),
+      hsnSacCode: raw.hsnSacCode ? String(raw.hsnSacCode) : null,
+      slabRemoteId: raw.slabRemoteId ? String(raw.slabRemoteId) : null,
+      slabName: raw.slabName ? String(raw.slabName) : null,
+      cgstRatePercent: numberValue(raw.cgstRatePercent),
+      sgstRatePercent: numberValue(raw.sgstRatePercent),
+      cessRatePercent: numberValue(raw.cessRatePercent),
+      cgstAmount: numberValue(raw.cgstAmount),
+      sgstAmount: numberValue(raw.sgstAmount),
+      cessAmount: numberValue(raw.cessAmount),
+      source: String(raw.source || "MANUAL"),
+      updatedAt: numberValue(raw.updatedAt, Date.now()),
+      isDeleted: booleanValue(raw.isDeleted),
+      updatedByUid: uid,
+      serverUpdatedAt: FieldValue.serverTimestamp(),
+    },
+  };
+}
+
+export const saveBookingAggregateServer = onCall({ invoker: "public" }, async (request) => {
+  const requestAuth = await requireAuth(request);
+  const hotelId = requireString(request.data?.hotelId || requestAuth.token.hotelId, "hotelId");
+  await requireActiveHotelMember(requestAuth, hotelId);
+  await requireUsableSubscription(hotelId);
+
+  const operationId = requireString(request.data?.operationId, "operationId");
+
+  const { remoteId, baseRevision, cloudData } = normaliseBookingPayload(
+    (request.data?.booking || {}) as Record<string, unknown>,
+    hotelId,
+    requestAuth.uid
+  );
+
+  const rawLines = Array.isArray(request.data?.financialLines)
+    ? request.data.financialLines as Array<Record<string, unknown>>
+    : [];
+
+  const financialLines = rawLines.map((line) =>
+    normaliseBookingFinancialLinePayload(line, hotelId, remoteId, requestAuth.uid)
+  );
+
+  const hotelRef = publicHotelRef(hotelId);
+  const bookingDoc = hotelRef.collection("bookings").doc(remoteId);
+  const mutationDoc = hotelRef.collection("appliedBookingMutations").doc(operationId);
+  const newLockIds = lockIdsFor(cloudData.roomRemoteIds, cloudData.checkInMillis, cloudData.checkOutMillis);
+
+  if (financialLines.length + newLockIds.size > 430) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Booking has too many room-night rows for one safe sync operation."
+    );
+  }
+
+  const result = await db.runTransaction(async (tx) => {
+    const alreadyApplied = await tx.get(mutationDoc);
+
+    if (alreadyApplied.exists) {
+      const existingBookingRemoteId = String(alreadyApplied.get("bookingRemoteId") || "");
+      if (existingBookingRemoteId !== remoteId) {
+        throw new HttpsError(
+          "aborted",
+          "This sync operation ID was already used for another booking."
+        );
+      }
+
+      return {
+        operationId,
+        bookingRemoteId: remoteId,
+        bookingRevision: numberValue(alreadyApplied.get("bookingRevision")),
+        financialLineRevisions: alreadyApplied.get("financialLineRevisions") || {},
+        updatedByUid: String(alreadyApplied.get("updatedByUid") || requestAuth.uid),
+        alreadyApplied: true,
+      };
+    }
+
+    const existingBooking = await tx.get(bookingDoc);
+    const remoteRevision = numberValue(existingBooking.get("revision"));
+
+    if (existingBooking.exists && remoteRevision !== baseRevision) {
+      throw new HttpsError(
+        "aborted",
+        "Cloud has another revision. The local booking was preserved for explicit conflict resolution."
+      );
+    }
+
+    const lockSnapshots = new Map<string, DocumentSnapshot>();
+
+    for (const lockId of newLockIds) {
+      const lockDoc = hotelRef.collection("bookingLocks").doc(lockId);
+      lockSnapshots.set(lockId, await tx.get(lockDoc));
+    }
+
+    for (const lockSnapshot of lockSnapshots.values()) {
+      const lockedBy = String(lockSnapshot.get("bookingRemoteId") || "");
+      const lockDeleted = booleanValue(lockSnapshot.get("isDeleted"));
+      if (lockSnapshot.exists && !lockDeleted && lockedBy !== remoteId) {
+        throw new HttpsError(
+          "already-exists",
+          "Selected room is already booked for these dates."
+        );
+      }
+    }
+
+    const lineSnapshots = new Map<string, DocumentSnapshot>();
+
+    for (const line of financialLines) {
+      const lineDoc = hotelRef.collection("bookingFinancialLines").doc(line.remoteId);
+      lineSnapshots.set(line.remoteId, await tx.get(lineDoc));
+    }
+
+    for (const line of financialLines) {
+      const lineSnapshot = lineSnapshots.get(line.remoteId);
+      const lineRemoteRevision = numberValue(lineSnapshot?.get("revision"));
+
+      if (lineSnapshot?.exists && lineRemoteRevision !== line.baseRevision) {
+        throw new HttpsError(
+          "aborted",
+          "Room-night accounting changed on another device. Refresh before saving."
+        );
+      }
+    }
+
+    const oldRoomIds = existingBooking.exists
+      ? stringList(existingBooking.get("roomRemoteIds"))
+      : [];
+
+    const oldLockIds = existingBooking.exists
+      ? lockIdsFor(
+          oldRoomIds,
+          numberValue(existingBooking.get("checkInMillis"), cloudData.checkInMillis),
+          numberValue(existingBooking.get("checkOutMillis"), cloudData.checkOutMillis)
+        )
+      : new Set<string>();
+
+    const nextBookingRevision = remoteRevision + 1;
+    const financialLineRevisions: Record<string, number> = {};
+
+    for (const lockId of oldLockIds) {
+      if (!newLockIds.has(lockId)) {
+        tx.delete(hotelRef.collection("bookingLocks").doc(lockId));
+      }
+    }
+
+    tx.set(bookingDoc, {
+      ...cloudData,
+      revision: nextBookingRevision,
+    });
+
+    for (const lockId of newLockIds) {
+      const parts = lockId.split("_");
+      const dateMillis = numberValue(parts[parts.length - 1]);
+      const roomRemoteId = parts.slice(0, -1).join("_");
+
+      tx.set(hotelRef.collection("bookingLocks").doc(lockId), {
+        hotelRemoteId: hotelId,
+        bookingRemoteId: remoteId,
+        roomRemoteId,
+        dateMillis,
+        isDeleted: false,
+        updatedAt: cloudData.updatedAt,
+        updatedByUid: requestAuth.uid,
+        serverUpdatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    for (const line of financialLines) {
+      const lineSnapshot = lineSnapshots.get(line.remoteId);
+      const nextLineRevision = numberValue(lineSnapshot?.get("revision")) + 1;
+
+      financialLineRevisions[line.remoteId] = nextLineRevision;
+
+      tx.set(hotelRef.collection("bookingFinancialLines").doc(line.remoteId), {
+        ...line.cloudData,
+        revision: nextLineRevision,
+      });
+    }
+
+    const successResult = {
+      operationId,
+      bookingRemoteId: remoteId,
+      bookingRevision: nextBookingRevision,
+      financialLineRevisions,
+      updatedByUid: requestAuth.uid,
+      alreadyApplied: false,
+    };
+
+    tx.set(mutationDoc, {
+      ...successResult,
+      hotelRemoteId: hotelId,
+      createdAt: Date.now(),
+      serverCreatedAt: FieldValue.serverTimestamp(),
+    });
+
+    return successResult;
   });
 
   return result;
