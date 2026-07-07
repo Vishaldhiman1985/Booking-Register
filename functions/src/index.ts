@@ -803,21 +803,49 @@ export const saveBookingAggregateServer = onCall({ invoker: "public" }, async (r
     }
 
     const lockSnapshots = new Map<string, DocumentSnapshot>();
+    const blockingBookingIds = new Set<string>();
 
     for (const lockId of newLockIds) {
       const lockDoc = hotelRef.collection("bookingLocks").doc(lockId);
-      lockSnapshots.set(lockId, await tx.get(lockDoc));
-    }
+      const lockSnapshot = await tx.get(lockDoc);
+      lockSnapshots.set(lockId, lockSnapshot);
 
-    for (const lockSnapshot of lockSnapshots.values()) {
       const lockedBy = String(lockSnapshot.get("bookingRemoteId") || "");
       const lockDeleted = booleanValue(lockSnapshot.get("isDeleted"));
-      if (lockSnapshot.exists && !lockDeleted && lockedBy !== remoteId) {
+
+      if (lockSnapshot.exists && !lockDeleted && lockedBy && lockedBy !== remoteId) {
+        blockingBookingIds.add(lockedBy);
+      }
+    }
+
+    const blockingBookingSnapshots = new Map<string, DocumentSnapshot>();
+
+    for (const bookingId of blockingBookingIds) {
+      const blockingBookingDoc = hotelRef.collection("bookings").doc(bookingId);
+      blockingBookingSnapshots.set(bookingId, await tx.get(blockingBookingDoc));
+    }
+
+    for (const [lockId, lockSnapshot] of lockSnapshots) {
+      const lockedBy = String(lockSnapshot.get("bookingRemoteId") || "");
+      const lockDeleted = booleanValue(lockSnapshot.get("isDeleted"));
+
+      if (!lockSnapshot.exists || lockDeleted || !lockedBy || lockedBy === remoteId) {
+        continue;
+      }
+
+      const blockingBooking = blockingBookingSnapshots.get(lockedBy);
+      const blockingBookingIsActive =
+        blockingBooking?.exists === true &&
+        !booleanValue(blockingBooking.get("isDeleted"));
+
+      if (blockingBookingIsActive) {
         throw new HttpsError(
           "already-exists",
           "Selected room is already booked for these dates."
         );
       }
+
+      tx.delete(hotelRef.collection("bookingLocks").doc(lockId));
     }
 
     const lineSnapshots = new Map<string, DocumentSnapshot>();

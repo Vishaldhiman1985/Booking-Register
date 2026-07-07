@@ -982,91 +982,40 @@ class CloudSyncManager(
         return pushBookingDirect(normalized)
     }
 
-    /** Writes the operational booking, its room locks, and all room-night accounting rows atomically. */
+    /** Sends the operational booking, its room locks, and room-night accounting rows
+     * to the server-authority Cloud Function.
+     *
+     * The server owns:
+     * - revision check
+     * - bookingLocks
+     * - idempotent operationId retry
+     * - financial line revisions
+     */
     suspend fun pushBookingAggregate(
+        operationId: String,
         booking: BookingEntity,
         financialLines: List<BookingFinancialLineEntity>
     ): BookingAggregateWriteResult {
         val normalized = booking.withCalculatedPayment()
-        val bookingDoc = hotelDoc.collection("bookings").document(normalized.remoteId)
-        val newLockIds = lockIdsFor(normalized)
-        require(financialLines.size + newLockIds.size <= MAX_AGGREGATE_READS) {
-            "Booking has too many room-night rows for one atomic sync"
-        }
-        require(financialLines.all { it.bookingRemoteId == booking.remoteId }) {
+
+        require(operationId.isNotBlank()) { "Booking sync operation id is missing" }
+        require(financialLines.all { it.bookingRemoteId == normalized.remoteId }) {
             "Financial line belongs to another booking"
         }
-        return firestore.runTransaction { transaction ->
-            val existingBooking = transaction.get(bookingDoc)
-            val remoteRevision = existingBooking.getLongCompat("revision") ?: 0
-            if (existingBooking.exists() && remoteRevision != normalized.baseRevision) {
-                throw BookingConflictException("This booking was changed on another device. Refresh before saving.")
-            }
 
-            val lockSnapshots = newLockIds.associateWith { lockId ->
-                transaction.get(hotelDoc.collection("bookingLocks").document(lockId))
-            }
-            lockSnapshots.forEach { (_, snapshot) ->
-                val lockedBy = snapshot.getStringCompat("bookingRemoteId")
-                val lockDeleted = snapshot.getBooleanCompat("isDeleted") ?: false
-                if (snapshot.exists() && !lockDeleted && lockedBy != normalized.remoteId) {
-                    throw BookingConflictException("Selected room is already booked for these dates")
-                }
-            }
-
-            val lineSnapshots = financialLines.associateWith { line ->
-                transaction.get(hotelDoc.collection("bookingFinancialLines").document(line.remoteId))
-            }
-            lineSnapshots.forEach { (line, snapshot) ->
-                val lineRemoteRevision = snapshot.getLongCompat("revision") ?: 0
-                if (snapshot.exists() && lineRemoteRevision != line.baseRevision) {
-                    throw BookingConflictException("Room-night accounting changed on another device. Refresh before saving.")
-                }
-            }
-
-            val oldLockIds = if (existingBooking.exists()) {
-                val oldRoomIds = (existingBooking.get("roomRemoteIds") as? List<*>)
-                    ?.mapNotNull { it as? String }.orEmpty()
-                lockIdsFor(
-                    roomRemoteIds = oldRoomIds,
-                    checkInMillis = existingBooking.getLongCompat("checkInMillis") ?: normalized.checkInMillis,
-                    checkOutMillis = existingBooking.getLongCompat("checkOutMillis") ?: normalized.checkOutMillis
+        val response = functions
+            .getHttpsCallable("saveBookingAggregateServer")
+            .call(
+                mapOf(
+                    "hotelId" to hotelRemoteId,
+                    "operationId" to operationId,
+                    "booking" to normalized.toCallableMap(),
+                    "financialLines" to financialLines.map { it.toCallableMap() }
                 )
-            } else emptySet()
+            )
+            .await()
 
-            val uid = currentUid()
-            val nextBookingRevision = remoteRevision + 1
-            oldLockIds.minus(newLockIds).forEach { lockId ->
-                transaction.delete(hotelDoc.collection("bookingLocks").document(lockId))
-            }
-            transaction.set(bookingDoc, normalized.toCloudMap(nextBookingRevision, uid))
-            newLockIds.forEach { lockId ->
-                val parts = lockId.split("_")
-                transaction.set(
-                    hotelDoc.collection("bookingLocks").document(lockId),
-                    mapOf(
-                        "hotelRemoteId" to hotelRemoteId,
-                        "bookingRemoteId" to normalized.remoteId,
-                        "roomRemoteId" to parts.dropLast(1).joinToString("_"),
-                        "dateMillis" to (parts.lastOrNull()?.toLongOrNull() ?: 0L),
-                        "isDeleted" to false,
-                        "updatedAt" to normalized.updatedAt,
-                        "updatedByUid" to uid,
-                        "serverUpdatedAt" to FieldValue.serverTimestamp()
-                    )
-                )
-            }
-            val lineRevisions = lineSnapshots.mapValues { (_, snapshot) ->
-                (snapshot.getLongCompat("revision") ?: 0) + 1
-            }
-            lineRevisions.forEach { (line, revision) ->
-                transaction.set(
-                    hotelDoc.collection("bookingFinancialLines").document(line.remoteId),
-                    line.toCloudMap(revision, uid)
-                )
-            }
-            BookingAggregateWriteResult(nextBookingRevision, lineRevisions.mapKeys { it.key.remoteId }, uid)
-        }.await()
+        return response.data.toBookingAggregateWriteResult()
     }
 
     private suspend fun pushBookingDirect(booking: BookingEntity): CloudWriteResult {
@@ -1271,6 +1220,42 @@ class CloudSyncManager(
         return CloudWriteResult(revision, updatedByUid)
     }
 
+    private fun Any?.toBookingAggregateWriteResult(): BookingAggregateWriteResult {
+        val data = this as? Map<*, *>
+            ?: return BookingAggregateWriteResult(
+                bookingRevision = 0L,
+                financialLineRevisions = emptyMap(),
+                updatedByUid = currentUid()
+            )
+
+        val bookingRevision = when (val value = data["bookingRevision"]) {
+            is Number -> value.toLong()
+            is String -> value.toLongOrNull() ?: 0L
+            else -> 0L
+        }
+
+        val financialLineRevisionsRaw = data["financialLineRevisions"] as? Map<*, *>
+        val financialLineRevisions = financialLineRevisionsRaw
+            .orEmpty()
+            .mapNotNull { (key, value) ->
+                val remoteId = key?.toString()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val revision = when (value) {
+                    is Number -> value.toLong()
+                    is String -> value.toLongOrNull()
+                    else -> null
+                } ?: return@mapNotNull null
+
+                remoteId to revision
+            }
+            .toMap()
+
+        return BookingAggregateWriteResult(
+            bookingRevision = bookingRevision,
+            financialLineRevisions = financialLineRevisions,
+            updatedByUid = data["updatedByUid"]?.toString()
+        )
+    }
+
     private fun shouldUseDirectBookingFallback(error: Throwable): Boolean {
         val functionsError = error as? FirebaseFunctionsException ?: return false
         return functionsError.code in setOf(
@@ -1407,6 +1392,32 @@ class CloudSyncManager(
             "isDeleted" to normalized.isDeleted
         )
     }
+
+    private fun BookingFinancialLineEntity.toCallableMap(): Map<String, Any?> = mapOf(
+        "remoteId" to remoteId,
+        "baseRevision" to (baseRevision.takeIf { it > 0 } ?: revision),
+        "hotelRemoteId" to hotelRemoteId,
+        "bookingRemoteId" to bookingRemoteId,
+        "roomRemoteId" to roomRemoteId,
+        "propertyRemoteId" to propertyRemoteId,
+        "businessDateMillis" to businessDateMillis,
+        "grossAmount" to grossAmount,
+        "taxableAmount" to taxableAmount,
+        "gstRatePercent" to gstRatePercent,
+        "gstAmount" to gstAmount,
+        "hsnSacCode" to hsnSacCode,
+        "slabRemoteId" to slabRemoteId,
+        "slabName" to slabName,
+        "cgstRatePercent" to cgstRatePercent,
+        "sgstRatePercent" to sgstRatePercent,
+        "cessRatePercent" to cessRatePercent,
+        "cgstAmount" to cgstAmount,
+        "sgstAmount" to sgstAmount,
+        "cessAmount" to cessAmount,
+        "source" to source,
+        "updatedAt" to updatedAt,
+        "isDeleted" to isDeleted
+    )
 
     private fun DocumentSnapshot.toBookingEntity(): BookingEntity? {
         if (!exists()) return null
