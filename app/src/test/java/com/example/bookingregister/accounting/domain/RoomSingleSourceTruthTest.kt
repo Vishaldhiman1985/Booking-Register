@@ -76,6 +76,75 @@ class RoomSingleSourceTruthTest {
         assertEquals("996311", finalBillPreview.roomItems.first().hsnSacCode)
     }
 
+    @Test
+    fun roomFinancialLines_win_over_stale_booking_cache_after_reinstall() {
+        val bookingWithStaleCache = BookingEntity(
+            remoteId = "booking_stale_cache",
+            bookingUuid = "BR-STale-1",
+            hotelRemoteId = "hotel_1",
+            guestName = "new sync",
+            sourceName = "Walk-in",
+            sourceType = BookingSourceType.DIRECT,
+            checkInMillis = 1_720_310_400_000L,
+            checkOutMillis = 1_720_483_200_000L,
+            roomRemoteIds = listOf("room_101"),
+            grossCharges = 10_700.0,
+            roomRevenue = 10_700.0,
+            propertyTax = 0.0,
+            rate = 10_700.0,
+            receivable = 10_700.0,
+            paid = 500.0
+        )
+
+        val financialLines = listOf(
+            roomLine(
+                remoteId = "line_new_total",
+                bookingRemoteId = "booking_stale_cache",
+                roomRemoteId = "room_101",
+                gross = 29_999.0,
+                taxable = 28_570.44,
+                gst = 1_428.56
+            )
+        )
+
+        val rooms = listOf(
+            RoomEntity(
+                remoteId = "room_101",
+                hotelRemoteId = "hotel_1",
+                roomName = "101"
+            )
+        )
+
+        val financialSummary = BookingFinancialCalculator().summarize(
+            lines = financialLines,
+            fallbackFinalCharges = bookingWithStaleCache.grossCharges,
+            fallbackRoomCount = bookingWithStaleCache.roomRemoteIds.size,
+            fallbackNights = 2,
+            gstEnabled = true
+        )
+        val folioSummary = FolioSummaryBuilder.build(
+            booking = bookingWithStaleCache,
+            payments = emptyList(),
+            foodOrders = emptyList(),
+            bookingFinancialLines = financialLines
+        )
+        val finalBillPreview = FinalBillPreviewBuilder().build(
+            booking = bookingWithStaleCache,
+            rooms = rooms,
+            bookingPayments = emptyList(),
+            bookingFinancialLines = financialLines,
+            accountingCharges = emptyList(),
+            foodOrders = emptyList(),
+            foodOrderItems = emptyList()
+        )
+
+        assertEquals(29_999.0, financialSummary.grossCharges, 0.01)
+        assertEquals(28_570.44, financialSummary.roomRevenue, 0.01)
+        assertEquals(1_428.56, financialSummary.propertyTax, 0.01)
+        assertEquals(29_999.0, folioSummary.stayTotal, 0.01)
+        assertEquals(29_999.0, finalBillPreview.roomCharges, 0.01)
+    }
+
     private fun roomLine(
         remoteId: String,
         bookingRemoteId: String,

@@ -95,29 +95,22 @@ service cloud.firestore {
 
       match /bookings/{bookingId} {
         allow read: if canReadHotel(hotelId);
-        allow create, update: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
-        allow delete: if canOperateHotel(hotelId);
+        allow create, update, delete: if false;
       }
 
       match /bookingPayments/{paymentId} {
         allow read: if canReadHotel(hotelId);
-        allow create: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
-        allow update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
-        allow delete: if canManageHotel(hotelId) && existingScopedToHotel(hotelId);
+        allow create, update, delete: if false;
       }
 
       match /bookingFinancialLines/{lineId} {
         allow read: if canReadHotel(hotelId);
-        allow create: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
-        allow update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
-        allow delete: if canManageHotel(hotelId) && existingScopedToHotel(hotelId);
+        allow create, update, delete: if false;
       }
 
       match /bookingAccountingCharges/{chargeId} {
         allow read: if canReadHotel(hotelId);
-        allow create: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
-        allow update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
-        allow delete: if canManageHotel(hotelId) && existingScopedToHotel(hotelId);
+        allow create, update, delete: if false;
       }
 
       match /foodMenuItems/{itemId} {
@@ -140,28 +133,22 @@ service cloud.firestore {
 
       match /foodOrders/{orderId} {
         allow read: if canReadHotel(hotelId);
-        allow create, update: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
-        allow delete: if canOperateHotel(hotelId);
+        allow create, update, delete: if false;
       }
 
       match /foodOrderItems/{itemId} {
         allow read: if canReadHotel(hotelId);
-        allow create, update: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
-        allow delete: if canOperateHotel(hotelId);
+        allow create, update, delete: if false;
       }
 
       match /foodBills/{billId} {
         allow read: if canReadHotel(hotelId);
-        allow create: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
-        allow update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
-        allow delete: if canManageHotel(hotelId) && existingScopedToHotel(hotelId);
+        allow create, update, delete: if false;
       }
 
       match /foodBillItems/{itemId} {
         allow read: if canReadHotel(hotelId);
-        allow create: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
-        allow update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
-        allow delete: if canManageHotel(hotelId) && existingScopedToHotel(hotelId);
+        allow create, update, delete: if false;
       }
 
       match /invoiceCounters/{counterId} {
@@ -177,8 +164,12 @@ service cloud.firestore {
 
       match /bookingLocks/{lockId} {
         allow read: if canReadHotel(hotelId);
-        allow create, update: if canOperateHotel(hotelId) && scopedToHotel(hotelId);
-        allow delete: if canOperateHotel(hotelId);
+        allow create, update, delete: if false;
+      }
+
+      match /bookingAuditEvents/{eventId} {
+        allow read: if canReadHotel(hotelId);
+        allow create, update, delete: if false;
       }
     }
   }

@@ -65,7 +65,7 @@ import com.example.bookingregister.data.entities.RoomGstSlabEntity
         RoomGstSlabEntity::class,
         BookingSyncOutboxEntity::class,
     ],
-    version = 34,
+    version = 37,
     exportSchema = true
 )
 @TypeConverters(AppConverters::class)
@@ -103,6 +103,7 @@ abstract class AppDatabase : RoomDatabase() {
                     "booking_register.db"
                 )
                     .addMigrations(*allMigrations())
+                    .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
 
                 INSTANCE = instance
@@ -419,6 +420,22 @@ abstract class AppDatabase : RoomDatabase() {
                 ensureColumn(database, "rooms", "retiredAtMillis", "INTEGER")
             }
         }
+        private val MIGRATION_34_35 = object : Migration(34, 35) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                ensureColumn(database, "bookings", "cancelledAt", "INTEGER")
+                ensureColumn(database, "bookings", "cancelledByUid", "TEXT")
+                ensureColumn(database, "bookings", "cancellationReason", "TEXT")
+                database.execSQL(
+                    "UPDATE bookings SET bookingStatus = 'CANCELLED', isDeleted = 0 " +
+                        "WHERE isDeleted = 1"
+                )
+            }
+        }
+        private val MIGRATION_35_36 = object : Migration(35, 36) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                ensureColumn(database, "booking_payments", "originalPaymentRemoteId", "TEXT")
+            }
+        }
         fun allMigrations(): Array<Migration> = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -452,7 +469,9 @@ abstract class AppDatabase : RoomDatabase() {
             MIGRATION_30_31,
             MIGRATION_31_32,
             MIGRATION_32_33,
-            MIGRATION_33_34
+            MIGRATION_33_34,
+            MIGRATION_34_35,
+            MIGRATION_35_36
         )
 
         private fun ensureBookingSyncOutboxSchema(database: SupportSQLiteDatabase) {

@@ -3,6 +3,7 @@ package com.example.bookingregister.revenue.domain
 import com.example.bookingregister.common.domain.BusinessDates
 import com.example.bookingregister.common.domain.DateRange
 import com.example.bookingregister.data.entities.BookingEntity
+import com.example.bookingregister.booking.domain.BookingStatus
 import com.example.bookingregister.data.entities.RoomEntity
 import com.example.bookingregister.room.domain.RoomLifecyclePolicy
 
@@ -24,7 +25,7 @@ class CategoryPerformanceCalculator {
             }
             .toMutableMap()
 
-        bookings.filter { !it.isDeleted }.forEach { booking ->
+        bookings.filter { !it.isDeleted && it.bookingStatus != BookingStatus.CANCELLED }.forEach { booking ->
             val overlapNights = BusinessDates.overlapNights(
                 booking.checkInMillis,
                 booking.checkOutMillis,

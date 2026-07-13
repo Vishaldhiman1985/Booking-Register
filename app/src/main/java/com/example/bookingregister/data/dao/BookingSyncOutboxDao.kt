@@ -17,6 +17,9 @@ interface BookingSyncOutboxDao {
     @Query("DELETE FROM booking_sync_outbox WHERE operationId = :operationId")
     suspend fun delete(operationId: String)
 
+    @Query("DELETE FROM booking_sync_outbox WHERE hotelRemoteId = :hotelRemoteId AND bookingRemoteId = :bookingRemoteId")
+    suspend fun deleteForBooking(hotelRemoteId: String, bookingRemoteId: String)
+
     @Query("""
         UPDATE booking_sync_outbox
         SET attemptCount = attemptCount + 1, lastError = :lastError

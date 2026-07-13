@@ -1,6 +1,7 @@
 ﻿package com.example.bookingregister.data.repository
 
 import android.content.Context
+import android.provider.Settings
 import android.util.Log
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
@@ -10,6 +11,8 @@ import com.example.bookingregister.accounting.domain.ChargeBuckets
 import com.example.bookingregister.accounting.domain.FoodBillTotalsCalculator
 import com.example.bookingregister.accounting.domain.FinalBillChargeSelectionPolicy
 import com.example.bookingregister.accounting.domain.PaymentAllocationPolicy
+import com.example.bookingregister.accounting.domain.InitialPaymentFactory
+import com.example.bookingregister.accounting.domain.RefundAllocationPolicy
 import com.example.bookingregister.accounting.domain.PaymentAllocationRepairPolicy
 import com.example.bookingregister.accounting.domain.StayBillItemBuilder
 import com.example.bookingregister.accounting.domain.RoomNightFinancialIntegrity
@@ -18,6 +21,9 @@ import com.example.bookingregister.booking.domain.BookingStatus
 import com.example.bookingregister.booking.domain.BilledRoomRateLockPolicy
 import com.example.bookingregister.booking.domain.BookingPaymentSourcePolicy
 import com.example.bookingregister.booking.domain.BookingPricingStatus
+import com.example.bookingregister.booking.domain.BookingPropertyPolicy
+import com.example.bookingregister.booking.domain.BookingChangeSet
+import com.example.bookingregister.booking.domain.DerivedBookingCachePolicy
 import com.example.bookingregister.booking.domain.CheckoutBalancePolicy
 import com.example.bookingregister.data.AppDatabase
 import com.example.bookingregister.data.SyncState
@@ -50,7 +56,9 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.round
-import com.example.bookingregister.data.sync.BookingConflictException
+import com.example.bookingregister.data.sync.syncFailureText
+import com.example.bookingregister.data.sync.StructuredSyncException
+import com.example.bookingregister.data.sync.SyncFailureCode
 import com.example.bookingregister.data.sync.SyncWorkScheduler
 import com.example.bookingregister.data.sync.SyncAcknowledgementPolicy
 import com.example.bookingregister.data.withCalculatedPayment
@@ -58,6 +66,7 @@ import com.example.bookingregister.tax.domain.FoodGstCalculator
 import com.example.bookingregister.room.domain.RoomHistoryFacts
 import com.example.bookingregister.room.domain.RoomLifecyclePolicy
 import com.example.bookingregister.room.domain.RoomLifecycleStatus
+import com.example.bookingregister.source.domain.SourceSettlementCalculator
 
 
 
@@ -96,6 +105,7 @@ class BookingRepository(
     private var retryInProgress = false
     private var lastRetryAttemptAt = 0L
     private val foodGstCalculator = FoodGstCalculator()
+    private val sourceSettlementCalculator = SourceSettlementCalculator()
 
     fun observeHotel(): LiveData<HotelEntity?> = hotelDao.observeHotel(hotelRemoteId)
 
@@ -219,7 +229,6 @@ class BookingRepository(
                 onRoomsChanged = { rooms ->
                     scope.launch {
                         rooms.forEach { upsertRemoteRoomIfNewer(it.markSynced()) }
-                        retryFailedSync()
                         clearRealtimeSyncErrorIfClean()
                     }
                 },
@@ -235,7 +244,6 @@ class BookingRepository(
                 onPropertiesChanged = { properties ->
                     scope.launch {
                         properties.forEach { upsertRemoteManagedPropertyIfNewer(it.markSynced()) }
-                        retryFailedSync()
                         clearRealtimeSyncErrorIfClean()
                     }
                 },
@@ -251,7 +259,6 @@ class BookingRepository(
                 onSourcesChanged = { sources ->
                     scope.launch {
                         sources.forEach { upsertRemoteSourceIfNewer(it.markSynced()) }
-                        retryFailedSync()
                         clearRealtimeSyncErrorIfClean()
                     }
                 },
@@ -266,7 +273,6 @@ class BookingRepository(
                                 it.markSynced().withCalculatedPayment()
                             )
                         }
-                        retryFailedSync()
                         clearRealtimeSyncErrorIfClean()
                     }
                 },
@@ -278,7 +284,6 @@ class BookingRepository(
                 onPaymentsChanged = { payments ->
                     scope.launch {
                         payments.forEach { upsertRemotePaymentIfNewer(it.markSynced()) }
-                        retryFailedSync()
                         clearRealtimeSyncErrorIfClean()
                     }
                 },
@@ -290,7 +295,6 @@ class BookingRepository(
                 onLinesChanged = { lines ->
                     scope.launch {
                         lines.forEach { upsertRemoteFinancialLineIfNewer(it.markSynced()) }
-                        retryFailedSync()
                         clearRealtimeSyncErrorIfClean()
                     }
                 },
@@ -306,7 +310,6 @@ class BookingRepository(
                 onChargesChanged = { charges ->
                     scope.launch {
                         charges.forEach { upsertRemoteAccountingChargeIfNewer(it.markSynced()) }
-                        retryFailedSync()
                         clearRealtimeSyncErrorIfClean()
                     }
                 },
@@ -314,9 +317,6 @@ class BookingRepository(
             )
 
 
-            backfillLocalPaymentsToCloud()
-            migrateLegacyAccountingRowsOnce()
-            repairLegacyBookingLifecycleFieldsOnce()
             repairAutoPaymentAllocationsOnce()
             repairBookingPaymentAllocationsOnce()
             repairOtaBookingStatuses()
@@ -429,24 +429,27 @@ class BookingRepository(
             hasPaymentRows = existingPayments.isNotEmpty(),
             stayPaidFromRows = existingFolio.stayPaid
         )
-        val propertyRemoteId = booking.propertyRemoteId
-            ?: bookingPropertyForRooms(booking.roomRemoteIds)
-        val normalized = booking.copy(
+        val bookingWithLineCache = financialLines
+            ?.let { applyRoomNightFinancialCache(booking, it) }
+            ?: booking
+        val propertyRemoteId = bookingWithLineCache.propertyRemoteId
+            ?: bookingPropertyForRooms(bookingWithLineCache.roomRemoteIds)
+        val normalized = bookingWithLineCache.copy(
             paid = aggregatePaid,
             propertyRemoteId = propertyRemoteId,
             bookingStatus = existingBooking?.bookingStatus?.ifBlank { BookingStatus.RESERVED }
-                ?: booking.bookingStatus.ifBlank { BookingStatus.RESERVED },
-            actualCheckInAt = existingBooking?.actualCheckInAt ?: booking.actualCheckInAt,
-            actualCheckOutAt = existingBooking?.actualCheckOutAt ?: booking.actualCheckOutAt,
-            checkoutNote = existingBooking?.checkoutNote ?: booking.checkoutNote,
-            reopenNote = existingBooking?.reopenNote ?: booking.reopenNote,
-            reopenedAt = existingBooking?.reopenedAt ?: booking.reopenedAt
+                ?: bookingWithLineCache.bookingStatus.ifBlank { BookingStatus.RESERVED },
+            actualCheckInAt = existingBooking?.actualCheckInAt ?: bookingWithLineCache.actualCheckInAt,
+            actualCheckOutAt = existingBooking?.actualCheckOutAt ?: bookingWithLineCache.actualCheckOutAt,
+            checkoutNote = existingBooking?.checkoutNote ?: bookingWithLineCache.checkoutNote,
+            reopenNote = existingBooking?.reopenNote ?: bookingWithLineCache.reopenNote,
+            reopenedAt = existingBooking?.reopenedAt ?: bookingWithLineCache.reopenedAt
         ).withCalculatedPayment().copy(
             updatedAt = System.currentTimeMillis(),
             isDeleted = false,
             syncState = SyncState.PENDING,
             lastSyncError = null,
-            baseRevision = booking.baseRevision.takeIf { it > 0 } ?: booking.revision
+            baseRevision = bookingWithLineCache.baseRevision.takeIf { it > 0 } ?: bookingWithLineCache.revision
         )
 
         val overlapping = bookingDao.getOverlappingBookings(
@@ -477,6 +480,12 @@ class BookingRepository(
                 now = normalized.updatedAt
             )
         }.orEmpty()
+        val changeSet = BookingChangeSet.create(
+            previous = existingBooking,
+            requested = normalized,
+            previousLines = existingFinancialLines,
+            requestedLines = financialLines ?: existingFinancialLines
+        )
 
         db.withTransaction {
             bookingDao.upsert(normalized)
@@ -487,6 +496,7 @@ class BookingRepository(
                     operationId = UUID.randomUUID().toString(),
                     hotelRemoteId = hotelRemoteId,
                     bookingRemoteId = normalized.remoteId,
+                    changeSetJson = changeSet.toJson(),
                     createdAt = normalized.updatedAt
                 )
             )
@@ -502,6 +512,7 @@ class BookingRepository(
         paymentCategory: String = BookingPaymentCategory.AUTO,
         note: String? = null,
         method: String? = null,
+        originalPaymentRemoteId: String? = null,
         paymentMillis: Long = System.currentTimeMillis()
     ): SaveResult {
         if (amount <= 0.0) return SaveResult.Error("Enter a valid amount")
@@ -533,12 +544,29 @@ class BookingRepository(
                     "Accounting integrity error: ${currentSummary.integrityErrors.joinToString()}"
                 )
             }
+            val originalPayment = if (paymentType == BookingPaymentType.REFUND) {
+                val originalId = originalPaymentRemoteId?.takeIf { it.isNotBlank() }
+                    ?: return@withTransaction SaveResult.Error("Select the original payment to refund")
+                existingPayments.firstOrNull {
+                    it.remoteId == originalId &&
+                        it.paymentType in setOf(BookingPaymentType.PAYMENT, BookingPaymentType.ADVANCE)
+                } ?: return@withTransaction SaveResult.Error("Original payment was not found")
+            } else null
+            val alreadyRefunded = originalPayment?.let { original ->
+                existingPayments.filter {
+                    it.paymentType == BookingPaymentType.REFUND &&
+                        it.originalPaymentRemoteId == original.remoteId
+                }.sumOf { it.amount }
+            } ?: 0.0
             val allocationCategory = if (paymentType == BookingPaymentType.PAYMENT || paymentType == BookingPaymentType.ADVANCE) {
                 paymentCategory
             } else {
                 BookingPaymentCategory.STAY
             }
-            val allocation = PaymentAllocationPolicy.allocate(
+            val allocation = if (originalPayment != null) {
+                RefundAllocationPolicy.reverse(originalPayment, amount, alreadyRefunded)
+                    ?: return@withTransaction SaveResult.Error("Refund exceeds the remaining refundable amount")
+            } else PaymentAllocationPolicy.allocate(
                 amount = amount,
                 selectedCategory = allocationCategory,
                 charges = currentSummary.chargeBuckets,
@@ -548,6 +576,7 @@ class BookingRepository(
                 remoteId = "${currentBooking.remoteId}_payment_${UUID.randomUUID()}",
                 hotelRemoteId = hotelRemoteId,
                 bookingRemoteId = currentBooking.remoteId,
+                originalPaymentRemoteId = originalPayment?.remoteId,
                 paymentType = paymentType,
                 paymentCategory = allocation.selectedCategory,
                 amount = amount,
@@ -1385,16 +1414,36 @@ class BookingRepository(
 
     private fun roundMoney(amount: Double): Double = round(amount * 100.0) / 100.0
 
-    fun deleteBooking(booking: BookingEntity) {
+    fun cancelBooking(booking: BookingEntity, reason: String) {
         scope.launch {
-            val deleted = booking.copy(
-                isDeleted = true,
+            val cleanReason = reason.trim()
+            if (cleanReason.isBlank()) return@launch
+            val finalBill = foodBillDao.getFinalBillForBooking(
+                hotelRemoteId = hotelRemoteId,
+                remoteIdPrefix = "${booking.remoteId}_final_bill_"
+            )
+            if (finalBill != null && !finalBill.isDeleted) {
+                logSyncFailure(
+                    "cancelBooking",
+                    IllegalStateException("A billed booking cannot be cancelled; issue corrections/refunds instead.")
+                )
+                return@launch
+            }
+            val cancelled = booking.copy(
+                bookingStatus = BookingStatus.CANCELLED,
+                cancelledAt = System.currentTimeMillis(),
+                cancellationReason = cleanReason,
+                isDeleted = false,
                 updatedAt = System.currentTimeMillis(),
                 syncState = SyncState.PENDING,
                 lastSyncError = null,
                 baseRevision = booking.baseRevision.takeIf { it > 0 } ?: booking.revision
             ).withCalculatedPayment()
-            bookingDao.upsert(deleted)
+            db.withTransaction {
+                bookingDao.upsert(cancelled)
+                val lines = bookingFinancialLineDao.getAllLinesForBooking(hotelRemoteId, booking.remoteId)
+                enqueueBookingOutbox(booking, cancelled, lines)
+            }
             enqueueBackgroundSync()
         }
     }
@@ -1491,7 +1540,6 @@ class BookingRepository(
     }
 
     private suspend fun repairOtaBookingStatuses() {
-        val now = System.currentTimeMillis()
         val repairedBookings = bookingDao.getBookings(hotelRemoteId)
             .filter { booking ->
                 !booking.isDeleted &&
@@ -1499,18 +1547,15 @@ class BookingRepository(
                         booking.paymentStatus != PaymentStatus.FULLY_PAID
             }
             .map { booking ->
-                booking.withCalculatedPayment().copy(
-                    updatedAt = now,
-                    syncState = SyncState.PENDING,
-                    lastSyncError = null,
-                    baseRevision = booking.baseRevision.takeIf { it > 0 } ?: booking.revision
+                DerivedBookingCachePolicy.preserveSyncIdentity(
+                    original = booking,
+                    recalculated = booking.withCalculatedPayment()
                 )
             }
 
         if (repairedBookings.isEmpty()) return
 
         bookingDao.upsertAll(repairedBookings)
-        enqueueBackgroundSync()
     }
     suspend fun retryFailedSync(force: Boolean = false) {
         val now = System.currentTimeMillis()
@@ -1526,34 +1571,32 @@ class BookingRepository(
             bookingSourceDao.getUnsyncedSources(hotelRemoteId).forEach { pushSourceAndMark(it) }
             roomDao.getUnsyncedRooms(hotelRemoteId).forEach { pushRoomAndMark(it) }
             bookingPaymentDao.getUnsyncedPayments(hotelRemoteId).forEach { pushPaymentAndMark(it) }
-            bookingAccountingChargeDao.getUnsyncedCharges(hotelRemoteId).forEach { pushAccountingChargeAndMark(it) }
+            bookingAccountingChargeDao.getUnsyncedCharges(hotelRemoteId).forEach { charge ->
+                val linkedBillId = charge.linkedFinalBillId?.takeIf { it.isNotBlank() }
+                if (linkedBillId != null && foodBillDao.getByRemoteId(linkedBillId) != null) {
+                    return@forEach
+                }
+                pushAccountingChargeAndMark(charge)
+            }
 
-            val initialAggregateOperations = bookingSyncOutboxDao.getPending(hotelRemoteId)
-            val initialAggregateBookingIds = initialAggregateOperations
+            val executableBookingIds = bookingSyncOutboxDao.getPending(hotelRemoteId)
                 .mapTo(mutableSetOf()) { it.bookingRemoteId }
-
             bookingDao.getUnsyncedBookings(hotelRemoteId)
-                .filterNot { it.remoteId in initialAggregateBookingIds }
-                .forEach { booking ->
-                    bookingSyncOutboxDao.upsert(
-                        BookingSyncOutboxEntity(
-                            operationId = UUID.randomUUID().toString(),
-                            hotelRemoteId = hotelRemoteId,
-                            bookingRemoteId = booking.remoteId,
-                            createdAt = booking.updatedAt.takeIf { it > 0 } ?: now
+                .filter { it.syncState == SyncState.PENDING && it.remoteId !in executableBookingIds }
+                .forEach { orphaned ->
+                    bookingDao.upsert(
+                        orphaned.markFailed(
+                            StructuredSyncException(
+                                SyncFailureCode.ORPHANED_BOOKING_INTENT,
+                                "Booking sync intent is missing. Local data was preserved and was not uploaded; review it before retrying."
+                            )
                         )
                     )
                 }
 
             val aggregateOperations = bookingSyncOutboxDao.getPending(hotelRemoteId)
-            val aggregateBookingIds = aggregateOperations
-                .mapTo(mutableSetOf()) { it.bookingRemoteId }
 
-            aggregateOperations.forEach { pushBookingAggregateAndMark(it) }
-
-            bookingFinancialLineDao.getUnsyncedLines(hotelRemoteId)
-                .filterNot { it.bookingRemoteId in aggregateBookingIds }
-                .forEach { pushFinancialLineAndMark(it) }
+            aggregateOperations.forEach { pushBookingChangeSetAndMark(it) }
 
             clearRealtimeSyncErrorIfClean()
         } finally {
@@ -1565,101 +1608,17 @@ class BookingRepository(
         return if (localCount <= 0) null else maxUpdatedAt?.coerceAtLeast(0L)
     }
 
-    private suspend fun backfillLocalPaymentsToCloud() {
-        val prefs = appContext.getSharedPreferences("booking_cloud_sync", Context.MODE_PRIVATE)
-        val key = "payments_backfilled_$hotelRemoteId"
-        if (prefs.getBoolean(key, false)) return
-
-        bookingPaymentDao.getPayments(hotelRemoteId)
-            .filter { it.remoteId.isNotBlank() && it.bookingRemoteId.isNotBlank() }
-            .forEach { pushPaymentAndMark(it) }
-
-        prefs.edit().putBoolean(key, true).apply()
-    }
-
-    private suspend fun repairLegacyBookingLifecycleFieldsOnce() {
-        val prefs = appContext.getSharedPreferences("booking_cloud_sync", Context.MODE_PRIVATE)
-        val key = "booking_lifecycle_fields_repaired_$hotelRemoteId"
-        if (prefs.getBoolean(key, false)) return
-
-        runCatching {
-            pushLocalLifecycleBookingsToCloud()
-            cloudSyncManager.repairLegacyBookingLifecycleFields()
-        }.onSuccess {
-            prefs.edit().putBoolean(key, true).apply()
-        }.onFailure {
-            logSyncFailure("repairLegacyBookingLifecycleFields", it)
-        }
-    }
-
-    private suspend fun pushLocalLifecycleBookingsToCloud() {
-        val now = System.currentTimeMillis()
-
-        bookingDao.getBookings(hotelRemoteId)
-            .filter {
-                !it.isDeleted &&
-                        (it.bookingStatus == BookingStatus.CHECKED_IN ||
-                                it.bookingStatus == BookingStatus.CHECKED_OUT)
-            }
-            .forEach { booking ->
-                bookingSyncOutboxDao.upsert(
-                    BookingSyncOutboxEntity(
-                        operationId = UUID.randomUUID().toString(),
-                        hotelRemoteId = hotelRemoteId,
-                        bookingRemoteId = booking.remoteId,
-                        createdAt = booking.updatedAt.takeIf { it > 0 } ?: now
-                    )
-                )
-            }
-
-        enqueueBackgroundSync()
-    }
-
     private suspend fun seedInitialPaymentIfNeeded(booking: BookingEntity) {
         if (booking.paid <= 0.0) return
         if (bookingPaymentDao.countPaymentsForBooking(hotelRemoteId, booking.remoteId) > 0) return
-        val payment = BookingPaymentEntity(
-                remoteId = "${booking.remoteId}_payment_initial_paid",
-                hotelRemoteId = hotelRemoteId,
-                bookingRemoteId = booking.remoteId,
-                paymentType = BookingPaymentType.ADVANCE,
-                amount = booking.paid,
-                paymentMillis = booking.updatedAt,
-                note = "Initial paid amount",
-                updatedAt = booking.updatedAt,
-                syncState = SyncState.PENDING
-        )
-        bookingPaymentDao.upsert(payment)
-    }
-
-    private suspend fun migrateLegacyAccountingRowsOnce() {
-        val prefs = appContext.getSharedPreferences("booking_accounting_migration", Context.MODE_PRIVATE)
-        val key = "room_lines_and_payments_v1_$hotelRemoteId"
-        if (prefs.getBoolean(key, false)) return
-
-        val bookings = bookingDao.getBookings(hotelRemoteId).filter { !it.isDeleted }
-        var allValid = true
-        bookings.forEach { booking ->
-            val lines = ensureLegacyRoomFinancialLines(booking)
-            if (!RoomNightFinancialIntegrity.validate(booking, lines).isValid) {
-                allValid = false
-            }
-            db.withTransaction { seedInitialPaymentIfNeeded(booking) }
-        }
-        if (allValid) {
-            prefs.edit().putBoolean(key, true).apply()
-            enqueueBackgroundSync()
-        } else {
-            Log.e("BookingRepository", "Legacy accounting migration requires manual review for $hotelRemoteId")
-        }
+        InitialPaymentFactory.create(booking)?.let { bookingPaymentDao.upsert(it) }
     }
 
     private suspend fun recalculateBookingPaymentAggregate(booking: BookingEntity): SaveResult {
         db.withTransaction {
             recalculateBookingPaymentAggregateInTransaction(booking)
         }
-        enqueueBackgroundSync()
-        return SaveResult.Success(syncPending = true)
+        return SaveResult.Success(syncPending = booking.syncState != SyncState.SYNCED)
     }
 
     private suspend fun recalculateBookingPaymentAggregateInTransaction(booking: BookingEntity) {
@@ -1675,13 +1634,12 @@ class BookingRepository(
             accountingCharges = accountingCharges,
             bookingFinancialLines = bookingFinancialLines
         )
-        val updated = booking.copy(
-            paid = summary.stayPaid.coerceAtLeast(0.0),
-            updatedAt = System.currentTimeMillis(),
-            syncState = SyncState.PENDING,
-            lastSyncError = null,
-            baseRevision = booking.baseRevision.takeIf { it > 0 } ?: booking.revision
-        ).withCalculatedPayment()
+        val updated = DerivedBookingCachePolicy.preserveSyncIdentity(
+            original = booking,
+            recalculated = booking.copy(
+                paid = summary.stayPaid.coerceAtLeast(0.0)
+            ).withCalculatedPayment()
+        )
         bookingDao.upsert(updated)
     }
 
@@ -1693,6 +1651,66 @@ class BookingRepository(
                 else -> payment.amount
             }
         }.coerceAtLeast(0.0)
+    }
+
+    private suspend fun applyRoomNightFinancialCache(
+        booking: BookingEntity,
+        financialLines: List<BookingFinancialLineEntity>
+    ): BookingEntity {
+        val activeLines = financialLines
+            .filter { !it.isDeleted && it.bookingRemoteId == booking.remoteId }
+        if (activeLines.isEmpty() || BookingPricingStatus.isPending(booking.pricingStatus)) {
+            return booking.withCalculatedPayment()
+        }
+
+        val grossCharges = roundMoney(activeLines.sumOf { it.grossAmount.coerceAtLeast(0.0) })
+        val roomRevenue = roundMoney(activeLines.sumOf { it.taxableAmount.coerceAtLeast(0.0) })
+        val propertyTax = roundMoney(activeLines.sumOf { it.gstAmount.coerceAtLeast(0.0) })
+        val source = booking.sourceRemoteId
+            ?.takeIf { it.isNotBlank() }
+            ?.let { bookingSourceDao.getByRemoteId(it) }
+            ?: booking.sourceName
+                ?.takeIf { it.isNotBlank() }
+                ?.let { bookingSourceDao.getByName(hotelRemoteId, it, booking.propertyRemoteId) }
+
+        val settlement = sourceSettlementCalculator.calculate(
+            source = source,
+            roomCharges = roomRevenue,
+            propertyTax = propertyTax,
+            hotelHasGst = propertyTax > 0.0
+        )
+        val sourceHasDeductions = source?.hasDeductions() == true
+        val receivable = if (booking.sourceType == BookingSourceType.OTA || sourceHasDeductions) {
+            settlement.expectedPayout
+        } else {
+            grossCharges
+        }
+
+        return booking.copy(
+            rate = receivable,
+            receivable = receivable,
+            grossCharges = grossCharges,
+            roomRevenue = roomRevenue,
+            propertyTax = propertyTax,
+            commissionAmount = settlement.commission,
+            commissionTax = settlement.commissionTax,
+            sourceFee = settlement.fixedFee,
+            tdsAmount = settlement.tds,
+            tcsAmount = settlement.tcs,
+            expectedPayout = if (booking.sourceType == BookingSourceType.OTA) {
+                settlement.expectedPayout
+            } else {
+                booking.expectedPayout
+            }
+        ).withCalculatedPayment()
+    }
+
+    private fun BookingSourceEntity.hasDeductions(): Boolean {
+        return commissionPercent > 0.0 ||
+                commissionGstPercent > 0.0 ||
+                tcsPercent > 0.0 ||
+                tdsPercent > 0.0 ||
+                fixedFee > 0.0
     }
 
     private suspend fun foodItemsForOrders(orders: List<com.example.bookingregister.data.entities.FoodOrderEntity>) =
@@ -1745,7 +1763,24 @@ class BookingRepository(
     private suspend fun pushPaymentAndMark(payment: BookingPaymentEntity) {
         runCatching { cloudSyncManager.pushPayment(payment) }
             .onSuccess { result ->
-                bookingPaymentDao.upsert(payment.markSynced(result))
+                bookingPaymentDao.getByRemoteId(payment.remoteId)?.let { current ->
+                    val unchanged = SyncAcknowledgementPolicy.isSameVersion(
+                        payment.updatedAt, payment.revision, payment.baseRevision,
+                        current.updatedAt, current.revision, current.baseRevision
+                    )
+                    bookingPaymentDao.upsert(
+                        if (unchanged) {
+                            current.markSynced(result)
+                        } else {
+                            current.copy(
+                                revision = result.revision,
+                                baseRevision = result.revision,
+                                syncState = SyncState.PENDING,
+                                lastSyncError = null
+                            )
+                        }
+                    )
+                }
             }
             .onFailure {
                 bookingPaymentDao.upsert(payment.markFailed(it))
@@ -1753,38 +1788,34 @@ class BookingRepository(
             }
     }
 
-    private suspend fun pushFinancialLineAndMark(line: BookingFinancialLineEntity) {
-        runCatching { cloudSyncManager.pushFinancialLine(line) }
-            .onSuccess { result ->
-                bookingFinancialLineDao.upsert(line.markSynced(result))
-            }
-            .onFailure {
-                bookingFinancialLineDao.upsert(line.markFailed(it))
-                logSyncFailure("pushFinancialLine", it)
-            }
-    }
-
-    private suspend fun pushBookingAggregateAndMark(operation: BookingSyncOutboxEntity) {
+    private suspend fun pushBookingChangeSetAndMark(operation: BookingSyncOutboxEntity) {
         val booking = bookingDao.getByRemoteId(operation.bookingRemoteId) ?: run {
             bookingSyncOutboxDao.delete(operation.operationId)
             return
         }
 
-        val sentBooking = booking.withCalculatedPayment()
-        val lines = bookingFinancialLineDao.getAllLinesForBooking(hotelRemoteId, sentBooking.remoteId)
+        if (operation.changeSetJson.isBlank()) {
+            bookingSyncOutboxDao.delete(operation.operationId)
+            return
+        }
+        val lines = bookingFinancialLineDao.getAllLinesForBooking(hotelRemoteId, booking.remoteId)
+        val sentBooking = booking
+        val changeSet = BookingChangeSet.fromJson(operation.changeSetJson)
+        val deviceId = Settings.Secure.getString(appContext.contentResolver, Settings.Secure.ANDROID_ID)
+            ?.takeIf { it.isNotBlank() } ?: "unknown-android-device"
 
         runCatching {
-            cloudSyncManager.pushBookingAggregate(
+            cloudSyncManager.pushBookingChangeSet(
                 operationId = operation.operationId,
-                booking = sentBooking,
-                financialLines = lines
+                deviceId = deviceId,
+                changeSet = changeSet
             )
         }
             .onSuccess { result ->
                 acknowledgeBookingAggregate(operation, sentBooking, lines, result)
             }
             .onFailure { error ->
-                val message = error.message ?: error.javaClass.simpleName
+                val message = syncFailureText(error)
 
                 bookingSyncOutboxDao.markFailed(
                     operation.operationId,
@@ -1795,7 +1826,7 @@ class BookingRepository(
                     bookingDao.upsert(currentBooking.markFailed(error))
                 }
 
-                logSyncFailure("pushBookingAggregate", error)
+                logSyncFailure("pushBookingChangeSet", error)
             }
     }
 
@@ -1808,21 +1839,13 @@ class BookingRepository(
         db.withTransaction {
             val currentBooking = bookingDao.getByRemoteId(sentBooking.remoteId)
             if (currentBooking != null) {
-                val unchanged = SyncAcknowledgementPolicy.isSameVersion(
-                    sentBooking.updatedAt, sentBooking.revision, sentBooking.baseRevision,
-                    currentBooking.updatedAt, currentBooking.revision, currentBooking.baseRevision
-                )
                 bookingDao.upsert(
-                    if (unchanged) {
-                        currentBooking.markSynced(CloudWriteResult(result.bookingRevision, result.updatedByUid))
-                    } else {
-                        currentBooking.copy(
-                            revision = result.bookingRevision,
-                            baseRevision = result.bookingRevision,
-                            syncState = SyncState.PENDING,
-                            lastSyncError = null
+                    currentBooking.markSynced(
+                        CloudWriteResult(
+                            revision = maxOf(currentBooking.revision, result.bookingRevision),
+                            updatedByUid = result.updatedByUid
                         )
-                    }
+                    )
                 )
             }
             sentLines.forEach { sentLine ->
@@ -1852,7 +1875,24 @@ class BookingRepository(
     private suspend fun pushAccountingChargeAndMark(charge: BookingAccountingChargeEntity) {
         runCatching { cloudSyncManager.pushAccountingCharge(charge) }
             .onSuccess { result ->
-                bookingAccountingChargeDao.upsert(charge.markSynced(result))
+                bookingAccountingChargeDao.getByRemoteId(charge.remoteId)?.let { current ->
+                    val unchanged = SyncAcknowledgementPolicy.isSameVersion(
+                        charge.updatedAt, charge.revision, charge.baseRevision,
+                        current.updatedAt, current.revision, current.baseRevision
+                    )
+                    bookingAccountingChargeDao.upsert(
+                        if (unchanged) {
+                            current.markSynced(result)
+                        } else {
+                            current.copy(
+                                revision = result.revision,
+                                baseRevision = result.revision,
+                                syncState = SyncState.PENDING,
+                                lastSyncError = null
+                            )
+                        }
+                    )
+                }
             }
             .onFailure {
                 bookingAccountingChargeDao.upsert(charge.markFailed(it))
@@ -1862,54 +1902,6 @@ class BookingRepository(
 
 
 
-    private suspend fun pushBookingAndMark(booking: BookingEntity): SaveResult {
-        val normalized = booking.withCalculatedPayment()
-        return runCatching { cloudSyncManager.pushBooking(normalized) }
-            .fold(
-                onSuccess = { result ->
-                    bookingDao.upsert(normalized.markSynced(result))
-                    SaveResult.Success(syncPending = false)
-                },
-                onFailure = {
-                    logSyncFailure("pushBooking", it)
-
-                    if (it is BookingConflictException) {
-                        resolveRemoteBookingConflict(normalized)
-                        SaveResult.Conflict("Local booking was preserved. Resolve the sync conflict before retrying.")
-                    } else {
-                        bookingDao.upsert(normalized.markFailed(it))
-                        SaveResult.Error("Saved locally. Syncing in background.")
-                    }
-                }
-            )
-    }
-
-    private suspend fun deleteBookingAndMark(booking: BookingEntity) {
-        val normalized = booking.withCalculatedPayment()
-        runCatching { cloudSyncManager.deleteBooking(normalized) }
-            .onSuccess { result ->
-                bookingDao.upsert(normalized.markSynced(result))
-            }
-            .onFailure {
-                logSyncFailure("deleteBooking", it)
-                if (it is BookingConflictException) {
-                    resolveRemoteBookingConflict(normalized)
-                } else {
-                    bookingDao.upsert(normalized.markFailed(it))
-                }
-            }
-    }
-
-    private suspend fun resolveRemoteBookingConflict(localBooking: BookingEntity) {
-        bookingDao.upsert(
-            localBooking.markFailed(
-                BookingConflictException(
-                    "Cloud has another revision. The local booking was preserved for explicit conflict resolution."
-                )
-            )
-        )
-    }
-    
     private suspend fun upsertRemoteHotelIfNewer(remote: HotelEntity) {
         val local = hotelDao.getByRemoteId(remote.remoteId)
         if (local == null || shouldAcceptRemote(local, remote.revision, remote.updatedAt)) {
@@ -1950,8 +1942,12 @@ class BookingRepository(
 
     private suspend fun upsertRemoteFinancialLineIfNewer(remote: BookingFinancialLineEntity) {
         val local = bookingFinancialLineDao.getByRemoteId(remote.remoteId)
-        if (local == null || shouldAcceptRemote(local, remote.revision, remote.updatedAt)) {
+        if (local == null || remote.revision >= local.revision) {
             bookingFinancialLineDao.upsert(remote.copy(localId = local?.localId ?: 0).markSynced())
+            repairBookingCacheFromFinancialLines(remote.bookingRemoteId)
+            bookingDao.getByRemoteId(remote.bookingRemoteId)?.let { booking ->
+                recalculateBookingPaymentAggregate(booking)
+            }
         }
     }
 
@@ -1965,13 +1961,54 @@ class BookingRepository(
     private suspend fun upsertRemoteBookingIfNewer(remote: BookingEntity) {
         val local = bookingDao.getByRemoteId(remote.remoteId)
 
-        if (local == null || shouldAcceptRemote(local, remote.revision, remote.updatedAt)) {
+        if (local == null || remote.revision >= local.revision) {
             bookingDao.upsert(
                 remote.copy(localId = local?.localId ?: 0)
                     .withCalculatedPayment()
                     .markSynced()
             )
+            repairBookingCacheFromFinancialLines(remote.remoteId)
+            bookingDao.getByRemoteId(remote.remoteId)?.let { booking ->
+                recalculateBookingPaymentAggregate(booking)
+            }
         }
+    }
+
+    private suspend fun repairBookingCacheFromFinancialLines(bookingRemoteId: String) {
+        val booking = bookingDao.getByRemoteId(bookingRemoteId) ?: return
+        if (booking.syncState == SyncState.PENDING || booking.syncState == SyncState.FAILED) return
+
+        val lines = bookingFinancialLineDao.getAllLinesForBooking(hotelRemoteId, bookingRemoteId)
+        if (lines.none { !it.isDeleted && it.bookingRemoteId == bookingRemoteId }) return
+        val repaired = applyRoomNightFinancialCache(booking, lines)
+
+        if (!bookingFinancialCacheChanged(booking, repaired)) return
+
+        bookingDao.upsert(
+            DerivedBookingCachePolicy.preserveSyncIdentity(
+                original = booking,
+                recalculated = repaired
+            )
+        )
+    }
+
+    private fun bookingFinancialCacheChanged(
+        old: BookingEntity,
+        new: BookingEntity
+    ): Boolean {
+        fun changed(a: Double, b: Double): Boolean = kotlin.math.abs(a - b) > 0.01
+        return changed(old.rate, new.rate) ||
+                changed(old.receivable, new.receivable) ||
+                changed(old.balance, new.balance) ||
+                changed(old.grossCharges, new.grossCharges) ||
+                changed(old.roomRevenue, new.roomRevenue) ||
+                changed(old.propertyTax, new.propertyTax) ||
+                changed(old.commissionAmount, new.commissionAmount) ||
+                changed(old.commissionTax, new.commissionTax) ||
+                changed(old.sourceFee, new.sourceFee) ||
+                changed(old.tdsAmount, new.tdsAmount) ||
+                changed(old.tcsAmount, new.tcsAmount) ||
+                changed(old.expectedPayout, new.expectedPayout)
     }
 
     private fun shouldAcceptRemote(
@@ -2329,6 +2366,16 @@ class BookingRepository(
             return SaveResult.Error("Selected room is invalid. Please choose an active room again.")
         }
 
+        val requestedRooms = requestedRoomIds.map { roomRemoteId ->
+            roomDao.getByRemoteId(roomRemoteId)
+                ?: return SaveResult.Error("Selected room is no longer available. Please refresh rooms and choose an active room.")
+        }
+        if (!BookingPropertyPolicy.belongsToSingleProperty(requestedRooms.map { it.propertyRemoteId })) {
+            return SaveResult.Error(
+                "All rooms in one booking must belong to the same property. Create a separate booking for another property."
+            )
+        }
+
         val existingRoomIds = existingBooking
             ?.roomRemoteIds
             .orEmpty()
@@ -2377,6 +2424,7 @@ class BookingRepository(
     }
 
     private suspend fun updateBookingLifecycle(booking: BookingEntity): SaveResult {
+        val previous = bookingDao.getByRemoteId(booking.remoteId) ?: booking
         val updated = booking.copy(
             updatedAt = System.currentTimeMillis(),
             isDeleted = false,
@@ -2384,9 +2432,30 @@ class BookingRepository(
             lastSyncError = null,
             baseRevision = booking.baseRevision.takeIf { it > 0 } ?: booking.revision
         )
-        bookingDao.upsert(updated)
+        db.withTransaction {
+            bookingDao.upsert(updated)
+            val lines = bookingFinancialLineDao.getAllLinesForBooking(hotelRemoteId, booking.remoteId)
+            enqueueBookingOutbox(previous, updated, lines)
+        }
         enqueueBackgroundSync()
         return SaveResult.Success(syncPending = true)
+    }
+
+    private suspend fun enqueueBookingOutbox(
+        previous: BookingEntity?,
+        booking: BookingEntity,
+        lines: List<BookingFinancialLineEntity>
+    ) {
+        val changeSet = BookingChangeSet.create(previous, booking, lines, lines)
+        bookingSyncOutboxDao.upsert(
+            BookingSyncOutboxEntity(
+                operationId = UUID.randomUUID().toString(),
+                hotelRemoteId = hotelRemoteId,
+                bookingRemoteId = booking.remoteId,
+                changeSetJson = changeSet.toJson(),
+                createdAt = booking.updatedAt.takeIf { it > 0 } ?: System.currentTimeMillis()
+            )
+        )
     }
 
     private suspend fun bookingPropertyForRooms(roomRemoteIds: List<String>): String? {
@@ -2410,7 +2479,6 @@ private fun appendLifecycleNote(existingNotes: String?, label: String, note: Str
 
 private fun formatAmount(amount: Double): String =
     String.format(Locale.getDefault(), "%.0f", amount)
-
 
 sealed class SaveResult {
     data class Success(val syncPending: Boolean = false) : SaveResult()
@@ -2536,7 +2604,7 @@ private fun BookingEntity.markSynced(result: CloudWriteResult? = null): BookingE
 
 private fun BookingEntity.markFailed(throwable: Throwable): BookingEntity = copy(
     syncState = SyncState.FAILED,
-    lastSyncError = throwable.message ?: throwable::class.java.simpleName
+    lastSyncError = syncFailureText(throwable)
 )
 
 private fun BookingEntity.markConflict(message: String): BookingEntity = copy(

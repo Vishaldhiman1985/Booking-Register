@@ -4,6 +4,7 @@ import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.BookingPaymentEntity
 import com.example.bookingregister.data.entities.BookingPaymentType
 import com.example.bookingregister.data.entities.RoomEntity
+import com.example.bookingregister.booking.domain.BookingStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -65,6 +66,22 @@ class MiniFolioBuilderTest {
         val paymentLine = requireNotNull(folio).lines.single { it.kind == MiniFolioLineKind.PAYMENT }
         assertEquals(1_000.0, paymentLine.amount, 0.01)
         assertEquals("Payment received", paymentLine.description)
+    }
+
+    @Test
+    fun cancelledBookingRemainsARecordButIsExcludedFromRevenueFolios() {
+        val cancelled = booking().copy(
+            bookingStatus = BookingStatus.CANCELLED,
+            cancellationReason = "Guest cancelled"
+        )
+        val room = RoomEntity(
+            remoteId = "room_1",
+            hotelRemoteId = "hotel_1",
+            roomName = "101"
+        )
+
+        assertTrue(builder.build(listOf(room), listOf(cancelled)).isEmpty())
+        assertEquals("Guest cancelled", cancelled.cancellationReason)
     }
 
     private fun booking(): BookingEntity = BookingEntity(

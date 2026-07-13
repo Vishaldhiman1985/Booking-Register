@@ -43,6 +43,20 @@ interface FoodOrderDao {
     @Query("SELECT * FROM food_orders WHERE remoteId IN (:remoteIds)")
     suspend fun getByRemoteIds(remoteIds: List<String>): List<FoodOrderEntity>
 
+    @Query("""
+        SELECT * FROM food_orders
+        WHERE hotelRemoteId = :hotelRemoteId
+        AND (
+            billRemoteId = :billRemoteId
+            OR linkedFinalBillId = :billRemoteId
+        )
+        ORDER BY orderMillis ASC
+    """)
+    suspend fun getOrdersForBillAggregate(
+        hotelRemoteId: String,
+        billRemoteId: String
+    ): List<FoodOrderEntity>
+
     @Query("SELECT COUNT(*) FROM food_orders WHERE hotelRemoteId = :hotelRemoteId")
     suspend fun countAllOrders(hotelRemoteId: String): Int
 

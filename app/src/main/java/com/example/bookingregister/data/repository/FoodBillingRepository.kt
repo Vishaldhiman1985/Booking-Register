@@ -170,9 +170,7 @@ class FoodBillingRepository(
                     throwable
                 )
             },
-            onAfterRemoteChanges = {
-                foodBillingSyncService.retryFailedFoodSync()
-            }
+            onAfterRemoteChanges = { }
         )
         scope.launch {
             foodBillingSyncService.retryFailedFoodSync()

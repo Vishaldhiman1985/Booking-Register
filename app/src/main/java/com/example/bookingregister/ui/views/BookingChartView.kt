@@ -766,7 +766,12 @@ class BookingChartView @JvmOverloads constructor(
 
         val knownRoomIds = rooms.mapTo(mutableSetOf()) { it.remoteId }
         bookings.asSequence()
-            .filter { !it.isDeleted && it.checkInMillis < windowEnd && it.checkOutMillis > windowStart }
+            .filter {
+                !it.isDeleted &&
+                    it.bookingStatus != com.example.bookingregister.booking.domain.BookingStatus.CANCELLED &&
+                    it.checkInMillis < windowEnd &&
+                    it.checkOutMillis > windowStart
+            }
             .flatMap { booking ->
                 booking.roomRemoteIds.asSequence()
                     .filterNot { it in knownRoomIds }

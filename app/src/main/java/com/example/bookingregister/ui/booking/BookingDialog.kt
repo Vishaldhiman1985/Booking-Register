@@ -54,6 +54,7 @@ import com.example.bookingregister.finalbill.domain.FinalBillTextFormatter
 import com.example.bookingregister.folio.domain.FolioSummaryBuilder
 import com.example.bookingregister.booking.domain.BookingStatus
 import com.example.bookingregister.booking.domain.BookingPricingStatus
+import com.example.bookingregister.booking.domain.BookingPropertyPolicy
 import com.example.bookingregister.booking.domain.BookingSavePreparation
 import com.example.bookingregister.booking.domain.BookingPaymentSourcePolicy
 import com.example.bookingregister.source.domain.SourceSettlementCalculator
@@ -87,7 +88,7 @@ class BookingDialog(
     private val canEditBooking: Boolean = true,
     private val roomRateLocked: Boolean = false,
     private val onBookingSaved: (BookingEntity, List<BookingFinancialLineEntity>, (SaveResult) -> Unit) -> Unit,
-    private val onBookingDeleted: (BookingEntity) -> Unit,
+    private val onBookingDeleted: (BookingEntity, String) -> Unit,
     private val onPaymentSaved: (BookingEntity, Double, String, String, String?, (SaveResult) -> Unit) -> Unit,
     private val onAccountingChargeSaved: (BookingEntity, String, Double, String, String?, String?, (SaveResult) -> Unit) -> Unit,
     private val onFinalBillGenerated: (BookingEntity, (SaveResult) -> Unit) -> Unit
@@ -288,6 +289,11 @@ class BookingDialog(
         existingFinancialLines = refreshedFinancialLines
         if (!bookingEditMode) {
             draftFinancialLines = refreshedFinancialLines
+            val summary = currentFinancialSummary()
+            if (summary.usesDetailedLines) {
+                bookingTotal.setTextIfChanged(amountText(summary.grossCharges))
+                propertyTax.setTextIfChanged(amountText(summary.propertyTax))
+            }
         }
         existingAccountingCharges = updatedAccountingCharges.filter { !it.isDeleted && it.bookingRemoteId == booking.remoteId }
         foodOrders = updatedFoodOrders
@@ -349,15 +355,17 @@ class BookingDialog(
         val defaultCheckout = existingBooking?.checkOutMillis ?: selectedCheckInMillis + DAY_MILLIS
         checkOut.setText(dateFormat.format(Date(defaultCheckout)))
         updateDateRangeText()
+        val initialFinancialSummary = currentFinancialSummary()
         bookingTotal.setText(
             if (existingBooking == null || BookingPricingStatus.isPending(existingBooking.pricingStatus)) ""
             else amountText(
-                existingBooking.grossCharges.takeIf { it > 0.0 }
+                initialFinancialSummary.grossCharges.takeIf { initialFinancialSummary.usesDetailedLines && it > 0.0 }
+                    ?: existingBooking.grossCharges.takeIf { it > 0.0 }
                     ?: existingBooking.receivable.takeIf { it > 0.0 }
                     ?: existingBooking.rate
             )
         )
-        propertyTax.setText(amountText(existingBooking?.propertyTax ?: currentFinancialSummary().propertyTax))
+        propertyTax.setText(amountText(initialFinancialSummary.propertyTax.takeIf { initialFinancialSummary.usesDetailedLines } ?: existingBooking?.propertyTax))
         advancePaid.setText(amountText(existingPaymentEntries.takeIf { it.isNotEmpty() }?.let { stayPaymentTotal(it) } ?: existingBooking?.paid))
         balance.setText(amountText(existingBooking?.copy(paid = existingPaymentEntries.takeIf { it.isNotEmpty() }?.let { stayPaymentTotal(it) } ?: existingBooking.paid)?.withCalculatedPayment()?.balance))
         balance.isEnabled = false
@@ -387,10 +395,23 @@ class BookingDialog(
             val checkedItems = BooleanArray(availableRooms.size) { index -> selectedRoomIds.contains(availableRooms[index].remoteId) }
             AlertDialog.Builder(context)
                 .setTitle("Select Available Rooms")
-                .setMultiChoiceItems(roomNames, checkedItems) { _, which, isChecked ->
-                    val selectedId = availableRooms[which].remoteId
+                .setMultiChoiceItems(roomNames, checkedItems) { dialog, which, isChecked ->
+                    val selectedRoom = availableRooms[which]
+                    val selectedId = selectedRoom.remoteId
                     if (isChecked) {
-                        if (!selectedRoomIds.contains(selectedId)) selectedRoomIds.add(selectedId)
+                        val selectedProperties = rooms
+                            .filter { selectedRoomIds.contains(it.remoteId) }
+                            .map { it.propertyRemoteId } + selectedRoom.propertyRemoteId
+                        if (!BookingPropertyPolicy.belongsToSingleProperty(selectedProperties)) {
+                            (dialog as? AlertDialog)?.listView?.setItemChecked(which, false)
+                            Toast.makeText(
+                                context,
+                                "Rooms from different properties require separate bookings.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        } else if (!selectedRoomIds.contains(selectedId)) {
+                            selectedRoomIds.add(selectedId)
+                        }
                     } else {
                         selectedRoomIds.remove(selectedId)
                     }
@@ -1033,7 +1054,9 @@ class BookingDialog(
             menu.add("Pricing Summary").isEnabled = canUseBookingActions
             menu.add("Payment History").isEnabled = canUseBookingActions
             menu.add("Ledger Entries").isEnabled = canUseBookingActions
-            menu.add("Cancel Booking").isEnabled = canUseBookingActions
+            menu.add("Cancel Booking").isEnabled = canUseBookingActions &&
+                !roomRateLocked &&
+                booking?.bookingStatus != BookingStatus.CANCELLED
             menu.add("Share")
             setOnMenuItemClickListener { item ->
                 when (item.title.toString()) {
@@ -1154,16 +1177,33 @@ class BookingDialog(
 
     private fun confirmCancelBooking() {
         val booking = existingBooking ?: return
+        val reasonInput = EditText(context).apply {
+            hint = "Cancellation reason (required)"
+            minLines = 2
+        }
         AlertDialog.Builder(context)
             .setTitle("Cancel Booking")
             .setMessage("Cancel this booking and release these rooms on all devices?")
-            .setPositiveButton("Cancel Booking") { _, _ ->
-                onBookingDeleted(booking)
-                Toast.makeText(context, "Booking cancelled", Toast.LENGTH_SHORT).show()
-                dialog.dismiss()
+            .setView(reasonInput)
+            .setPositiveButton("Cancel Booking", null)
+            .setNegativeButton("Keep Booking", null)
+            .create()
+            .also { confirmation ->
+                confirmation.setOnShowListener {
+                    confirmation.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                        val reason = reasonInput.text.toString().trim()
+                        if (reason.isBlank()) {
+                            reasonInput.error = "Cancellation reason is required"
+                            return@setOnClickListener
+                        }
+                        onBookingDeleted(booking, reason)
+                        Toast.makeText(context, "Booking cancelled", Toast.LENGTH_SHORT).show()
+                        confirmation.dismiss()
+                        dialog.dismiss()
+                    }
+                }
+                confirmation.show()
             }
-            .setNegativeButton("Cancel", null)
-            .show()
     }
 
     private fun showDetailedOtaRatesDialog() {
@@ -1321,6 +1361,17 @@ class BookingDialog(
         val parsedCheckOut = parseDate(checkOut.text.toString().trim()) ?: return null
         if (parsedCheckOut <= parsedCheckIn) return null
         if (selectedRoomIds.isEmpty()) return null
+        val selectedRooms = rooms.filter { selectedRoomIds.contains(it.remoteId) }
+        if (selectedRooms.size != selectedRoomIds.size ||
+            !BookingPropertyPolicy.belongsToSingleProperty(selectedRooms.map { it.propertyRemoteId })
+        ) {
+            Toast.makeText(
+                context,
+                "All rooms in one booking must belong to the same property. Create a separate booking for another property.",
+                Toast.LENGTH_LONG
+            ).show()
+            return null
+        }
 
         val isOta = source.sourceType == BookingSourceType.OTA
         val amountWasEntered = bookingTotal.text.toString().trim().isNotEmpty()

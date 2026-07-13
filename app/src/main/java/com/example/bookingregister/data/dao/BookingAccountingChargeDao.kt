@@ -59,4 +59,15 @@ interface BookingAccountingChargeDao {
 
     @Query("SELECT * FROM booking_accounting_charges WHERE remoteId = :remoteId LIMIT 1")
     suspend fun getByRemoteId(remoteId: String): BookingAccountingChargeEntity?
+
+    @Query("""
+        SELECT * FROM booking_accounting_charges
+        WHERE hotelRemoteId = :hotelRemoteId
+        AND linkedFinalBillId = :billRemoteId
+        ORDER BY chargeMillis ASC, updatedAt ASC
+    """)
+    suspend fun getChargesLinkedToFinalBill(
+        hotelRemoteId: String,
+        billRemoteId: String
+    ): List<BookingAccountingChargeEntity>
 }

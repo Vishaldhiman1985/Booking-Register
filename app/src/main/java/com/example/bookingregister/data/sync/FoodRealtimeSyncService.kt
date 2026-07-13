@@ -73,7 +73,6 @@ class FoodRealtimeSyncService(
                 scope.launch {
                     db.withTransaction {
                         items.forEach { upsertRemoteFoodMenuItemIfNewer(it) }
-                        tombstoneDuplicateFoodMenuItems()
                     }
                     onAfterRemoteChanges()
                 }
@@ -277,18 +276,32 @@ class FoodRealtimeSyncService(
         val dao = db.foodBillDao()
         val local = dao.getByRemoteId(remote.remoteId)
 
-        dao.upsert(
-            remote.copy(localId = local?.localId ?: 0).markFoodSynced()
-        )
+        if (local == null || shouldAcceptRemoteFoodEntity(
+                localSyncState = local.syncState,
+                localRevision = local.revision,
+                localUpdatedAt = local.updatedAt,
+                remoteRevision = remote.revision,
+                remoteUpdatedAt = remote.updatedAt
+            )
+        ) {
+            dao.upsert(remote.copy(localId = local?.localId ?: 0).markFoodSynced())
+        }
     }
 
     private suspend fun upsertRemoteFoodBillItemIfNewer(remote: FoodBillItemEntity) {
         val dao = db.foodBillItemDao()
         val local = dao.getByRemoteId(remote.remoteId)
 
-        dao.upsert(
-            remote.copy(localId = local?.localId ?: 0).markFoodSynced()
-        )
+        if (local == null || shouldAcceptRemoteFoodEntity(
+                localSyncState = local.syncState,
+                localRevision = local.revision,
+                localUpdatedAt = local.updatedAt,
+                remoteRevision = remote.revision,
+                remoteUpdatedAt = remote.updatedAt
+            )
+        ) {
+            dao.upsert(remote.copy(localId = local?.localId ?: 0).markFoodSynced())
+        }
     }
 
     private suspend fun tombstoneDuplicateFoodMenuItems() {

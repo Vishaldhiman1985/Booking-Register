@@ -60,6 +60,9 @@ data class BookingEntity(
     val checkoutNote: String? = null,
     val reopenNote: String? = null,
     val reopenedAt: Long? = null,
+    val cancelledAt: Long? = null,
+    val cancelledByUid: String? = null,
+    val cancellationReason: String? = null,
     val notes: String? = null,
 
     val updatedAt: Long = System.currentTimeMillis(),

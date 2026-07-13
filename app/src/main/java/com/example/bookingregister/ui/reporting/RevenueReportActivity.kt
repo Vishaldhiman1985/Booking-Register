@@ -24,6 +24,7 @@ import com.example.bookingregister.room.domain.RoomLifecyclePolicy
 import com.example.bookingregister.reporting.domain.OccupancyCalculator
 import com.example.bookingregister.revenue.domain.RevenueCalculator
 import com.example.bookingregister.revenue.domain.RevenueLedgerBuilder
+import com.example.bookingregister.booking.domain.BookingStatus
 import com.example.bookingregister.revenue.domain.RevenueLedgerEntry
 import com.example.bookingregister.revenue.domain.RevenueLedgerEntryType
 import com.example.bookingregister.revenue.domain.RevenuePeriod
@@ -540,7 +541,7 @@ class RevenueReportActivity : AppCompatActivity() {
         if (activeRoomIds.isEmpty()) return SettlementBreakdown()
 
         return bookings
-            .filter { !it.isDeleted }
+            .filter { !it.isDeleted && it.bookingStatus != BookingStatus.CANCELLED }
             .fold(SettlementBreakdown()) { total, booking ->
                 val allocation = booking.periodAllocation(range, activeRoomIds)
                 if (allocation <= 0.0) {
@@ -627,7 +628,7 @@ class RevenueReportActivity : AppCompatActivity() {
             .map { it.remoteId }
             .toSet()
         if (activeRoomIds.isEmpty()) return 0
-        return bookings.filter { !it.isDeleted }.sumOf { booking ->
+        return bookings.filter { !it.isDeleted && it.bookingStatus != BookingStatus.CANCELLED }.sumOf { booking ->
             BusinessDates.overlapNights(booking.checkInMillis, booking.checkOutMillis, range) *
                 booking.roomRemoteIds.count { it in activeRoomIds }
         }
@@ -1014,7 +1015,6 @@ private fun compactDecimal(value: Double, suffix: String): String {
     val rounded = (value * 10).roundToInt() / 10.0
     return if (rounded % 1.0 == 0.0) "${rounded.toInt()}$suffix" else String.format(Locale.getDefault(), "%.1f%s", rounded, suffix)
 }
-
 
 
 

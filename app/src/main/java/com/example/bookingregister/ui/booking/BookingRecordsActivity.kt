@@ -261,6 +261,7 @@ class BookingRecordsActivity : AppCompatActivity() {
             booking.bookingStatus,
             booking.paymentStatus,
             booking.pricingStatus,
+            booking.cancellationReason,
             booking.syncState,
             roomText,
             booking.roomRemoteIds.joinToString(" ")
@@ -293,6 +294,10 @@ class BookingRecordsActivity : AppCompatActivity() {
             addView(infoLine("Rooms", roomDisplay(booking)))
             addView(infoLine("Stay", "${formatDate(booking.checkInMillis)} → ${formatDate(booking.checkOutMillis)}"))
             addView(infoLine("Status", booking.bookingStatus))
+            if (booking.bookingStatus == BookingStatus.CANCELLED) {
+                addView(infoLine("Cancellation reason", booking.cancellationReason ?: "-"))
+                booking.cancelledAt?.let { addView(infoLine("Cancelled at", formatDate(it))) }
+            }
             addView(infoLine("Source", booking.sourceName?.takeIf { it.isNotBlank() } ?: booking.sourceType))
             addView(infoLine("Pricing", booking.pricingStatus))
             addView(infoLine("Payment", booking.paymentStatus))

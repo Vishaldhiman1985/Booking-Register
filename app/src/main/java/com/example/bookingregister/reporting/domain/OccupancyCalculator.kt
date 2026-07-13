@@ -4,6 +4,7 @@ import com.example.bookingregister.common.domain.BusinessDates
 import com.example.bookingregister.common.domain.DateRange
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.RoomEntity
+import com.example.bookingregister.booking.domain.BookingStatus
 import com.example.bookingregister.room.domain.RoomLifecyclePolicy
 
 class OccupancyCalculator {
@@ -23,7 +24,7 @@ class OccupancyCalculator {
         if (availableRoomNights <= 0) return 0
 
         val occupiedRoomNights = bookings
-            .filter { !it.isDeleted }
+            .filter { !it.isDeleted && it.bookingStatus != BookingStatus.CANCELLED }
             .sumOf { booking ->
                 val overlapNights = BusinessDates.overlapNights(
                     booking.checkInMillis,

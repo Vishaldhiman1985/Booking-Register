@@ -16,6 +16,7 @@ import com.example.bookingregister.data.entities.BookingFinancialLineEntity
 import com.example.bookingregister.accounting.domain.RoomNightFinancialIntegrity
 import com.example.bookingregister.accounting.domain.FoodOrderIntegrity
 import com.example.bookingregister.booking.domain.BookingPricingStatus
+import com.example.bookingregister.booking.domain.BookingStatus
 
 class MiniFolioBuilder {
     fun build(
@@ -35,7 +36,7 @@ class MiniFolioBuilder {
             .groupBy { it.bookingRemoteId }
 
         return bookings
-            .filter { !it.isDeleted }
+            .filter { !it.isDeleted && it.bookingStatus != BookingStatus.CANCELLED }
             .mapNotNull { booking ->
                 buildForBooking(
                     booking = booking,

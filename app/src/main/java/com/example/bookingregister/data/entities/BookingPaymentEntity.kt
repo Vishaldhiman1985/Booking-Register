@@ -20,6 +20,7 @@ data class BookingPaymentEntity(
     val remoteId: String,
     val hotelRemoteId: String,
     val bookingRemoteId: String,
+    val originalPaymentRemoteId: String? = null,
     val paymentType: String = BookingPaymentType.PAYMENT,
     val paymentCategory: String = BookingPaymentCategory.AUTO,
     val amount: Double = 0.0,

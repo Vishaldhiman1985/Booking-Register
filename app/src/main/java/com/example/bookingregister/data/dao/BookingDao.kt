@@ -88,6 +88,7 @@ interface BookingDao {
         SELECT * FROM bookings
         WHERE hotelRemoteId = :hotelRemoteId
         AND isDeleted = 0
+        AND bookingStatus != 'CANCELLED'
         AND checkInMillis < :checkOutMillis
         AND checkOutMillis > :checkInMillis
     """)
@@ -101,6 +102,7 @@ interface BookingDao {
         SELECT * FROM bookings
         WHERE hotelRemoteId = :hotelRemoteId
         AND isDeleted = 0
+        AND bookingStatus != 'CANCELLED'
         AND bookingStatus = :bookingStatus
         AND checkInMillis < :checkOutMillis
         AND checkOutMillis > :checkInMillis
