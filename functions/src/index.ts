@@ -1500,7 +1500,10 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
     if (rebuildFinancialLines) {
       const grossPaise = Math.max(0, Math.round(numberValue(next.grossCharges) * 100));
       const dates: number[] = [];
-      for (let day = startOfDay(checkInMillis); day < startOfDay(checkOutMillis); day += DAY_MILLIS) dates.push(day);
+      // checkInMillis/checkOutMillis already carry the app's exact business-date identity.
+      // Re-normalising them in the Cloud Run timezone changes an India-local midnight
+      // into a different epoch value and creates a second semantic room-night line.
+      for (let day = checkInMillis; day < checkOutMillis; day += DAY_MILLIS) dates.push(day);
       const keys = Array.from(nextRooms).flatMap((roomId) => dates.map((day) => `${roomId}|${day}`));
       const existingByKey = new Map(financialSnapshot.docs.map((doc) => [`${doc.get("roomRemoteId")}|${numberValue(doc.get("businessDateMillis"))}`, doc]));
       const expectedIds = new Set<string>();

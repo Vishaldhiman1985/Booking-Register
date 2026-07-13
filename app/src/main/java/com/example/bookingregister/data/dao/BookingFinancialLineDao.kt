@@ -97,4 +97,22 @@ interface BookingFinancialLineDao {
         LIMIT 1
     """)
     suspend fun getByRemoteId(remoteId: String): BookingFinancialLineEntity?
+
+    @Query("""
+        SELECT * FROM booking_financial_lines
+        WHERE hotelRemoteId = :hotelRemoteId
+        AND bookingRemoteId = :bookingRemoteId
+        AND roomRemoteId = :roomRemoteId
+        AND businessDateMillis = :businessDateMillis
+        LIMIT 1
+    """)
+    suspend fun getByRoomNight(
+        hotelRemoteId: String,
+        bookingRemoteId: String,
+        roomRemoteId: String,
+        businessDateMillis: Long
+    ): BookingFinancialLineEntity?
+
+    @Query("DELETE FROM booking_financial_lines WHERE localId = :localId")
+    suspend fun hardDeleteByLocalId(localId: Long)
 }

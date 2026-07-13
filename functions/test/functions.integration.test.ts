@@ -7,7 +7,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest"
 
 const PROJECT_ID = "demo-booking-register";
 const REGION = "asia-south1";
-const START = Date.UTC(2030, 0, 10);
+// Midnight 10 Jan 2030 in Asia/Kolkata, represented as an epoch value.
+// This intentionally differs from UTC midnight to catch business-date identity drift.
+const START = Date.UTC(2030, 0, 9, 18, 30);
 const END = START + 86_400_000;
 let adminApp: App;
 let sequence = 0;
@@ -168,6 +170,7 @@ describe("Firebase callable Functions integration", () => {
       },
       addRoomRemoteIds: ["H101"], removeRoomRemoteIds: [], rebuildFinancialLines: true,
       financialLineTemplate: { gstRatePercent: 5, cgstRatePercent: 2.5, sgstRatePercent: 2.5, source: "MANUAL" },
+      financialLineRemoteIdsByKey: { [`H101|${START}`]: "device-a-provisional-H101" },
     };
     await deviceA.call("applyBookingChangeSetServer", {
       hotelId: "hotel-a", operationId: "create-command", deviceId: "device-a", changeSet: createChange,
@@ -197,7 +200,10 @@ describe("Firebase callable Functions integration", () => {
     expect(cloudBooking.get("grossCharges")).toBe(3200);
     const lines = await db.collection("hotels/hotel-a/bookingFinancialLines")
       .where("bookingRemoteId", "==", "booking-command").get();
-    expect(lines.docs.filter((line) => !line.get("isDeleted")).reduce((sum, line) => sum + line.get("grossAmount"), 0)).toBe(3200);
+    const activeLines = lines.docs.filter((line) => !line.get("isDeleted"));
+    expect(activeLines.reduce((sum, line) => sum + line.get("grossAmount"), 0)).toBe(3200);
+    expect(activeLines.some((line) => line.id === "device-a-provisional-H101")).toBe(true);
+    expect(activeLines.filter((line) => line.get("roomRemoteId") === "H101" && line.get("businessDateMillis") === START)).toHaveLength(1);
     const payments = await db.collection("hotels/hotel-a/bookingPayments")
       .where("bookingRemoteId", "==", "booking-command").get();
     expect(payments.size).toBe(1);

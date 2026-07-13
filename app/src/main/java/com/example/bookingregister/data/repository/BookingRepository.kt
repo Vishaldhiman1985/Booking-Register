@@ -1943,7 +1943,18 @@ class BookingRepository(
     private suspend fun upsertRemoteFinancialLineIfNewer(remote: BookingFinancialLineEntity) {
         val local = bookingFinancialLineDao.getByRemoteId(remote.remoteId)
         if (local == null || remote.revision >= local.revision) {
-            bookingFinancialLineDao.upsert(remote.copy(localId = local?.localId ?: 0).markSynced())
+            db.withTransaction {
+                val sameRoomNight = bookingFinancialLineDao.getByRoomNight(
+                    hotelRemoteId = remote.hotelRemoteId,
+                    bookingRemoteId = remote.bookingRemoteId,
+                    roomRemoteId = remote.roomRemoteId,
+                    businessDateMillis = remote.businessDateMillis
+                )
+                if (sameRoomNight != null && sameRoomNight.remoteId != remote.remoteId) {
+                    bookingFinancialLineDao.hardDeleteByLocalId(sameRoomNight.localId)
+                }
+                bookingFinancialLineDao.upsert(remote.copy(localId = local?.localId ?: 0).markSynced())
+            }
             repairBookingCacheFromFinancialLines(remote.bookingRemoteId)
             bookingDao.getByRemoteId(remote.bookingRemoteId)?.let { booking ->
                 recalculateBookingPaymentAggregate(booking)

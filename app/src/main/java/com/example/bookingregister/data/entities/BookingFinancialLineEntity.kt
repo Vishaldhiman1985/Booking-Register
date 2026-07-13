@@ -12,6 +12,10 @@ import androidx.room.PrimaryKey
         Index(value = ["bookingRemoteId"]),
         Index(value = ["propertyRemoteId"]),
         Index(value = ["hotelRemoteId", "bookingRemoteId"]),
+        Index(
+            value = ["hotelRemoteId", "bookingRemoteId", "roomRemoteId", "businessDateMillis"],
+            unique = true
+        ),
         Index(value = ["hotelRemoteId", "propertyRemoteId"]),
         Index(value = ["hotelRemoteId", "businessDateMillis"])
     ]

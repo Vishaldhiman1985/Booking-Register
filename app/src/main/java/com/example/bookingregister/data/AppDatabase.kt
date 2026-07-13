@@ -65,7 +65,7 @@ import com.example.bookingregister.data.entities.RoomGstSlabEntity
         RoomGstSlabEntity::class,
         BookingSyncOutboxEntity::class,
     ],
-    version = 37,
+    version = 38,
     exportSchema = true
 )
 @TypeConverters(AppConverters::class)
