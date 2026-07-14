@@ -34,6 +34,8 @@ import com.example.bookingregister.data.entities.BookingFinancialLineEntity
 import com.example.bookingregister.data.entities.BookingPaymentEntity
 import com.example.bookingregister.data.entities.BookingSourceEntity
 import com.example.bookingregister.data.entities.BookingSourceType
+import com.example.bookingregister.data.entities.BookingSyncOperationType
+import com.example.bookingregister.data.entities.BookingSyncOutboxEntity
 import com.example.bookingregister.data.entities.FoodOrderEntity
 import com.example.bookingregister.data.entities.FoodOrderItemEntity
 import com.example.bookingregister.data.entities.HotelEntity
@@ -90,6 +92,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
     private val financialLines = mutableListOf<BookingFinancialLineEntity>()
     private val accountingCharges = mutableListOf<BookingAccountingChargeEntity>()
     private val unsyncedAccountingCharges = mutableListOf<BookingAccountingChargeEntity>()
+    private val pendingBookingOperations = mutableListOf<BookingSyncOutboxEntity>()
     private val foodOrders = mutableListOf<FoodOrderEntity>()
     private val foodOrderItems = mutableListOf<FoodOrderItemEntity>()
     private val sources = mutableListOf<BookingSourceEntity>()
@@ -127,7 +130,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             return
         }
         repository = BookingRepository(applicationContext, lifecycleScope, hotelRemoteId)
-        gstRepository = GstRepository(AppDatabase.getInstance(applicationContext), hotelRemoteId)
+        gstRepository = GstRepository(AppDatabase.getInstance(applicationContext), hotelRemoteId, lifecycleScope)
         foodBillingRepository = FoodBillingRepository(applicationContext, lifecycleScope, hotelRemoteId)
         setContentView(R.layout.activity_booking_chart)
         verifyAccessInBackground(hotelRemoteId)
@@ -169,6 +172,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         observeLocalData()
         repository.startRealtimeSync()
         foodBillingRepository.startRealtimeSync()
+        gstRepository.startRealtimeSync()
         startAutoHealSyncLoop()
 
         lifecycleScope.launch {
@@ -198,6 +202,9 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         repository.stopRealtimeSync()
         if (::foodBillingRepository.isInitialized) {
             foodBillingRepository.stopRealtimeSync()
+        }
+        if (::gstRepository.isInitialized) {
+            gstRepository.stopRealtimeSync()
         }
         super.onDestroy()
     }
@@ -292,6 +299,12 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             updateSyncIndicator()
         }
 
+        repository.observePendingBookingOperations().observe(this) { operations ->
+            pendingBookingOperations.clear()
+            pendingBookingOperations.addAll(operations)
+            updateSyncIndicator()
+        }
+
         foodBillingRepository.observeFoodOrders().observe(this) { updatedOrders ->
             foodOrders.clear()
             foodOrders.addAll(updatedOrders)
@@ -356,11 +369,8 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
 
         gstRepository.observeRoomGstSlabs().observe(this) { slabs ->
             roomGstSlabs.clear()
-            roomGstSlabs.addAll(
-                slabs
-                    .filter { !it.isDeleted }
-                    .sortedBy { it.minGrossAmount }
-            )
+            roomGstSlabs.addAll(slabs.sortedBy { it.minGrossAmount })
+            updateSyncIndicator()
         }
     }
 
@@ -1222,9 +1232,18 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                 }
             },
             onBookingDeleted = { repository.deleteBooking(it) },
-            onPaymentSaved = { booking, amount, paymentType, paymentCategory, note, onResult ->
+            onPaymentSaved = { booking, amount, paymentType, paymentCategory, note, originalPaymentRemoteId, onResult ->
                 lifecycleScope.launch {
-                    onResult(repository.addBookingPayment(booking, amount, paymentType = paymentType, paymentCategory = paymentCategory, note = note))
+                    onResult(
+                        repository.addBookingPayment(
+                            booking = booking,
+                            amount = amount,
+                            paymentType = paymentType,
+                            paymentCategory = paymentCategory,
+                            note = note,
+                            originalPaymentRemoteId = originalPaymentRemoteId
+                        )
+                    )
                 }
             },
             onAccountingChargeSaved = { booking, chargeType, amount, description, reason, accountBucket, onResult ->
@@ -1859,9 +1878,10 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         allSyncStates.addAll(visibleAndUnsyncedBookings().map { it.syncState })
         allSyncStates.addAll(unsyncedPayments.map { it.syncState })
         allSyncStates.addAll(unsyncedAccountingCharges.map { it.syncState })
+        allSyncStates.addAll(roomGstSlabs.map { it.syncState })
 
         val hasFailed = hasActionableSyncFailure()
-        val hasPending = allSyncStates.any { it == "PENDING" }
+        val hasPending = allSyncStates.any { it == "PENDING" } || pendingBookingOperations.isNotEmpty()
         val hasRealtimeError = isActionableSyncError(realtimeSyncError)
         val hasNetworkIssue = hasNetworkSyncIssue()
 
@@ -1932,6 +1952,9 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         if (rooms.any { it.syncState == "FAILED" && isActionableSyncError(it.lastSyncError ?: "Sync failed") }) return true
         if (visibleAndUnsyncedBookings().any { it.syncState == "FAILED" && isActionableSyncError(it.lastSyncError ?: "Sync failed") }) return true
         if (unsyncedPayments.any { it.syncState == "FAILED" && isActionableSyncError(it.lastSyncError ?: "Sync failed") }) return true
+        if (unsyncedAccountingCharges.any { it.syncState == "FAILED" && isActionableSyncError(it.lastSyncError ?: "Sync failed") }) return true
+        if (roomGstSlabs.any { it.syncState == "FAILED" && isActionableSyncError(it.lastSyncError ?: "Sync failed") }) return true
+        if (pendingBookingOperations.any { !it.lastError.isNullOrBlank() && isActionableSyncError(it.lastError) }) return true
         return false
     }
 
@@ -1943,7 +1966,24 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         if (rooms.any { it.syncState == "FAILED" && isNetworkSyncError(it.lastSyncError) }) return true
         if (visibleAndUnsyncedBookings().any { it.syncState == "FAILED" && isNetworkSyncError(it.lastSyncError) }) return true
         if (unsyncedPayments.any { it.syncState == "FAILED" && isNetworkSyncError(it.lastSyncError) }) return true
+        if (unsyncedAccountingCharges.any { it.syncState == "FAILED" && isNetworkSyncError(it.lastSyncError) }) return true
+        if (roomGstSlabs.any { it.syncState == "FAILED" && isNetworkSyncError(it.lastSyncError) }) return true
+        if (pendingBookingOperations.any { isNetworkSyncError(it.lastError) }) return true
         return false
+    }
+
+    private fun bookingOperationLabel(operation: BookingSyncOutboxEntity): String {
+        val booking = (bookings + unsyncedBookings).firstOrNull { it.remoteId == operation.bookingRemoteId }
+        val guest = booking?.guestName?.takeIf { it.isNotBlank() } ?: "Unnamed guest"
+        val roomNames = booking?.roomRemoteIds
+            ?.mapNotNull { roomId -> rooms.firstOrNull { it.remoteId == roomId }?.roomName }
+            ?.joinToString(", ")
+            .orEmpty()
+        val action = if (operation.operationType == BookingSyncOperationType.DELETE) "Cancellation" else "Booking"
+        return buildString {
+            append(action).append(": ").append(guest)
+            if (roomNames.isNotBlank()) append(" (").append(roomNames).append(")")
+        }
     }
 
     private fun showSyncStatusDialog() {
@@ -1982,7 +2022,21 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         }
 
         unsyncedPayments.filter { it.syncState == "FAILED" }.forEach {
-            addFailedItem("Payment ${formatMoneyShort(it.amount)}", it.lastSyncError ?: "Sync failed")
+            val guest = bookings.firstOrNull { booking -> booking.remoteId == it.bookingRemoteId }?.guestName.orEmpty()
+            addFailedItem("Payment ${formatMoneyShort(it.amount)}${guest.takeIf { name -> name.isNotBlank() }?.let { name -> " for $name" }.orEmpty()}", it.lastSyncError ?: "Sync failed")
+        }
+
+        unsyncedAccountingCharges.filter { it.syncState == "FAILED" }.forEach {
+            val guest = bookings.firstOrNull { booking -> booking.remoteId == it.bookingRemoteId }?.guestName.orEmpty()
+            addFailedItem("${it.description}${guest.takeIf { name -> name.isNotBlank() }?.let { name -> " for $name" }.orEmpty()}", it.lastSyncError ?: "Sync failed")
+        }
+
+        roomGstSlabs.filter { it.syncState == "FAILED" }.forEach {
+            addFailedItem("Room GST slab ${it.slabName}", it.lastSyncError ?: "Sync failed")
+        }
+
+        pendingBookingOperations.filter { !it.lastError.isNullOrBlank() }.forEach { operation ->
+            addFailedItem(bookingOperationLabel(operation), operation.lastError)
         }
 
         val pendingItems = mutableListOf<String>()
@@ -2008,7 +2062,27 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         }
 
         unsyncedPayments.filter { it.syncState == "PENDING" }.forEach {
-            pendingItems.add("Payment: ${formatMoneyShort(it.amount)}")
+            val guest = bookings.firstOrNull { booking -> booking.remoteId == it.bookingRemoteId }?.guestName.orEmpty()
+            pendingItems.add("Payment: ${formatMoneyShort(it.amount)}${guest.takeIf { name -> name.isNotBlank() }?.let { name -> " for $name" }.orEmpty()}")
+        }
+
+        unsyncedAccountingCharges.filter { it.syncState == "PENDING" }.forEach {
+            pendingItems.add("Charge: ${it.description}")
+        }
+
+        roomGstSlabs.filter { it.syncState == "PENDING" }.forEach {
+            pendingItems.add("Room GST slab: ${it.slabName}")
+        }
+
+        financialLines.filter { it.syncState == "PENDING" || it.syncState == "FAILED" }.forEach { line ->
+            val guest = bookings.firstOrNull { booking -> booking.remoteId == line.bookingRemoteId }?.guestName ?: "booking"
+            val room = rooms.firstOrNull { room -> room.remoteId == line.roomRemoteId }?.roomName ?: "room"
+            val date = SimpleDateFormat("dd MMM", Locale.getDefault()).format(Date(line.businessDateMillis))
+            pendingItems.add("Room charge: $guest, $room on $date")
+        }
+
+        pendingBookingOperations.filter { it.lastError.isNullOrBlank() }.forEach { operation ->
+            pendingItems.add(bookingOperationLabel(operation))
         }
 
         val failureMessage = buildList {
@@ -2018,11 +2092,14 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             addAll(failedItems.distinct())
         }
 
-        val message = when {
-            failureMessage.isNotEmpty() -> failureMessage.joinToString("\n\n")
-            pendingItems.isNotEmpty() -> "Waiting to sync:\n\n${pendingItems.joinToString("\n")}"
-            else -> "All data is safely synced."
+        val messageParts = mutableListOf<String>()
+        if (failureMessage.isNotEmpty()) {
+            messageParts += failureMessage.joinToString("\n\n")
         }
+        if (pendingItems.isNotEmpty()) {
+            messageParts += "Waiting to sync:\n\n${pendingItems.distinct().joinToString("\n")}"
+        }
+        val message = messageParts.joinToString("\n\n").ifBlank { "All data is safely synced." }
 
         AlertDialog.Builder(this)
             .setTitle("Sync Status")
@@ -2053,7 +2130,9 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                             sources.any { it.syncState == "FAILED" || it.syncState == "PENDING" } ||
                             rooms.any { it.syncState == "FAILED" || it.syncState == "PENDING" } ||
                             visibleAndUnsyncedBookings().any { it.syncState == "FAILED" || it.syncState == "PENDING" } ||
-                            unsyncedPayments.any { it.syncState == "FAILED" || it.syncState == "PENDING" }
+                            unsyncedPayments.any { it.syncState == "FAILED" || it.syncState == "PENDING" } ||
+                            unsyncedAccountingCharges.any { it.syncState == "FAILED" || it.syncState == "PENDING" } ||
+                            pendingBookingOperations.isNotEmpty()
 
                 if (hasSyncIssue) {
                     repository.retryFailedSync(force = true)

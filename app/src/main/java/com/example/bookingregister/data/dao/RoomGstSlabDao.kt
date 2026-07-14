@@ -13,7 +13,6 @@ interface RoomGstSlabDao {
     @Query("""
         SELECT * FROM room_gst_slabs
         WHERE hotelRemoteId = :hotelRemoteId
-        AND isDeleted = 0
         ORDER BY minGrossAmount ASC
     """)
     fun observeSlabs(hotelRemoteId: String): LiveData<List<RoomGstSlabEntity>>
@@ -31,6 +30,19 @@ interface RoomGstSlabDao {
         hotelRemoteId: String,
         bookingMillis: Long
     ): List<RoomGstSlabEntity>
+
+
+    @Query("SELECT * FROM room_gst_slabs WHERE remoteId = :remoteId LIMIT 1")
+    suspend fun getByRemoteId(remoteId: String): RoomGstSlabEntity?
+
+    @Query("SELECT * FROM room_gst_slabs WHERE hotelRemoteId = :hotelRemoteId AND syncState != 'SYNCED' ORDER BY updatedAt ASC")
+    suspend fun getUnsyncedSlabs(hotelRemoteId: String): List<RoomGstSlabEntity>
+
+    @Query("SELECT COUNT(*) FROM room_gst_slabs WHERE hotelRemoteId = :hotelRemoteId")
+    suspend fun countAll(hotelRemoteId: String): Int
+
+    @Query("SELECT MAX(updatedAt) FROM room_gst_slabs WHERE hotelRemoteId = :hotelRemoteId")
+    suspend fun maxUpdatedAt(hotelRemoteId: String): Long?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(slab: RoomGstSlabEntity)

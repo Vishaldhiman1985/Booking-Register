@@ -1,4 +1,4 @@
-﻿package com.example.bookingregister.ui.payments
+package com.example.bookingregister.ui.payments
 
 import android.graphics.Color
 import android.os.Bundle
@@ -17,6 +17,7 @@ import com.example.bookingregister.data.repository.BookingRepository
 import com.example.bookingregister.data.repository.SaveResult
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.BookingPaymentCategory
+import com.example.bookingregister.data.entities.BookingPaymentEntity
 import com.example.bookingregister.data.entities.BookingPaymentType
 import com.example.bookingregister.data.entities.BookingSourceType
 import com.example.bookingregister.data.entities.RoomEntity
@@ -41,6 +42,7 @@ class PaymentsActivity : AppCompatActivity() {
 
     private val rooms = mutableListOf<RoomEntity>()
     private val bookings = mutableListOf<BookingEntity>()
+    private val payments = mutableListOf<BookingPaymentEntity>()
     private val dateFormat = SimpleDateFormat("d MMM yyyy", Locale.getDefault())
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,6 +63,11 @@ class PaymentsActivity : AppCompatActivity() {
         repository.observeBookings().observe(this) { updated ->
             bookings.clear()
             bookings.addAll(updated)
+            renderPayments()
+        }
+        repository.observePayments().observe(this) { updated ->
+            payments.clear()
+            payments.addAll(updated)
             renderPayments()
         }
     }
@@ -331,6 +338,32 @@ class PaymentsActivity : AppCompatActivity() {
     }
 
     private fun showPaymentEntryDialog(booking: BookingEntity, paymentType: String) {
+        val bookingPayments = payments.filter { !it.isDeleted && it.bookingRemoteId == booking.remoteId }
+        val refundablePayments = if (paymentType == BookingPaymentType.REFUND) {
+            bookingPayments
+                .filter { it.paymentType in setOf(BookingPaymentType.PAYMENT, BookingPaymentType.ADVANCE) }
+                .mapNotNull { original ->
+                    val refunded = bookingPayments
+                        .filter {
+                            it.paymentType == BookingPaymentType.REFUND &&
+                                it.originalPaymentRemoteId == original.remoteId
+                        }
+                        .sumOf { it.amount }
+                    val remaining = (original.amount - refunded).coerceAtLeast(0.0)
+                    original.takeIf { remaining > 0.001 }?.let { it to remaining }
+                }
+        } else emptyList()
+
+        val refundSpinner = Spinner(this).apply {
+            adapter = android.widget.ArrayAdapter(
+                this@PaymentsActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                refundablePayments.map { (payment, remaining) ->
+                    "${payment.paymentType.displayPaymentType()} ${formatMoney(payment.amount)} • refundable ${formatMoney(remaining)}"
+                }.ifEmpty { listOf("No refundable payment available") }
+            )
+            visibility = if (paymentType == BookingPaymentType.REFUND) View.VISIBLE else View.GONE
+        }
         val amountInput = EditText(this).apply {
             hint = when (paymentType) {
                 BookingPaymentType.REFUND -> "Refund amount"
@@ -340,10 +373,11 @@ class PaymentsActivity : AppCompatActivity() {
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
             setSingleLine(true)
             val defaultAmount = when (paymentType) {
-                BookingPaymentType.REFUND, BookingPaymentType.ADJUSTMENT -> (booking.paid - booking.receivable).coerceAtLeast(0.0)
+                BookingPaymentType.REFUND -> refundablePayments.firstOrNull()?.second ?: 0.0
+                BookingPaymentType.ADJUSTMENT -> (booking.paid - booking.receivable).coerceAtLeast(0.0)
                 else -> booking.balance
             }
-            setText(if (defaultAmount > 0.0) defaultAmount.roundToInt().toString() else "")
+            setText(if (defaultAmount > 0.0) String.format(Locale.US, "%.2f", defaultAmount) else "")
             setSelection(text.length)
         }
         val categorySpinner = Spinner(this).apply {
@@ -362,6 +396,15 @@ class PaymentsActivity : AppCompatActivity() {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), 0, dp(20), 0)
+            if (paymentType == BookingPaymentType.REFUND) {
+                addView(TextView(this@PaymentsActivity).apply {
+                    text = "Original payment"
+                    textSize = 12f
+                    setTextColor(Color.rgb(90, 90, 90))
+                    setPadding(0, dp(8), 0, 0)
+                })
+                addView(refundSpinner)
+            }
             addView(amountInput)
             if (paymentType == BookingPaymentType.PAYMENT) {
                 addView(TextView(this@PaymentsActivity).apply {
@@ -385,13 +428,35 @@ class PaymentsActivity : AppCompatActivity() {
                     Toast.makeText(this, "Enter a valid amount", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
+                val selectedRefund = if (paymentType == BookingPaymentType.REFUND) {
+                    refundablePayments.getOrNull(refundSpinner.selectedItemPosition)
+                } else null
+                if (paymentType == BookingPaymentType.REFUND && selectedRefund == null) {
+                    Toast.makeText(this, "No refundable payment is available", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                if (selectedRefund != null && amount > selectedRefund.second + 0.001) {
+                    Toast.makeText(this, "Refund exceeds the selected payment", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
                 val note = noteInput.text.toString().trim()
                 if (paymentType != BookingPaymentType.PAYMENT && note.isBlank()) {
                     Toast.makeText(this, "Please enter a reason", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
-                val category = if (paymentType == BookingPaymentType.PAYMENT) categorySpinner.selectedItem as String else BookingPaymentCategory.STAY
-                savePayment(booking, amount, paymentType, category, note)
+                val category = if (paymentType == BookingPaymentType.PAYMENT) {
+                    categorySpinner.selectedItem as String
+                } else {
+                    BookingPaymentCategory.STAY
+                }
+                savePayment(
+                    booking = booking,
+                    amount = amount,
+                    paymentType = paymentType,
+                    paymentCategory = category,
+                    note = note,
+                    originalPaymentRemoteId = selectedRefund?.first?.remoteId
+                )
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -407,9 +472,23 @@ class PaymentsActivity : AppCompatActivity() {
         }
     }
 
-    private fun savePayment(booking: BookingEntity, amount: Double, paymentType: String, paymentCategory: String, note: String?) {
+    private fun savePayment(
+        booking: BookingEntity,
+        amount: Double,
+        paymentType: String,
+        paymentCategory: String,
+        note: String?,
+        originalPaymentRemoteId: String? = null
+    ) {
         lifecycleScope.launch {
-            when (val result = repository.addBookingPayment(booking, amount, paymentType = paymentType, paymentCategory = paymentCategory, note = note)) {
+            when (val result = repository.addBookingPayment(
+                booking = booking,
+                amount = amount,
+                paymentType = paymentType,
+                paymentCategory = paymentCategory,
+                note = note,
+                originalPaymentRemoteId = originalPaymentRemoteId
+            )) {
                 is SaveResult.Success -> Toast.makeText(this@PaymentsActivity, "${paymentType.displayPaymentType()} saved", Toast.LENGTH_SHORT).show()
                 is SaveResult.Conflict -> Toast.makeText(this@PaymentsActivity, result.message, Toast.LENGTH_LONG).show()
                 is SaveResult.Error -> Toast.makeText(this@PaymentsActivity, result.message, Toast.LENGTH_LONG).show()

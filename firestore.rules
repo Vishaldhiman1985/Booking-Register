@@ -93,6 +93,11 @@ service cloud.firestore {
         allow delete: if canManageHotel(hotelId);
       }
 
+      match /roomGstSlabs/{slabId} {
+        allow read: if canReadHotel(hotelId);
+        allow create, update, delete: if false;
+      }
+
       match /bookings/{bookingId} {
         allow read: if canReadHotel(hotelId);
         allow create, update: if canOperateHotel(hotelId) && scopedToHotel(hotelId);

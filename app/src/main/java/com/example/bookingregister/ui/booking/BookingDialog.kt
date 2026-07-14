@@ -88,7 +88,7 @@ class BookingDialog(
     private val roomRateLocked: Boolean = false,
     private val onBookingSaved: (BookingEntity, List<BookingFinancialLineEntity>, (SaveResult) -> Unit) -> Unit,
     private val onBookingDeleted: (BookingEntity) -> Unit,
-    private val onPaymentSaved: (BookingEntity, Double, String, String, String?, (SaveResult) -> Unit) -> Unit,
+    private val onPaymentSaved: (BookingEntity, Double, String, String, String?, String?, (SaveResult) -> Unit) -> Unit,
     private val onAccountingChargeSaved: (BookingEntity, String, Double, String, String?, String?, (SaveResult) -> Unit) -> Unit,
     private val onFinalBillGenerated: (BookingEntity, (SaveResult) -> Unit) -> Unit
 ) {
@@ -806,6 +806,34 @@ class BookingDialog(
             orientation = android.widget.LinearLayout.VERTICAL
             setPadding(32, 8, 32, 0)
         }
+        val refundablePayments = if (paymentType == BookingPaymentType.REFUND) {
+            existingPaymentEntries
+                .filter {
+                    !it.isDeleted &&
+                        it.paymentType in setOf(BookingPaymentType.PAYMENT, BookingPaymentType.ADVANCE)
+                }
+                .mapNotNull { original ->
+                    val refunded = existingPaymentEntries
+                        .filter {
+                            !it.isDeleted &&
+                                it.paymentType == BookingPaymentType.REFUND &&
+                                it.originalPaymentRemoteId == original.remoteId
+                        }
+                        .sumOf { it.amount }
+                    val remaining = (original.amount - refunded).coerceAtLeast(0.0)
+                    original.takeIf { remaining > 0.001 }?.let { it to remaining }
+                }
+        } else {
+            emptyList()
+        }
+        val refundPaymentSpinner = Spinner(context).apply {
+            adapter = spinnerAdapter(
+                refundablePayments.map { (payment, remaining) ->
+                    "${payment.paymentType.displayPaymentType()} ${amountText(payment.amount)} • refundable ${amountText(remaining)}"
+                }.ifEmpty { listOf("No refundable payment available") }
+            )
+            visibility = if (paymentType == BookingPaymentType.REFUND) View.VISIBLE else View.GONE
+        }
         val amountInput = EditText(context).apply {
             hint = when (paymentType) {
                 BookingPaymentType.REFUND -> "Refund amount"
@@ -834,6 +862,15 @@ class BookingDialog(
             setSingleLine(false)
             minLines = 2
         }
+        if (paymentType == BookingPaymentType.REFUND) {
+            container.addView(TextView(context).apply {
+                text = "Original payment"
+                textSize = 12f
+                setTextColor(Color.parseColor("#6B7280"))
+                setPadding(0, 12, 0, 0)
+            })
+            container.addView(refundPaymentSpinner)
+        }
         container.addView(amountInput)
         if (paymentType == BookingPaymentType.PAYMENT) {
             container.addView(TextView(context).apply {
@@ -860,6 +897,23 @@ class BookingDialog(
                             Toast.makeText(context, "Enter a valid amount", Toast.LENGTH_SHORT).show()
                             return@setOnClickListener
                         }
+                        val selectedRefund = if (paymentType == BookingPaymentType.REFUND) {
+                            refundablePayments.getOrNull(refundPaymentSpinner.selectedItemPosition)
+                        } else {
+                            null
+                        }
+                        if (paymentType == BookingPaymentType.REFUND && selectedRefund == null) {
+                            Toast.makeText(context, "No refundable payment is available", Toast.LENGTH_SHORT).show()
+                            return@setOnClickListener
+                        }
+                        if (selectedRefund != null && amount > selectedRefund.second + 0.001) {
+                            Toast.makeText(
+                                context,
+                                "Refund cannot exceed ${amountText(selectedRefund.second)}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            return@setOnClickListener
+                        }
                         val note = noteInput.text.toString().trim()
                         if (paymentType != BookingPaymentType.PAYMENT && note.isBlank()) {
                             Toast.makeText(context, "Please enter a reason", Toast.LENGTH_SHORT).show()
@@ -870,7 +924,14 @@ class BookingDialog(
                         amountInput.isEnabled = false
                         noteInput.isEnabled = false
                         val category = if (paymentType == BookingPaymentType.PAYMENT) categorySpinner.selectedItem as String else BookingPaymentCategory.STAY
-                        onPaymentSaved(booking, amount, paymentType, category, note) { result ->
+                        onPaymentSaved(
+                            booking,
+                            amount,
+                            paymentType,
+                            category,
+                            note,
+                            selectedRefund?.first?.remoteId
+                        ) { result ->
                             savePaymentButton.isEnabled = true
                             savePaymentButton.text = "Save"
                             amountInput.isEnabled = true

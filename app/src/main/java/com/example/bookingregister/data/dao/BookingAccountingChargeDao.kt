@@ -32,6 +32,17 @@ interface BookingAccountingChargeDao {
     @Query("""
         SELECT * FROM booking_accounting_charges
         WHERE hotelRemoteId = :hotelRemoteId
+        AND linkedFinalBillId = :billRemoteId
+        ORDER BY chargeMillis ASC, updatedAt ASC
+    """)
+    suspend fun getChargesForFinalBill(
+        hotelRemoteId: String,
+        billRemoteId: String
+    ): List<BookingAccountingChargeEntity>
+
+    @Query("""
+        SELECT * FROM booking_accounting_charges
+        WHERE hotelRemoteId = :hotelRemoteId
         AND syncState != 'SYNCED'
         ORDER BY updatedAt ASC
     """)

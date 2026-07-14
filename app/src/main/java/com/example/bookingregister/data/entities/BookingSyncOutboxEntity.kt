@@ -16,7 +16,13 @@ data class BookingSyncOutboxEntity(
     @PrimaryKey val operationId: String,
     val hotelRemoteId: String,
     val bookingRemoteId: String,
+    val operationType: String = BookingSyncOperationType.SAVE,
     val createdAt: Long,
     val attemptCount: Int = 0,
     val lastError: String? = null
 )
+
+object BookingSyncOperationType {
+    const val SAVE = "SAVE"
+    const val DELETE = "DELETE"
+}

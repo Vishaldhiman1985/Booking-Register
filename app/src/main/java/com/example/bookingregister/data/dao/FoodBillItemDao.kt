@@ -29,6 +29,14 @@ interface FoodBillItemDao {
     @Query("""
         SELECT * FROM food_bill_items
         WHERE hotelRemoteId = :hotelRemoteId
+        AND billRemoteId = :billRemoteId
+        ORDER BY orderMillis ASC, itemName COLLATE NOCASE
+    """)
+    suspend fun getAllItemsForBill(hotelRemoteId: String, billRemoteId: String): List<FoodBillItemEntity>
+
+    @Query("""
+        SELECT * FROM food_bill_items
+        WHERE hotelRemoteId = :hotelRemoteId
         AND syncState != 'SYNCED'
         ORDER BY updatedAt ASC
     """)

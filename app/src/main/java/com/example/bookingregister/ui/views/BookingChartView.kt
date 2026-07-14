@@ -16,6 +16,7 @@ import android.widget.OverScroller
 import androidx.core.view.GestureDetectorCompat
 import com.example.bookingregister.booking.domain.BookingStatus
 import com.example.bookingregister.data.repository.PaymentStatus
+import com.example.bookingregister.data.SyncState
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.BookingSourceType
 import com.example.bookingregister.data.entities.RoomEntity
@@ -635,7 +636,12 @@ class BookingChartView @JvmOverloads constructor(
         val availableWidth = right - left - (2 * bookingTextHorizontalPadding)
         if (availableWidth <= 0f) return
 
-        val label = booking.guestName.ifBlank { "Booking" }
+        val baseLabel = booking.guestName.ifBlank { "Booking" }
+        val label = when (booking.syncState) {
+            SyncState.PENDING -> "$baseLabel [Syncing]"
+            SyncState.FAILED -> "$baseLabel [Not synced]"
+            else -> baseLabel
+        }
         bookingTextPaint.color = Color.WHITE
         bookingTextPaint.style = Paint.Style.FILL
         bookingTextPaint.strokeWidth = 0f

@@ -5,6 +5,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.example.bookingregister.data.AppDatabase
 import com.example.bookingregister.data.repository.BookingRepository
+import com.example.bookingregister.data.repository.GstRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,6 +26,7 @@ class HotelSyncWorker(
 
             repository.retryFailedSync(force = true)
             FoodBillingSyncService(db, hotelRemoteId).retryFailedFoodSync()
+            GstRepository(db, hotelRemoteId, workerScope).retryUnsyncedSlabs()
 
             if (hasPendingSync(db, hotelRemoteId)) Result.retry() else Result.success()
         }.getOrElse { Result.retry() }
@@ -40,6 +42,8 @@ class HotelSyncWorker(
             db.bookingSyncOutboxDao().countPending(hotelRemoteId) > 0 ||
             db.bookingPaymentDao().getUnsyncedPayments(hotelRemoteId).isNotEmpty() ||
             db.bookingFinancialLineDao().getUnsyncedLines(hotelRemoteId).isNotEmpty() ||
+            db.bookingAccountingChargeDao().getUnsyncedCharges(hotelRemoteId).isNotEmpty() ||
+            db.roomGstSlabDao().getUnsyncedSlabs(hotelRemoteId).isNotEmpty() ||
             db.foodGstCategoryDao().getUnsyncedCategories(hotelRemoteId).isNotEmpty() ||
             db.foodMenuItemDao().getUnsyncedItems(hotelRemoteId).isNotEmpty() ||
             db.serviceMenuItemDao().getUnsyncedItems(hotelRemoteId).isNotEmpty() ||

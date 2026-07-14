@@ -1,4 +1,4 @@
-﻿package com.example.bookingregister.data
+package com.example.bookingregister.data
 
 import android.content.Context
 import androidx.room.Database
@@ -65,7 +65,7 @@ import com.example.bookingregister.data.entities.RoomGstSlabEntity
         RoomGstSlabEntity::class,
         BookingSyncOutboxEntity::class,
     ],
-    version = 34,
+    version = 35,
     exportSchema = true
 )
 @TypeConverters(AppConverters::class)
@@ -419,6 +419,12 @@ abstract class AppDatabase : RoomDatabase() {
                 ensureColumn(database, "rooms", "retiredAtMillis", "INTEGER")
             }
         }
+        private val MIGRATION_34_35 = object : Migration(34, 35) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                ensureColumn(database, "booking_payments", "originalPaymentRemoteId", "TEXT")
+                ensureColumn(database, "booking_sync_outbox", "operationType", "TEXT NOT NULL DEFAULT 'SAVE'")
+            }
+        }
         fun allMigrations(): Array<Migration> = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -452,7 +458,8 @@ abstract class AppDatabase : RoomDatabase() {
             MIGRATION_30_31,
             MIGRATION_31_32,
             MIGRATION_32_33,
-            MIGRATION_33_34
+            MIGRATION_33_34,
+            MIGRATION_34_35
         )
 
         private fun ensureBookingSyncOutboxSchema(database: SupportSQLiteDatabase) {
@@ -462,6 +469,7 @@ abstract class AppDatabase : RoomDatabase() {
                     operationId TEXT NOT NULL PRIMARY KEY,
                     hotelRemoteId TEXT NOT NULL,
                     bookingRemoteId TEXT NOT NULL,
+                    operationType TEXT NOT NULL DEFAULT 'SAVE',
                     createdAt INTEGER NOT NULL,
                     attemptCount INTEGER NOT NULL DEFAULT 0,
                     lastError TEXT
@@ -679,6 +687,7 @@ abstract class AppDatabase : RoomDatabase() {
                     remoteId TEXT NOT NULL,
                     hotelRemoteId TEXT NOT NULL,
                     bookingRemoteId TEXT NOT NULL,
+                    originalPaymentRemoteId TEXT,
                     paymentType TEXT NOT NULL DEFAULT 'PAYMENT',
                     paymentCategory TEXT NOT NULL DEFAULT 'AUTO',
                     amount REAL NOT NULL DEFAULT 0.0,

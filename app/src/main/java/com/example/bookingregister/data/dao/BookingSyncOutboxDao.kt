@@ -1,5 +1,6 @@
 package com.example.bookingregister.data.dao
 
+import androidx.lifecycle.LiveData
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
@@ -9,7 +10,16 @@ import com.example.bookingregister.data.entities.BookingSyncOutboxEntity
 @Dao
 interface BookingSyncOutboxDao {
     @Query("SELECT * FROM booking_sync_outbox WHERE hotelRemoteId = :hotelRemoteId ORDER BY createdAt ASC")
+    fun observePending(hotelRemoteId: String): LiveData<List<BookingSyncOutboxEntity>>
+
+    @Query("SELECT * FROM booking_sync_outbox WHERE hotelRemoteId = :hotelRemoteId ORDER BY createdAt ASC")
     suspend fun getPending(hotelRemoteId: String): List<BookingSyncOutboxEntity>
+
+    @Query("SELECT * FROM booking_sync_outbox WHERE operationId = :operationId LIMIT 1")
+    suspend fun getByOperationId(operationId: String): BookingSyncOutboxEntity?
+
+    @Query("SELECT * FROM booking_sync_outbox WHERE bookingRemoteId = :bookingRemoteId LIMIT 1")
+    suspend fun getByBookingRemoteId(bookingRemoteId: String): BookingSyncOutboxEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(operation: BookingSyncOutboxEntity)

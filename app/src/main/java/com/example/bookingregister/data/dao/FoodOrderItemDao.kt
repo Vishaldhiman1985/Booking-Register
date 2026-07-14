@@ -29,6 +29,14 @@ interface FoodOrderItemDao {
     @Query("""
         SELECT * FROM food_order_items
         WHERE hotelRemoteId = :hotelRemoteId
+        AND orderRemoteId = :orderRemoteId
+        ORDER BY updatedAt ASC
+    """)
+    suspend fun getAllItemsForOrder(hotelRemoteId: String, orderRemoteId: String): List<FoodOrderItemEntity>
+
+    @Query("""
+        SELECT * FROM food_order_items
+        WHERE hotelRemoteId = :hotelRemoteId
         AND syncState != 'SYNCED'
         ORDER BY updatedAt ASC
     """)

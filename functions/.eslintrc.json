@@ -1,16 +1,18 @@
 {
   "root": true,
-  "parser": "@typescript-eslint/parser",
-  "parserOptions": {
-    "project": ["tsconfig.json"],
-    "sourceType": "module"
+  "env": {
+    "node": true,
+    "es2022": true
   },
-  "plugins": ["@typescript-eslint"],
-  "extends": ["eslint:recommended", "plugin:@typescript-eslint/recommended"],
+  "parserOptions": {
+    "ecmaVersion": 2022,
+    "sourceType": "script"
+  },
+  "extends": ["eslint:recommended"],
   "rules": {
-    "quotes": ["error", "double"],
+    "quotes": ["error", "double", { "allowTemplateLiterals": true }],
     "semi": ["error", "always"],
     "object-curly-spacing": ["error", "always"],
-    "max-len": ["warn", { "code": 120 }]
+    "max-len": ["warn", { "code": 140, "ignoreComments": true, "ignoreStrings": true, "ignoreTemplateLiterals": true }]
   }
 }

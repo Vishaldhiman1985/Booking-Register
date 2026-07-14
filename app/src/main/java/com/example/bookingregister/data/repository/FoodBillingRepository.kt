@@ -493,9 +493,11 @@ class FoodBillingRepository(
             }
         }
 
-        enqueueBackgroundSync()
+        foodBillingSyncService.pushFoodOrderAggregateAndMark(order.remoteId)
+        val latestOrder = foodOrderDao.getByRemoteId(order.remoteId)
+        if (latestOrder?.syncState != SyncState.SYNCED) enqueueBackgroundSync()
 
-        return SaveResult.Success(syncPending = true)
+        return SaveResult.Success(syncPending = latestOrder?.syncState != SyncState.SYNCED)
     }
 
     suspend fun generateFoodBill(
@@ -719,7 +721,12 @@ class FoodBillingRepository(
             SaveResult.Success(syncPending = true)
         }
 
-        if (result is SaveResult.Success) enqueueBackgroundSync()
+        if (result is SaveResult.Success) {
+            foodBillingSyncService.pushFoodBillAggregateAndMark(bill.remoteId)
+            val latestBill = foodBillDao.getByRemoteId(bill.remoteId)
+            if (latestBill?.syncState != SyncState.SYNCED) enqueueBackgroundSync()
+            return SaveResult.Success(syncPending = latestBill?.syncState != SyncState.SYNCED)
+        }
 
         return result
     }
@@ -735,7 +742,10 @@ class FoodBillingRepository(
             )
 
             foodOrderDao.upsert(cancelled)
-            enqueueBackgroundSync()
+            foodBillingSyncService.pushFoodOrderAggregateAndMark(cancelled.remoteId)
+            if (foodOrderDao.getByRemoteId(cancelled.remoteId)?.syncState != SyncState.SYNCED) {
+                enqueueBackgroundSync()
+            }
         }
     }
 
