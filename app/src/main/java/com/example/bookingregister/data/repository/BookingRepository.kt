@@ -106,6 +106,8 @@ class BookingRepository(
     fun observeRooms(): LiveData<List<RoomEntity>> = roomDao.observeRooms(hotelRemoteId)
 
     fun observeBookings(): LiveData<List<BookingEntity>> = bookingDao.observeBookings(hotelRemoteId)
+    fun observeBookingRecords(): LiveData<List<BookingEntity>> =
+        bookingDao.observeBookingRecords(hotelRemoteId)
 
     fun observeBookingsForWindow(startMillis: Long, endMillis: Long): LiveData<List<BookingEntity>> =
         bookingDao.observeBookingsForWindow(hotelRemoteId, startMillis, endMillis)
@@ -1733,21 +1735,60 @@ class BookingRepository(
             .forEach { pushBookingAndMark(it.withCalculatedPayment()) }
     }
 
-    private suspend fun seedInitialPaymentIfNeeded(booking: BookingEntity) {
-        if (booking.paid <= 0.0) return
-        if (bookingPaymentDao.countPaymentsForBooking(hotelRemoteId, booking.remoteId) > 0) return
-        val payment = BookingPaymentEntity(
-                remoteId = "${booking.remoteId}_payment_initial_paid",
+    private suspend fun seedInitialPaymentIfNeeded(
+        booking: BookingEntity
+    ) {
+        val initialPaid = roundMoney(booking.paid)
+
+        if (initialPaid <= 0.0) return
+
+        val existingPaymentCount =
+            bookingPaymentDao.countPaymentsForBooking(
                 hotelRemoteId = hotelRemoteId,
-                bookingRemoteId = booking.remoteId,
-                paymentType = BookingPaymentType.ADVANCE,
-                amount = booking.paid,
-                paymentMillis = booking.updatedAt,
-                note = "Initial paid amount",
-                updatedAt = booking.updatedAt,
-                syncState = SyncState.PENDING
+                bookingRemoteId = booking.remoteId
+            )
+
+        if (existingPaymentCount > 0) return
+
+        /*
+         * An advance entered during creation of a fresh booking belongs
+         * to the room/stay account.
+         *
+         * The server requires:
+         *
+         * allocatedStayAmount
+         * + allocatedFoodAmount
+         * + allocatedServiceAmount
+         * + allocatedDamageAmount
+         * + unappliedAmount
+         * = amount
+         */
+        val initialPayment = BookingPaymentEntity(
+            remoteId = "${booking.remoteId}_payment_initial_paid",
+            hotelRemoteId = hotelRemoteId,
+            bookingRemoteId = booking.remoteId,
+
+            paymentType = BookingPaymentType.ADVANCE,
+            paymentCategory = BookingPaymentCategory.STAY,
+
+            amount = initialPaid,
+
+            allocatedStayAmount = initialPaid,
+            allocatedFoodAmount = 0.0,
+            allocatedServiceAmount = 0.0,
+            allocatedDamageAmount = 0.0,
+            unappliedAmount = 0.0,
+
+            paymentMillis = booking.updatedAt,
+            note = "Initial paid amount",
+
+            updatedAt = booking.updatedAt,
+            isDeleted = false,
+            syncState = SyncState.PENDING,
+            lastSyncError = null
         )
-        bookingPaymentDao.upsert(payment)
+
+        bookingPaymentDao.upsert(initialPayment)
     }
 
     private suspend fun migrateLegacyAccountingRowsOnce() {
