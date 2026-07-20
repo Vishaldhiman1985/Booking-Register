@@ -65,7 +65,7 @@ import com.example.bookingregister.data.entities.RoomGstSlabEntity
         RoomGstSlabEntity::class,
         BookingSyncOutboxEntity::class,
     ],
-    version = 38,
+    version = 39,
     exportSchema = true
 )
 @TypeConverters(AppConverters::class)
@@ -103,7 +103,6 @@ abstract class AppDatabase : RoomDatabase() {
                     "booking_register.db"
                 )
                     .addMigrations(*allMigrations())
-                    .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
 
                 INSTANCE = instance
@@ -436,6 +435,19 @@ abstract class AppDatabase : RoomDatabase() {
                 ensureColumn(database, "booking_payments", "originalPaymentRemoteId", "TEXT")
             }
         }
+        private val MIGRATION_36_37 = object : Migration(36, 37) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                migrateBookingOutboxToChangeSets(database)
+            }
+        }
+        private val MIGRATION_37_38 = object : Migration(37, 38) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                enforceUniqueRoomNightFinancialLines(database)
+            }
+        }
+        private val MIGRATION_38_39 = object : Migration(38, 39) {
+            override fun migrate(database: SupportSQLiteDatabase) = Unit
+        }
         fun allMigrations(): Array<Migration> = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -471,8 +483,103 @@ abstract class AppDatabase : RoomDatabase() {
             MIGRATION_32_33,
             MIGRATION_33_34,
             MIGRATION_34_35,
-            MIGRATION_35_36
+            MIGRATION_35_36,
+            MIGRATION_36_37,
+            MIGRATION_37_38,
+            MIGRATION_38_39
         )
+
+        /**
+         * Version 37 replaced the one-snapshot-per-booking outbox with append-only booking
+         * change sets. Legacy rows are retained with an empty payload and are converted to a
+         * full, idempotent change set by BookingRepository before their first retry.
+         */
+        private fun migrateBookingOutboxToChangeSets(database: SupportSQLiteDatabase) {
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS booking_sync_outbox_new (
+                    operationId TEXT NOT NULL PRIMARY KEY,
+                    hotelRemoteId TEXT NOT NULL,
+                    bookingRemoteId TEXT NOT NULL,
+                    changeSetJson TEXT NOT NULL,
+                    createdAt INTEGER NOT NULL,
+                    attemptCount INTEGER NOT NULL DEFAULT 0,
+                    lastError TEXT
+                )
+                """.trimIndent()
+            )
+            val changeSetExpression = if (hasColumn(database, "booking_sync_outbox", "changeSetJson")) {
+                "COALESCE(changeSetJson, '')"
+            } else {
+                "''"
+            }
+            database.execSQL(
+                """
+                INSERT OR REPLACE INTO booking_sync_outbox_new (
+                    operationId, hotelRemoteId, bookingRemoteId, changeSetJson,
+                    createdAt, attemptCount, lastError
+                )
+                SELECT operationId, hotelRemoteId, bookingRemoteId, $changeSetExpression,
+                       createdAt, attemptCount, lastError
+                FROM booking_sync_outbox
+                """.trimIndent()
+            )
+            database.execSQL("DROP TABLE booking_sync_outbox")
+            database.execSQL("ALTER TABLE booking_sync_outbox_new RENAME TO booking_sync_outbox")
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_booking_sync_outbox_hotelRemoteId ON booking_sync_outbox(hotelRemoteId)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_booking_sync_outbox_bookingRemoteId ON booking_sync_outbox(bookingRemoteId)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_booking_sync_outbox_hotelRemoteId_createdAt ON booking_sync_outbox(hotelRemoteId, createdAt)")
+        }
+
+        /**
+         * A room-night is one accounting fact. Older test builds could retain both a local and
+         * cloud row for the same fact. Keep the best active/latest row, archive the rejected row
+         * for forensic recovery, then enforce the invariant at SQLite level.
+         */
+        private fun enforceUniqueRoomNightFinancialLines(database: SupportSQLiteDatabase) {
+            val duplicatePredicate = """
+                EXISTS (
+                    SELECT 1
+                    FROM booking_financial_lines AS better
+                    WHERE better.hotelRemoteId = booking_financial_lines.hotelRemoteId
+                      AND better.bookingRemoteId = booking_financial_lines.bookingRemoteId
+                      AND better.roomRemoteId = booking_financial_lines.roomRemoteId
+                      AND better.businessDateMillis = booking_financial_lines.businessDateMillis
+                      AND (
+                          better.isDeleted < booking_financial_lines.isDeleted
+                          OR (better.isDeleted = booking_financial_lines.isDeleted AND better.revision > booking_financial_lines.revision)
+                          OR (better.isDeleted = booking_financial_lines.isDeleted AND better.revision = booking_financial_lines.revision AND better.updatedAt > booking_financial_lines.updatedAt)
+                          OR (better.isDeleted = booking_financial_lines.isDeleted AND better.revision = booking_financial_lines.revision AND better.updatedAt = booking_financial_lines.updatedAt AND better.localId > booking_financial_lines.localId)
+                      )
+                )
+            """.trimIndent()
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS booking_financial_line_duplicates_archive AS
+                SELECT *, CAST(0 AS INTEGER) AS archivedAt
+                FROM booking_financial_lines
+                WHERE 0
+                """.trimIndent()
+            )
+            database.execSQL(
+                """
+                INSERT INTO booking_financial_line_duplicates_archive
+                SELECT *, CAST(strftime('%s', 'now') AS INTEGER) * 1000
+                FROM booking_financial_lines
+                WHERE $duplicatePredicate
+                """.trimIndent()
+            )
+            database.execSQL(
+                "DELETE FROM booking_financial_lines WHERE $duplicatePredicate"
+            )
+            database.execSQL(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS
+                index_booking_financial_lines_hotelRemoteId_bookingRemoteId_roomRemoteId_businessDateMillis
+                ON booking_financial_lines(hotelRemoteId, bookingRemoteId, roomRemoteId, businessDateMillis)
+                """.trimIndent()
+            )
+        }
 
         private fun ensureBookingSyncOutboxSchema(database: SupportSQLiteDatabase) {
             database.execSQL(

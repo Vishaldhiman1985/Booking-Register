@@ -57,6 +57,7 @@ import java.util.Locale
 import java.util.UUID
 import kotlin.math.round
 import com.example.bookingregister.data.sync.syncFailureText
+import com.example.bookingregister.data.sync.CodedSyncFailure
 import com.example.bookingregister.data.sync.StructuredSyncException
 import com.example.bookingregister.data.sync.SyncFailureCode
 import com.example.bookingregister.data.sync.SyncWorkScheduler
@@ -1794,13 +1795,21 @@ class BookingRepository(
             return
         }
 
-        if (operation.changeSetJson.isBlank()) {
-            bookingSyncOutboxDao.delete(operation.operationId)
-            return
-        }
         val lines = bookingFinancialLineDao.getAllLinesForBooking(hotelRemoteId, booking.remoteId)
         val sentBooking = booking
-        val changeSet = BookingChangeSet.fromJson(operation.changeSetJson)
+        val isLegacySnapshotOperation = operation.changeSetJson.isBlank()
+        val changeSet = if (isLegacySnapshotOperation) {
+            // Database versions before 37 stored only the booking operation identity. Rebuild
+            // the complete requested state without deleting the legacy operation or booking.
+            BookingChangeSet.create(
+                previous = null,
+                requested = booking,
+                previousLines = emptyList(),
+                requestedLines = lines
+            )
+        } else {
+            BookingChangeSet.fromJson(operation.changeSetJson)
+        }
         val deviceId = Settings.Secure.getString(appContext.contentResolver, Settings.Secure.ANDROID_ID)
             ?.takeIf { it.isNotBlank() } ?: "unknown-android-device"
 
@@ -1811,6 +1820,21 @@ class BookingRepository(
                 changeSet = changeSet
             )
         }
+            .recoverCatching { error ->
+                val failureCode = (error as? CodedSyncFailure)?.syncFailureCode
+                if (isLegacySnapshotOperation && failureCode == SyncFailureCode.ALREADY_EXISTS) {
+                    // The legacy operation may represent either the booking's first upload or a
+                    // later edit. If the booking already exists, apply the same full state as an
+                    // update. The unchanged operationId keeps the retry idempotent.
+                    cloudSyncManager.pushBookingChangeSet(
+                        operationId = operation.operationId,
+                        deviceId = deviceId,
+                        changeSet = changeSet.copy(create = false)
+                    )
+                } else {
+                    throw error
+                }
+            }
             .onSuccess { result ->
                 acknowledgeBookingAggregate(operation, sentBooking, lines, result)
             }
