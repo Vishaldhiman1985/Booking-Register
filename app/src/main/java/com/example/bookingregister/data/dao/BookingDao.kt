@@ -19,11 +19,12 @@ interface BookingDao {
         SELECT * FROM bookings
         WHERE hotelRemoteId = :hotelRemoteId
         AND isDeleted = 0
+        AND bookingStatus != 'CANCELLED'
         AND checkInMillis < :windowEndMillis
         AND checkOutMillis > :windowStartMillis
         ORDER BY checkInMillis ASC
     """)
-    fun observeBookingsForWindow(
+    fun observeChartBookingsForWindow(
         hotelRemoteId: String,
         windowStartMillis: Long,
         windowEndMillis: Long

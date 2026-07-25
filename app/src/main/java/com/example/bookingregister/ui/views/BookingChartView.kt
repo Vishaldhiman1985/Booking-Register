@@ -14,6 +14,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.widget.OverScroller
 import androidx.core.view.GestureDetectorCompat
+import com.example.bookingregister.booking.domain.BookingChartVisibilityPolicy
 import com.example.bookingregister.booking.domain.BookingStatus
 import com.example.bookingregister.data.repository.PaymentStatus
 import com.example.bookingregister.data.entities.BookingEntity
@@ -269,7 +270,7 @@ class BookingChartView @JvmOverloads constructor(
 
     fun setData(r: List<RoomEntity>, b: List<BookingEntity>) {
         rooms = r
-        bookings = b
+        bookings = BookingChartVisibilityPolicy.visibleBookings(b)
         rebuildChartRowsForViewport()
         recalculateScrollBounds()
         invalidate()

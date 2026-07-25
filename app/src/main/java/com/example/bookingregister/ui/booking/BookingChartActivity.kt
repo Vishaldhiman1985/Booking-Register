@@ -340,7 +340,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             updateSyncIndicator()
         }
         val (bookingWindowStart, bookingWindowEnd) = operationalBookingWindow()
-        repository.observeBookingsForWindow(bookingWindowStart, bookingWindowEnd).observe(this) { updatedBookings ->
+        repository.observeChartBookingsForWindow(bookingWindowStart, bookingWindowEnd).observe(this) { updatedBookings ->
             bookingsLoaded = true
             bookings.clear()
             bookings.addAll(updatedBookings)
@@ -1234,7 +1234,11 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                     onResult(repository.saveBookingWithFinancialLines(booking, lines))
                 }
             },
-            onBookingDeleted = { booking, reason -> repository.cancelBooking(booking, reason) },
+            onBookingDeleted = { booking, reason, onResult ->
+                lifecycleScope.launch {
+                    onResult(repository.cancelBooking(booking, reason))
+                }
+            },
             onPaymentSaved = { booking, amount, paymentType, paymentCategory, note, onResult ->
                 lifecycleScope.launch {
                     onResult(repository.addBookingPayment(booking, amount, paymentType = paymentType, paymentCategory = paymentCategory, note = note))

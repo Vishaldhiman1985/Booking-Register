@@ -51,6 +51,7 @@ import com.example.bookingregister.data.sync.CloudSyncManager
 import com.example.bookingregister.data.sync.FoodBillingSyncService
 import com.example.bookingregister.finalbill.domain.FinalBillGenerationPolicy
 import com.example.bookingregister.folio.domain.FolioSummaryBuilder
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -117,8 +118,8 @@ class BookingRepository(
 
     fun observeBookings(): LiveData<List<BookingEntity>> = bookingDao.observeBookings(hotelRemoteId)
 
-    fun observeBookingsForWindow(startMillis: Long, endMillis: Long): LiveData<List<BookingEntity>> =
-        bookingDao.observeBookingsForWindow(hotelRemoteId, startMillis, endMillis)
+    fun observeChartBookingsForWindow(startMillis: Long, endMillis: Long): LiveData<List<BookingEntity>> =
+        bookingDao.observeChartBookingsForWindow(hotelRemoteId, startMillis, endMillis)
 
     fun observeOutstandingBalance(): LiveData<Double> =
         bookingDao.observeOutstandingBalance(hotelRemoteId)
@@ -1415,20 +1416,17 @@ class BookingRepository(
 
     private fun roundMoney(amount: Double): Double = round(amount * 100.0) / 100.0
 
-    fun cancelBooking(booking: BookingEntity, reason: String) {
-        scope.launch {
+    suspend fun cancelBooking(booking: BookingEntity, reason: String): SaveResult {
+        var localCommitSucceeded = false
+        return try {
             val cleanReason = reason.trim()
-            if (cleanReason.isBlank()) return@launch
+            if (cleanReason.isBlank()) return SaveResult.Error("Cancellation reason is required.")
             val finalBill = foodBillDao.getFinalBillForBooking(
                 hotelRemoteId = hotelRemoteId,
                 remoteIdPrefix = "${booking.remoteId}_final_bill_"
             )
             if (finalBill != null && !finalBill.isDeleted) {
-                logSyncFailure(
-                    "cancelBooking",
-                    IllegalStateException("A billed booking cannot be cancelled; issue corrections/refunds instead.")
-                )
-                return@launch
+                return SaveResult.Error("A billed booking cannot be cancelled; issue corrections/refunds instead.")
             }
             val cancelled = booking.copy(
                 bookingStatus = BookingStatus.CANCELLED,
@@ -1445,7 +1443,17 @@ class BookingRepository(
                 val lines = bookingFinancialLineDao.getAllLinesForBooking(hotelRemoteId, booking.remoteId)
                 enqueueBookingOutbox(booking, cancelled, lines)
             }
+            localCommitSucceeded = true
             enqueueBackgroundSync()
+            SaveResult.Success(syncPending = true)
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            Log.e("BookingRepository", "Could not cancel booking ${booking.remoteId}", error)
+            if (localCommitSucceeded) {
+                SaveResult.Success(syncPending = true)
+            } else {
+                SaveResult.Error("Could not cancel booking. No changes were made.")
+            }
         }
     }
 

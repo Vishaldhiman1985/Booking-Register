@@ -88,7 +88,7 @@ class BookingDialog(
     private val canEditBooking: Boolean = true,
     private val roomRateLocked: Boolean = false,
     private val onBookingSaved: (BookingEntity, List<BookingFinancialLineEntity>, (SaveResult) -> Unit) -> Unit,
-    private val onBookingDeleted: (BookingEntity, String) -> Unit,
+    private val onBookingDeleted: (BookingEntity, String, (SaveResult) -> Unit) -> Unit,
     private val onPaymentSaved: (BookingEntity, Double, String, String, String?, (SaveResult) -> Unit) -> Unit,
     private val onAccountingChargeSaved: (BookingEntity, String, Double, String, String?, String?, (SaveResult) -> Unit) -> Unit,
     private val onFinalBillGenerated: (BookingEntity, (SaveResult) -> Unit) -> Unit
@@ -1196,10 +1196,22 @@ class BookingDialog(
                             reasonInput.error = "Cancellation reason is required"
                             return@setOnClickListener
                         }
-                        onBookingDeleted(booking, reason)
-                        Toast.makeText(context, "Booking cancelled", Toast.LENGTH_SHORT).show()
-                        confirmation.dismiss()
-                        dialog.dismiss()
+                        val cancelButton = confirmation.getButton(AlertDialog.BUTTON_POSITIVE)
+                        cancelButton.isEnabled = false
+                        onBookingDeleted(booking, reason) { result ->
+                            cancelButton.isEnabled = true
+                            when (result) {
+                                is SaveResult.Success -> {
+                                    Toast.makeText(context, "Booking cancelled", Toast.LENGTH_SHORT).show()
+                                    confirmation.dismiss()
+                                    dialog.dismiss()
+                                }
+                                is SaveResult.Conflict ->
+                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                is SaveResult.Error ->
+                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                            }
+                        }
                     }
                 }
                 confirmation.show()
