@@ -5,6 +5,7 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.example.bookingregister.booking.domain.BookingStatus
 import com.example.bookingregister.booking.domain.BookingPricingStatus
+import com.example.bookingregister.booking.domain.CancellationSettlementStatus
 
 @Entity(
     tableName = "bookings",
@@ -63,6 +64,13 @@ data class BookingEntity(
     val cancelledAt: Long? = null,
     val cancelledByUid: String? = null,
     val cancellationReason: String? = null,
+    val cancellationSettlementStatus: String = CancellationSettlementStatus.NOT_APPLICABLE,
+    val cancellationSettlementOutcome: String? = null,
+    val cancellationApprovedRefundAmount: Double = 0.0,
+    val cancellationFeeAmount: Double = 0.0,
+    val cancellationRefundBaselineAmount: Double = 0.0,
+    val cancellationDecisionAt: Long? = null,
+    val cancellationDecisionByUid: String? = null,
     val notes: String? = null,
 
     val updatedAt: Long = System.currentTimeMillis(),

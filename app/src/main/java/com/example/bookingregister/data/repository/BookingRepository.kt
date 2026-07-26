@@ -25,6 +25,10 @@ import com.example.bookingregister.booking.domain.BookingPropertyPolicy
 import com.example.bookingregister.booking.domain.BookingChangeSet
 import com.example.bookingregister.booking.domain.DerivedBookingCachePolicy
 import com.example.bookingregister.booking.domain.CheckoutBalancePolicy
+import com.example.bookingregister.booking.domain.CancellationRequest
+import com.example.bookingregister.booking.domain.CancellationSettlementPolicy
+import com.example.bookingregister.booking.domain.CancellationSettlementStatus
+import com.example.bookingregister.booking.domain.DirectCancellationChoice
 import com.example.bookingregister.data.AppDatabase
 import com.example.bookingregister.data.SyncState
 import com.example.bookingregister.data.entities.BookingAccountingChargeEntity
@@ -520,8 +524,34 @@ class BookingRepository(
         if (amount <= 0.0) return SaveResult.Error("Enter a valid amount")
         val now = System.currentTimeMillis()
         val result = db.withTransaction {
-        val currentBooking = bookingDao.getByRemoteId(booking.remoteId)
+            val currentBooking = bookingDao.getByRemoteId(booking.remoteId)
                 ?: return@withTransaction SaveResult.Error("Booking not found")
+            if (currentBooking.bookingStatus == BookingStatus.CANCELLED) {
+                when (paymentType) {
+                    BookingPaymentType.PAYMENT,
+                    BookingPaymentType.ADVANCE ->
+                        return@withTransaction SaveResult.Error(
+                            "Payments cannot be added to a cancelled booking. Use its cancellation settlement."
+                        )
+                    BookingPaymentType.REFUND -> {
+                        if (currentBooking.cancellationSettlementStatus != CancellationSettlementStatus.DECIDED) {
+                            return@withTransaction SaveResult.Error(
+                                "Decide the Direct Booking cancellation settlement before recording a refund."
+                            )
+                        }
+                        val refundDue = CancellationSettlementPolicy.refundDue(
+                            bookingApprovedAmount = currentBooking.cancellationApprovedRefundAmount,
+                            refundBaselineAmount = currentBooking.cancellationRefundBaselineAmount,
+                            payments = bookingPaymentDao.getPaymentsForBooking(hotelRemoteId, currentBooking.remoteId)
+                        )
+                        if (amount > refundDue + 0.001) {
+                            return@withTransaction SaveResult.Error(
+                                "Refund exceeds the approved cancellation refund of ${formatAmount(refundDue)}."
+                            )
+                        }
+                    }
+                }
+            }
             val requestedCategory = BookingPaymentCategory.normalize(paymentCategory)
             if (!BookingPricingStatus.canTakeStayPayment(currentBooking.pricingStatus) &&
                 paymentType in setOf(BookingPaymentType.PAYMENT, BookingPaymentType.ADVANCE) &&
@@ -605,6 +635,9 @@ class BookingRepository(
     suspend fun checkInBooking(booking: BookingEntity, note: String? = null): SaveResult {
         val current = bookingDao.getByRemoteId(booking.remoteId)
             ?: return SaveResult.Error("Booking not found")
+        if (current.bookingStatus == BookingStatus.CANCELLED) {
+            return SaveResult.Error("A cancelled booking cannot be checked in.")
+        }
         if (current.bookingStatus == BookingStatus.CHECKED_IN) return SaveResult.Success()
         if (current.bookingStatus == BookingStatus.CHECKED_OUT) {
             return SaveResult.Error("Booking is already checked out. Reopen it first.")
@@ -831,6 +864,9 @@ class BookingRepository(
         if (amount <= 0.0) return SaveResult.Error("Enter a valid amount")
         val current = bookingDao.getByRemoteId(booking.remoteId)
             ?: return SaveResult.Error("Booking not found")
+        if (current.bookingStatus == BookingStatus.CANCELLED) {
+            return SaveResult.Error("New charges cannot be added to a cancelled booking.")
+        }
         val cleanDescription = description.trim()
         if (cleanDescription.isEmpty()) return SaveResult.Error("Enter a description")
 
@@ -975,6 +1011,7 @@ class BookingRepository(
         val openBookings = bookingDao.getBookings(hotelRemoteId)
             .filter { booking ->
                 !booking.isDeleted &&
+                        booking.bookingStatus != BookingStatus.CANCELLED &&
                         booking.sourceType == BookingSourceType.OTA &&
                         booking.balance > 0.0 &&
                         if (!sourceRemoteId.isNullOrBlank()) {
@@ -1011,6 +1048,9 @@ class BookingRepository(
     suspend fun generateFinalBookingBill(booking: BookingEntity): SaveResult {
         val current = bookingDao.getByRemoteId(booking.remoteId)
             ?: return SaveResult.Error("Booking not found")
+        if (current.bookingStatus == BookingStatus.CANCELLED) {
+            return SaveResult.Error("A final bill cannot be generated for a cancelled booking.")
+        }
         if (!BookingPricingStatus.canGenerateRoomBill(current.pricingStatus)) {
             return SaveResult.Error("Enter and save the room rate before generating the final bill")
         }
@@ -1416,10 +1456,10 @@ class BookingRepository(
 
     private fun roundMoney(amount: Double): Double = round(amount * 100.0) / 100.0
 
-    suspend fun cancelBooking(booking: BookingEntity, reason: String): SaveResult {
+    suspend fun cancelBooking(booking: BookingEntity, request: CancellationRequest): SaveResult {
         var localCommitSucceeded = false
         return try {
-            val cleanReason = reason.trim()
+            val cleanReason = request.reason.trim()
             if (cleanReason.isBlank()) return SaveResult.Error("Cancellation reason is required.")
             val finalBill = foodBillDao.getFinalBillForBooking(
                 hotelRemoteId = hotelRemoteId,
@@ -1428,24 +1468,55 @@ class BookingRepository(
             if (finalBill != null && !finalBill.isDeleted) {
                 return SaveResult.Error("A billed booking cannot be cancelled; issue corrections/refunds instead.")
             }
-            val cancelled = booking.copy(
-                bookingStatus = BookingStatus.CANCELLED,
-                cancelledAt = System.currentTimeMillis(),
-                cancellationReason = cleanReason,
-                isDeleted = false,
-                updatedAt = System.currentTimeMillis(),
-                syncState = SyncState.PENDING,
-                lastSyncError = null,
-                baseRevision = booking.baseRevision.takeIf { it > 0 } ?: booking.revision
-            ).withCalculatedPayment()
-            db.withTransaction {
+            val localResult = db.withTransaction {
+                val current = bookingDao.getByRemoteId(booking.remoteId)
+                    ?: return@withTransaction SaveResult.Error("Booking not found")
+                if (current.bookingStatus == BookingStatus.CANCELLED) {
+                    return@withTransaction SaveResult.Success(
+                        syncPending = current.syncState != SyncState.SYNCED
+                    )
+                }
+                val payments = bookingPaymentDao.getPaymentsForBooking(hotelRemoteId, current.remoteId)
+                val decision = CancellationSettlementPolicy.decide(
+                    sourceType = current.sourceType,
+                    payments = payments,
+                    choice = request.directChoice,
+                    partialRefundAmount = request.partialRefundAmount
+                ).getOrElse { error ->
+                    return@withTransaction SaveResult.Error(
+                        error.message ?: "Invalid cancellation settlement."
+                    )
+                }
+                val now = System.currentTimeMillis()
+                val cancelled = current.copy(
+                    bookingStatus = BookingStatus.CANCELLED,
+                    cancelledAt = now,
+                    cancellationReason = cleanReason,
+                    cancellationSettlementStatus = decision.status,
+                    cancellationSettlementOutcome = decision.outcome,
+                    cancellationApprovedRefundAmount = decision.approvedRefundAmount,
+                    cancellationFeeAmount = decision.cancellationFeeAmount,
+                    cancellationRefundBaselineAmount = decision.refundBaselineAmount,
+                    cancellationDecisionAt = now.takeIf {
+                        decision.status == CancellationSettlementStatus.DECIDED ||
+                            decision.status == CancellationSettlementStatus.NOT_REQUIRED
+                    },
+                    cancellationDecisionByUid = null,
+                    isDeleted = false,
+                    updatedAt = now,
+                    syncState = SyncState.PENDING,
+                    lastSyncError = null,
+                    baseRevision = current.baseRevision.takeIf { it > 0 } ?: current.revision
+                ).withCalculatedPayment()
                 bookingDao.upsert(cancelled)
-                val lines = bookingFinancialLineDao.getAllLinesForBooking(hotelRemoteId, booking.remoteId)
-                enqueueBookingOutbox(booking, cancelled, lines)
+                val lines = bookingFinancialLineDao.getAllLinesForBooking(hotelRemoteId, current.remoteId)
+                enqueueBookingOutbox(current, cancelled, lines)
+                SaveResult.Success(syncPending = true)
             }
+            if (localResult !is SaveResult.Success) return localResult
             localCommitSucceeded = true
             enqueueBackgroundSync()
-            SaveResult.Success(syncPending = true)
+            localResult
         } catch (error: Exception) {
             if (error is CancellationException) throw error
             Log.e("BookingRepository", "Could not cancel booking ${booking.remoteId}", error)
@@ -1454,6 +1525,66 @@ class BookingRepository(
             } else {
                 SaveResult.Error("Could not cancel booking. No changes were made.")
             }
+        }
+    }
+
+    suspend fun decideDirectCancellationSettlement(
+        booking: BookingEntity,
+        choice: DirectCancellationChoice,
+        partialRefundAmount: Double? = null
+    ): SaveResult {
+        if (choice == DirectCancellationChoice.DECIDE_LATER) {
+            return SaveResult.Error("Select a final cancellation outcome.")
+        }
+        return try {
+            val result = db.withTransaction {
+                val current = bookingDao.getByRemoteId(booking.remoteId)
+                    ?: return@withTransaction SaveResult.Error("Booking not found")
+                if (current.bookingStatus != BookingStatus.CANCELLED) {
+                    return@withTransaction SaveResult.Error("Only a cancelled booking can be settled.")
+                }
+                if (current.sourceType == BookingSourceType.OTA) {
+                    return@withTransaction SaveResult.Error("OTA cancellation settlement is not enabled in this step.")
+                }
+                if (current.cancellationSettlementStatus != CancellationSettlementStatus.PENDING) {
+                    return@withTransaction SaveResult.Error("This cancellation decision is already recorded.")
+                }
+                val payments = bookingPaymentDao.getPaymentsForBooking(hotelRemoteId, current.remoteId)
+                val decision = CancellationSettlementPolicy.decide(
+                    sourceType = current.sourceType,
+                    payments = payments,
+                    choice = choice,
+                    partialRefundAmount = partialRefundAmount
+                ).getOrElse { error ->
+                    return@withTransaction SaveResult.Error(
+                        error.message ?: "Invalid cancellation settlement."
+                    )
+                }
+                val now = System.currentTimeMillis()
+                val decided = current.copy(
+                    cancellationSettlementStatus = decision.status,
+                    cancellationSettlementOutcome = decision.outcome,
+                    cancellationApprovedRefundAmount = decision.approvedRefundAmount,
+                    cancellationFeeAmount = decision.cancellationFeeAmount,
+                    cancellationRefundBaselineAmount = decision.refundBaselineAmount,
+                    cancellationDecisionAt = now,
+                    cancellationDecisionByUid = null,
+                    updatedAt = now,
+                    syncState = SyncState.PENDING,
+                    lastSyncError = null,
+                    baseRevision = current.baseRevision.takeIf { it > 0 } ?: current.revision
+                )
+                bookingDao.upsert(decided)
+                val lines = bookingFinancialLineDao.getAllLinesForBooking(hotelRemoteId, current.remoteId)
+                enqueueBookingOutbox(current, decided, lines)
+                SaveResult.Success(syncPending = true)
+            }
+            if (result is SaveResult.Success) enqueueBackgroundSync()
+            result
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            Log.e("BookingRepository", "Could not decide cancellation settlement ${booking.remoteId}", error)
+            SaveResult.Error("Could not save the cancellation decision. No changes were made.")
         }
     }
 

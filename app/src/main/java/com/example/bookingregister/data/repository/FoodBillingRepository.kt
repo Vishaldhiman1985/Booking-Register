@@ -27,6 +27,7 @@ import com.example.bookingregister.data.sync.CloudSyncManager
 import com.example.bookingregister.data.sync.FoodRealtimeSyncService
 import com.example.bookingregister.data.sync.SyncWorkScheduler
 import com.example.bookingregister.tax.domain.FoodGstCalculator
+import com.example.bookingregister.booking.domain.BookingStatus
 
 class FoodBillingRepository(
     context: Context,
@@ -388,6 +389,14 @@ class FoodBillingRepository(
         status: String,
         items: List<FoodOrderItemEntity>
     ): SaveResult {
+        val linkedBookingId = booking?.remoteId ?: existing?.bookingRemoteId
+        if (!linkedBookingId.isNullOrBlank()) {
+            val currentBooking = bookingDao.getByRemoteId(linkedBookingId)
+                ?: return SaveResult.Error("Booking not found")
+            if (currentBooking.bookingStatus == BookingStatus.CANCELLED) {
+                return SaveResult.Error("Food cannot be added to a cancelled booking.")
+            }
+        }
         val cleanGuest = guestName.trim().ifEmpty { room?.roomName ?: "Non Staying Guest" }
         val activeItems = items.filter { !it.isDeleted && !it.isCancelled && it.quantity > 0 }
 

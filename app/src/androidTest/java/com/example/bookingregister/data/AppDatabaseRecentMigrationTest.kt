@@ -19,7 +19,7 @@ class AppDatabaseRecentMigrationTest {
     )
 
     @Test
-    fun version35MigratesTo39WithoutDataDestruction() {
+    fun version35MigratesTo40WithoutDataDestruction() {
         migrateEmptyDatabaseFrom(35)
     }
 
@@ -38,7 +38,7 @@ class AppDatabaseRecentMigrationTest {
             close()
         }
 
-        helper.runMigrationsAndValidate(name, 39, true, *AppDatabase.allMigrations()).use { db ->
+        helper.runMigrationsAndValidate(name, 40, true, *AppDatabase.allMigrations()).use { db ->
             db.query(
                 "SELECT operationId, changeSetJson, attemptCount, lastError FROM booking_sync_outbox"
             ).use { cursor ->
@@ -60,7 +60,7 @@ class AppDatabaseRecentMigrationTest {
             close()
         }
 
-        helper.runMigrationsAndValidate(name, 39, true, *AppDatabase.allMigrations()).use { db ->
+        helper.runMigrationsAndValidate(name, 40, true, *AppDatabase.allMigrations()).use { db ->
             db.query(
                 """
                 SELECT remoteId FROM booking_financial_lines
@@ -82,14 +82,47 @@ class AppDatabaseRecentMigrationTest {
     }
 
     @Test
-    fun version38MigratesTo39WithoutSchemaChanges() {
+    fun version38MigratesTo40WithoutDataDestruction() {
         migrateEmptyDatabaseFrom(38)
+    }
+
+    @Test
+    fun version39ClassifiesExistingCancellationsWithoutGuessingNoRefund() {
+        val name = databaseName("v39_cancellation")
+        helper.createDatabase(name, 39).apply {
+            insertBooking("active", "RESERVED", "DIRECT")
+            insertBooking("unpaid", "CANCELLED", "DIRECT")
+            insertBooking("paid", "CANCELLED", "DIRECT")
+            insertBooking("ota", "CANCELLED", "OTA")
+            insertPayment("paid-advance", "paid", "ADVANCE", 200.0)
+            insertPayment("paid-old-refund", "paid", "REFUND", 25.0)
+            close()
+        }
+
+        helper.runMigrationsAndValidate(name, 40, true, *AppDatabase.allMigrations()).use { db ->
+            val statuses = mutableMapOf<String, Pair<String, Double>>()
+            db.query(
+                """
+                SELECT remoteId, cancellationSettlementStatus, cancellationRefundBaselineAmount
+                FROM bookings
+                """.trimIndent()
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    statuses[cursor.getString(0)] = cursor.getString(1) to cursor.getDouble(2)
+                }
+            }
+            assertEquals("NOT_APPLICABLE", statuses.getValue("active").first)
+            assertEquals("NOT_REQUIRED", statuses.getValue("unpaid").first)
+            assertEquals("PENDING", statuses.getValue("paid").first)
+            assertEquals(25.0, statuses.getValue("paid").second, 0.001)
+            assertEquals("PENDING", statuses.getValue("ota").first)
+        }
     }
 
     private fun migrateEmptyDatabaseFrom(version: Int) {
         val name = databaseName("v$version")
         helper.createDatabase(name, version).close()
-        helper.runMigrationsAndValidate(name, 39, true, *AppDatabase.allMigrations()).close()
+        helper.runMigrationsAndValidate(name, 40, true, *AppDatabase.allMigrations()).close()
     }
 
     private fun SupportSQLiteDatabase.insertFinancialLine(
@@ -136,6 +169,75 @@ class AppDatabaseRecentMigrationTest {
             "INSERT INTO booking_financial_lines ($names) VALUES ($placeholders)",
             values.toTypedArray()
         )
+    }
+
+    private fun SupportSQLiteDatabase.insertBooking(
+        remoteId: String,
+        status: String,
+        sourceType: String
+    ) {
+        insertRow(
+            table = "bookings",
+            values = mapOf(
+                "remoteId" to remoteId,
+                "bookingUuid" to "uuid-$remoteId",
+                "hotelRemoteId" to "hotel-1",
+                "guestName" to "Guest $remoteId",
+                "checkInMillis" to 1_000L,
+                "checkOutMillis" to 2_000L,
+                "roomRemoteIds" to "[]",
+                "bookingStatus" to status,
+                "sourceType" to sourceType,
+                "isDeleted" to 0
+            )
+        )
+    }
+
+    private fun SupportSQLiteDatabase.insertPayment(
+        remoteId: String,
+        bookingRemoteId: String,
+        type: String,
+        amount: Double
+    ) {
+        insertRow(
+            table = "booking_payments",
+            values = mapOf(
+                "remoteId" to remoteId,
+                "hotelRemoteId" to "hotel-1",
+                "bookingRemoteId" to bookingRemoteId,
+                "paymentType" to type,
+                "amount" to amount,
+                "isDeleted" to 0
+            )
+        )
+    }
+
+    private fun SupportSQLiteDatabase.insertRow(table: String, values: Map<String, Any?>) {
+        val columns = mutableListOf<Column>()
+        query("PRAGMA table_info($table)").use { cursor ->
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            val typeIndex = cursor.getColumnIndexOrThrow("type")
+            val notNullIndex = cursor.getColumnIndexOrThrow("notnull")
+            while (cursor.moveToNext()) {
+                columns += Column(
+                    name = cursor.getString(nameIndex),
+                    type = cursor.getString(typeIndex),
+                    notNull = cursor.getInt(notNullIndex) == 1
+                )
+            }
+        }
+        val rowValues = columns.map { column ->
+            values[column.name] ?: when {
+                column.name == "localId" -> null
+                !column.notNull -> null
+                column.type.equals("TEXT", ignoreCase = true) -> ""
+                column.type.equals("REAL", ignoreCase = true) -> 0.0
+                else -> 0L
+            }
+        }
+        val names = columns.joinToString(",") { "`${it.name}`" }
+        val placeholders = columns.joinToString(",") { "?" }
+        execSQL("INSERT INTO $table ($names) VALUES ($placeholders)", rowValues.toTypedArray())
     }
 
     private fun databaseName(prefix: String): String = "${prefix}_${System.nanoTime()}.db"

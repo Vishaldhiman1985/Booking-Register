@@ -1234,9 +1234,9 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                     onResult(repository.saveBookingWithFinancialLines(booking, lines))
                 }
             },
-            onBookingDeleted = { booking, reason, onResult ->
+            onBookingDeleted = { booking, request, onResult ->
                 lifecycleScope.launch {
-                    onResult(repository.cancelBooking(booking, reason))
+                    onResult(repository.cancelBooking(booking, request))
                 }
             },
             onPaymentSaved = { booking, amount, paymentType, paymentCategory, note, onResult ->

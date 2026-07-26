@@ -65,7 +65,7 @@ import com.example.bookingregister.data.entities.RoomGstSlabEntity
         RoomGstSlabEntity::class,
         BookingSyncOutboxEntity::class,
     ],
-    version = 39,
+    version = 40,
     exportSchema = true
 )
 @TypeConverters(AppConverters::class)
@@ -448,6 +448,63 @@ abstract class AppDatabase : RoomDatabase() {
         private val MIGRATION_38_39 = object : Migration(38, 39) {
             override fun migrate(database: SupportSQLiteDatabase) = Unit
         }
+        private val MIGRATION_39_40 = object : Migration(39, 40) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                ensureColumn(
+                    database,
+                    "bookings",
+                    "cancellationSettlementStatus",
+                    "TEXT NOT NULL DEFAULT 'NOT_APPLICABLE'"
+                )
+                ensureColumn(database, "bookings", "cancellationSettlementOutcome", "TEXT")
+                ensureColumn(
+                    database,
+                    "bookings",
+                    "cancellationApprovedRefundAmount",
+                    "REAL NOT NULL DEFAULT 0.0"
+                )
+                ensureColumn(
+                    database,
+                    "bookings",
+                    "cancellationFeeAmount",
+                    "REAL NOT NULL DEFAULT 0.0"
+                )
+                ensureColumn(
+                    database,
+                    "bookings",
+                    "cancellationRefundBaselineAmount",
+                    "REAL NOT NULL DEFAULT 0.0"
+                )
+                ensureColumn(database, "bookings", "cancellationDecisionAt", "INTEGER")
+                ensureColumn(database, "bookings", "cancellationDecisionByUid", "TEXT")
+
+                // Existing cancellations must never be silently interpreted as "no refund".
+                // OTA cancellations and any cancellation with payment history require review.
+                database.execSQL(
+                    """
+                    UPDATE bookings
+                    SET cancellationSettlementStatus = CASE
+                        WHEN bookingStatus != 'CANCELLED' THEN 'NOT_APPLICABLE'
+                        WHEN sourceType = 'OTA' THEN 'PENDING'
+                        WHEN EXISTS (
+                            SELECT 1 FROM booking_payments p
+                            WHERE p.bookingRemoteId = bookings.remoteId
+                              AND p.hotelRemoteId = bookings.hotelRemoteId
+                              AND p.isDeleted = 0
+                        ) THEN 'PENDING'
+                        ELSE 'NOT_REQUIRED'
+                    END,
+                    cancellationRefundBaselineAmount = COALESCE((
+                        SELECT SUM(p.amount) FROM booking_payments p
+                        WHERE p.bookingRemoteId = bookings.remoteId
+                          AND p.hotelRemoteId = bookings.hotelRemoteId
+                          AND p.isDeleted = 0
+                          AND p.paymentType = 'REFUND'
+                    ), 0.0)
+                    """.trimIndent()
+                )
+            }
+        }
         fun allMigrations(): Array<Migration> = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -486,7 +543,8 @@ abstract class AppDatabase : RoomDatabase() {
             MIGRATION_35_36,
             MIGRATION_36_37,
             MIGRATION_37_38,
-            MIGRATION_38_39
+            MIGRATION_38_39,
+            MIGRATION_39_40
         )
 
         /**

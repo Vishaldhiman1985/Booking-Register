@@ -57,6 +57,9 @@ import com.example.bookingregister.booking.domain.BookingPricingStatus
 import com.example.bookingregister.booking.domain.BookingPropertyPolicy
 import com.example.bookingregister.booking.domain.BookingSavePreparation
 import com.example.bookingregister.booking.domain.BookingPaymentSourcePolicy
+import com.example.bookingregister.booking.domain.CancellationRequest
+import com.example.bookingregister.booking.domain.CancellationSettlementPolicy
+import com.example.bookingregister.booking.domain.DirectCancellationChoice
 import com.example.bookingregister.source.domain.SourceSettlementCalculator
 import com.example.bookingregister.tax.domain.HotelGstCalculator
 import com.example.bookingregister.ui.food.FoodBillingActivity
@@ -88,7 +91,7 @@ class BookingDialog(
     private val canEditBooking: Boolean = true,
     private val roomRateLocked: Boolean = false,
     private val onBookingSaved: (BookingEntity, List<BookingFinancialLineEntity>, (SaveResult) -> Unit) -> Unit,
-    private val onBookingDeleted: (BookingEntity, String, (SaveResult) -> Unit) -> Unit,
+    private val onBookingDeleted: (BookingEntity, CancellationRequest, (SaveResult) -> Unit) -> Unit,
     private val onPaymentSaved: (BookingEntity, Double, String, String, String?, (SaveResult) -> Unit) -> Unit,
     private val onAccountingChargeSaved: (BookingEntity, String, Double, String, String?, String?, (SaveResult) -> Unit) -> Unit,
     private val onFinalBillGenerated: (BookingEntity, (SaveResult) -> Unit) -> Unit
@@ -1177,14 +1180,73 @@ class BookingDialog(
 
     private fun confirmCancelBooking() {
         val booking = existingBooking ?: return
+        val netPaid = CancellationSettlementPolicy.netPaid(existingPaymentEntries)
         val reasonInput = EditText(context).apply {
             hint = "Cancellation reason (required)"
             minLines = 2
         }
+        val choiceGroup = RadioGroup(context).apply {
+            orientation = RadioGroup.VERTICAL
+        }
+        val decideLater = RadioButton(context).apply {
+            id = View.generateViewId()
+            text = "Decide refund later"
+            isChecked = true
+        }
+        val noRefund = RadioButton(context).apply {
+            id = View.generateViewId()
+            text = "Cancel without refund"
+        }
+        val partialRefund = RadioButton(context).apply {
+            id = View.generateViewId()
+            text = "Approve partial refund"
+        }
+        val fullRefund = RadioButton(context).apply {
+            id = View.generateViewId()
+            text = "Approve full refund (${amountText(netPaid)})"
+        }
+        val partialAmountInput = EditText(context).apply {
+            hint = "Approved partial refund amount"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            visibility = View.GONE
+        }
+        val isOta = booking.sourceType == BookingSourceType.OTA
+        val needsDecision = !isOta && netPaid > 0.001
+        if (needsDecision) {
+            choiceGroup.addView(decideLater)
+            choiceGroup.addView(noRefund)
+            choiceGroup.addView(partialRefund)
+            choiceGroup.addView(fullRefund)
+            choiceGroup.setOnCheckedChangeListener { _, checkedId ->
+                partialAmountInput.visibility =
+                    if (checkedId == partialRefund.id) View.VISIBLE else View.GONE
+            }
+        }
+        val settlementExplanation = TextView(context).apply {
+            text = when {
+                isOta ->
+                    "The rooms will be released now. OTA refund settlement will remain pending for later review."
+                netPaid <= 0.001 ->
+                    "No payment has been received, so no refund settlement is required."
+                else ->
+                    "Paid: ${amountText(netPaid)}. An approved refund is recorded separately through Add Refund; payment history is never edited."
+            }
+            setPadding(0, 12, 0, 12)
+        }
+        val content = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 0, 48, 0)
+            addView(settlementExplanation)
+            if (needsDecision) {
+                addView(choiceGroup)
+                addView(partialAmountInput)
+            }
+            addView(reasonInput)
+        }
         AlertDialog.Builder(context)
             .setTitle("Cancel Booking")
             .setMessage("Cancel this booking and release these rooms on all devices?")
-            .setView(reasonInput)
+            .setView(content)
             .setPositiveButton("Cancel Booking", null)
             .setNegativeButton("Keep Booking", null)
             .create()
@@ -1196,9 +1258,31 @@ class BookingDialog(
                             reasonInput.error = "Cancellation reason is required"
                             return@setOnClickListener
                         }
+                        val choice = when {
+                            !needsDecision -> DirectCancellationChoice.DECIDE_LATER
+                            choiceGroup.checkedRadioButtonId == noRefund.id ->
+                                DirectCancellationChoice.NO_REFUND
+                            choiceGroup.checkedRadioButtonId == partialRefund.id ->
+                                DirectCancellationChoice.PARTIAL_REFUND
+                            choiceGroup.checkedRadioButtonId == fullRefund.id ->
+                                DirectCancellationChoice.FULL_REFUND
+                            else -> DirectCancellationChoice.DECIDE_LATER
+                        }
+                        val partialAmount = if (choice == DirectCancellationChoice.PARTIAL_REFUND) {
+                            partialAmountInput.text.toString().toDoubleOrNull()
+                        } else null
+                        if (choice == DirectCancellationChoice.PARTIAL_REFUND &&
+                            (partialAmount == null || partialAmount <= 0.0 || partialAmount >= netPaid)
+                        ) {
+                            partialAmountInput.error = "Enter an amount above zero and below ${amountText(netPaid)}"
+                            return@setOnClickListener
+                        }
                         val cancelButton = confirmation.getButton(AlertDialog.BUTTON_POSITIVE)
                         cancelButton.isEnabled = false
-                        onBookingDeleted(booking, reason) { result ->
+                        onBookingDeleted(
+                            booking,
+                            CancellationRequest(reason, choice, partialAmount)
+                        ) { result ->
                             cancelButton.isEnabled = true
                             when (result) {
                                 is SaveResult.Success -> {

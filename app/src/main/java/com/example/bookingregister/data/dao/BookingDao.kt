@@ -158,6 +158,7 @@ interface BookingDao {
         SELECT COALESCE(SUM(balance), 0.0) FROM bookings
         WHERE hotelRemoteId = :hotelRemoteId
         AND isDeleted = 0
+        AND bookingStatus != 'CANCELLED'
         AND balance > 0
     """)
     fun observeOutstandingBalance(hotelRemoteId: String): LiveData<Double>

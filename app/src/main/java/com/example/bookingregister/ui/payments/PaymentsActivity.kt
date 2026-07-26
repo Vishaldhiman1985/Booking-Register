@@ -21,6 +21,11 @@ import com.example.bookingregister.data.entities.BookingPaymentEntity
 import com.example.bookingregister.data.entities.BookingPaymentType
 import com.example.bookingregister.data.entities.BookingSourceType
 import com.example.bookingregister.data.entities.RoomEntity
+import com.example.bookingregister.booking.domain.BookingStatus
+import com.example.bookingregister.booking.domain.CancellationSettlementOutcome
+import com.example.bookingregister.booking.domain.CancellationSettlementPolicy
+import com.example.bookingregister.booking.domain.CancellationSettlementStatus
+import com.example.bookingregister.booking.domain.DirectCancellationChoice
 import com.google.android.material.button.MaterialButton
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -68,6 +73,7 @@ class PaymentsActivity : AppCompatActivity() {
         repository.observePayments().observe(this) { updated ->
             payments.clear()
             payments.addAll(updated)
+            renderPayments()
         }
     }
 
@@ -172,10 +178,25 @@ class PaymentsActivity : AppCompatActivity() {
 
     private fun renderPayments() {
         if (!::listContainer.isInitialized) return
-        val activeBookings = bookings.filter { !it.isDeleted }
+        val activeBookings = bookings.filter {
+            !it.isDeleted && it.bookingStatus != BookingStatus.CANCELLED
+        }
         val openBookings = activeBookings.filter { it.balance > 0.0 }
         val otaOpenBookings = openBookings.filter { it.sourceType == BookingSourceType.OTA }
         val guestOpenBookings = openBookings.filter { it.sourceType != BookingSourceType.OTA }
+        val directCancellationWork = bookings.filter { booking ->
+            !booking.isDeleted &&
+                booking.bookingStatus == BookingStatus.CANCELLED &&
+                booking.sourceType != BookingSourceType.OTA &&
+                (
+                    booking.cancellationSettlementStatus == CancellationSettlementStatus.PENDING ||
+                        CancellationSettlementPolicy.refundDue(
+                            booking.cancellationApprovedRefundAmount,
+                            booking.cancellationRefundBaselineAmount,
+                            payments.filter { it.bookingRemoteId == booking.remoteId }
+                        ) > 0.001
+                    )
+        }
 
         totalBalanceValue.text = formatMoney(openBookings.sumOf { it.balance })
         totalReceivableValue.text = formatMoney(activeBookings.sumOf { it.roomRevenue.takeIf { amount -> amount > 0.0 } ?: it.receivable })
@@ -201,7 +222,7 @@ class PaymentsActivity : AppCompatActivity() {
                 .forEach { booking -> listContainer.addView(folioCard(booking)) }
         }
 
-        if (openBookings.isEmpty()) {
+        if (openBookings.isEmpty() && directCancellationWork.isEmpty()) {
             listContainer.addView(TextView(this).apply {
                 text = "No pending receivables."
                 textSize = 15f
@@ -209,6 +230,149 @@ class PaymentsActivity : AppCompatActivity() {
                 setPadding(0, dp(14), 0, dp(14))
             })
         }
+
+        if (directCancellationWork.isNotEmpty()) {
+            listContainer.addView(sectionTitle("Direct Booking Cancellation Settlements"))
+            directCancellationWork
+                .sortedByDescending { it.cancelledAt ?: it.updatedAt }
+                .forEach { booking -> listContainer.addView(cancellationSettlementCard(booking)) }
+        }
+    }
+
+    private fun cancellationSettlementCard(booking: BookingEntity): View {
+        val bookingPayments = payments.filter {
+            !it.isDeleted && it.bookingRemoteId == booking.remoteId
+        }
+        val netPaid = CancellationSettlementPolicy.netPaid(bookingPayments)
+        val refundDue = CancellationSettlementPolicy.refundDue(
+            booking.cancellationApprovedRefundAmount,
+            booking.cancellationRefundBaselineAmount,
+            bookingPayments
+        )
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = roundedDrawable(Color.parseColor("#FFF8E1"), Color.parseColor("#E8C96A"))
+
+            addView(TextView(this@PaymentsActivity).apply {
+                text = booking.guestName.ifBlank { "Guest" }
+                textSize = 18f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setTextColor(Color.rgb(25, 25, 25))
+            })
+            addView(TextView(this@PaymentsActivity).apply {
+                text = when (booking.cancellationSettlementStatus) {
+                    CancellationSettlementStatus.PENDING ->
+                        "Decision pending • Net paid ${formatMoney(netPaid)}"
+                    else ->
+                        "${booking.cancellationSettlementOutcome.displayCancellationOutcome()} • " +
+                            "Approved ${formatMoney(booking.cancellationApprovedRefundAmount)} • " +
+                            "Refund due ${formatMoney(refundDue)}"
+                }
+                textSize = 14f
+                setTextColor(Color.rgb(70, 60, 30))
+                setPadding(0, dp(5), 0, dp(8))
+            })
+            addView(MaterialButton(this@PaymentsActivity).apply {
+                text = if (booking.cancellationSettlementStatus == CancellationSettlementStatus.PENDING) {
+                    "Decide Settlement"
+                } else {
+                    "Record Approved Refund"
+                }
+                isAllCaps = false
+                setOnClickListener {
+                    if (booking.cancellationSettlementStatus == CancellationSettlementStatus.PENDING) {
+                        showCancellationDecisionDialog(booking, netPaid)
+                    } else {
+                        showPaymentEntryDialog(
+                            booking,
+                            BookingPaymentType.REFUND,
+                            preferredRefundAmount = refundDue
+                        )
+                    }
+                }
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44)))
+        }.also { card ->
+            card.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, 0, 0, dp(10)) }
+        }
+    }
+
+    private fun showCancellationDecisionDialog(booking: BookingEntity, netPaid: Double) {
+        val options = arrayOf(
+            "Cancel without refund",
+            "Approve partial refund",
+            "Approve full refund (${formatMoney(netPaid)})"
+        )
+        var selected = 0
+        val partialInput = EditText(this).apply {
+            hint = "Partial refund amount"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            visibility = View.GONE
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), 0, dp(20), 0)
+            addView(TextView(this@PaymentsActivity).apply {
+                text = "Paid after previous refunds: ${formatMoney(netPaid)}"
+                setPadding(0, 0, 0, dp(8))
+            })
+            addView(partialInput)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Cancellation Settlement")
+            .setSingleChoiceItems(options, selected) { _, which ->
+                selected = which
+                partialInput.visibility = if (which == 1) View.VISIBLE else View.GONE
+            }
+            .setView(container)
+            .setPositiveButton("Record Decision", null)
+            .setNegativeButton("Keep Pending", null)
+            .create()
+            .also { dialog ->
+                dialog.setOnShowListener {
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                        val choice = when (selected) {
+                            1 -> DirectCancellationChoice.PARTIAL_REFUND
+                            2 -> DirectCancellationChoice.FULL_REFUND
+                            else -> DirectCancellationChoice.NO_REFUND
+                        }
+                        val partialAmount = partialInput.text.toString().toDoubleOrNull()
+                        if (choice == DirectCancellationChoice.PARTIAL_REFUND &&
+                            (partialAmount == null || partialAmount <= 0.0 || partialAmount >= netPaid)
+                        ) {
+                            partialInput.error = "Enter an amount above zero and below ${formatMoney(netPaid)}"
+                            return@setOnClickListener
+                        }
+                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
+                        lifecycleScope.launch {
+                            when (val result = repository.decideDirectCancellationSettlement(
+                                booking,
+                                choice,
+                                partialAmount
+                            )) {
+                                is SaveResult.Success -> {
+                                    Toast.makeText(
+                                        this@PaymentsActivity,
+                                        "Cancellation decision recorded",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                    dialog.dismiss()
+                                }
+                                is SaveResult.Conflict ->
+                                    Toast.makeText(this@PaymentsActivity, result.message, Toast.LENGTH_LONG).show()
+                                is SaveResult.Error ->
+                                    Toast.makeText(this@PaymentsActivity, result.message, Toast.LENGTH_LONG).show()
+                            }
+                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
+                        }
+                    }
+                }
+                dialog.show()
+            }
     }
 
     private fun sourceCard(sourceRemoteId: String, sourceName: String, sourceBookings: List<BookingEntity>): View {
@@ -336,7 +500,11 @@ class PaymentsActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun showPaymentEntryDialog(booking: BookingEntity, paymentType: String) {
+    private fun showPaymentEntryDialog(
+        booking: BookingEntity,
+        paymentType: String,
+        preferredRefundAmount: Double? = null
+    ) {
         val refundablePayments = payments.filter {
             it.bookingRemoteId == booking.remoteId &&
                 !it.isDeleted &&
@@ -361,8 +529,19 @@ class PaymentsActivity : AppCompatActivity() {
             }
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
             setSingleLine(true)
+            val firstRefundableRemaining = refundablePayments.firstOrNull()?.let { original ->
+                val refunded = payments.filter {
+                    it.paymentType == BookingPaymentType.REFUND &&
+                        it.originalPaymentRemoteId == original.remoteId &&
+                        !it.isDeleted
+                }.sumOf { it.amount }
+                (original.amount - refunded).coerceAtLeast(0.0)
+            } ?: 0.0
             val defaultAmount = when (paymentType) {
-                BookingPaymentType.REFUND, BookingPaymentType.ADJUSTMENT -> (booking.paid - booking.receivable).coerceAtLeast(0.0)
+                BookingPaymentType.REFUND -> preferredRefundAmount
+                    ?.coerceAtMost(firstRefundableRemaining)
+                    ?: (booking.paid - booking.receivable).coerceAtLeast(0.0)
+                BookingPaymentType.ADJUSTMENT -> (booking.paid - booking.receivable).coerceAtLeast(0.0)
                 else -> booking.balance
             }
             setText(if (defaultAmount > 0.0) defaultAmount.roundToInt().toString() else "")
@@ -462,6 +641,13 @@ class PaymentsActivity : AppCompatActivity() {
             BookingPaymentType.ADJUSTMENT -> "Correction"
             else -> "Payment"
         }
+    }
+
+    private fun String?.displayCancellationOutcome(): String = when (this) {
+        CancellationSettlementOutcome.NO_REFUND -> "No refund"
+        CancellationSettlementOutcome.PARTIAL_REFUND -> "Partial refund"
+        CancellationSettlementOutcome.FULL_REFUND -> "Full refund"
+        else -> "Settlement decided"
     }
 
     private fun formatMoney(amount: Double): String {

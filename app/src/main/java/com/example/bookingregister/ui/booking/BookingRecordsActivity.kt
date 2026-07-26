@@ -16,6 +16,8 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.example.bookingregister.booking.domain.BookingStatus
+import com.example.bookingregister.booking.domain.CancellationSettlementOutcome
+import com.example.bookingregister.booking.domain.CancellationSettlementStatus
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.RoomEntity
 import com.example.bookingregister.data.repository.BookingRepository
@@ -297,6 +299,28 @@ class BookingRecordsActivity : AppCompatActivity() {
             if (booking.bookingStatus == BookingStatus.CANCELLED) {
                 addView(infoLine("Cancellation reason", booking.cancellationReason ?: "-"))
                 booking.cancelledAt?.let { addView(infoLine("Cancelled at", formatDate(it))) }
+                addView(
+                    infoLine(
+                        "Settlement",
+                        when (booking.cancellationSettlementStatus) {
+                            CancellationSettlementStatus.NOT_REQUIRED -> "No payment received"
+                            CancellationSettlementStatus.PENDING ->
+                                if (booking.sourceType == "OTA") "OTA decision pending" else "Decision pending"
+                            CancellationSettlementStatus.DECIDED ->
+                                when (booking.cancellationSettlementOutcome) {
+                                    CancellationSettlementOutcome.NO_REFUND -> "No refund"
+                                    CancellationSettlementOutcome.PARTIAL_REFUND -> "Partial refund approved"
+                                    CancellationSettlementOutcome.FULL_REFUND -> "Full refund approved"
+                                    else -> "Decided"
+                                }
+                            else -> "Pending review"
+                        }
+                    )
+                )
+                if (booking.cancellationSettlementStatus == CancellationSettlementStatus.DECIDED) {
+                    addView(infoLine("Approved refund", money(booking.cancellationApprovedRefundAmount)))
+                    addView(infoLine("Cancellation fee", money(booking.cancellationFeeAmount)))
+                }
             }
             addView(infoLine("Source", booking.sourceName?.takeIf { it.isNotBlank() } ?: booking.sourceType))
             addView(infoLine("Pricing", booking.pricingStatus))

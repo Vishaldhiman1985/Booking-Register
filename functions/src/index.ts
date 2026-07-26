@@ -889,7 +889,47 @@ export const saveBookingPaymentServer = onCall({ invoker: "public" }, async (req
       if (Math.abs(allocationTotal - numberValue(entity.cloudData.amount)) > 0.02) {
         throw new HttpsError("invalid-argument", "Payment allocations must equal the payment amount.");
       }
-      if (String(entity.cloudData.paymentType || "") !== "REFUND") return;
+      const paymentType = String(entity.cloudData.paymentType || "");
+      const bookingRemoteId = requireString(entity.cloudData.bookingRemoteId, "payment bookingRemoteId");
+      const booking = await tx.get(hotelRef.collection("bookings").doc(bookingRemoteId));
+      if (!booking.exists || booleanValue(booking.get("isDeleted"))) {
+        throw new HttpsError("failed-precondition", "Booking was not found.");
+      }
+      const bookingCancelled = String(booking.get("bookingStatus") || "") === "CANCELLED";
+      if (bookingCancelled && ["PAYMENT", "ADVANCE"].includes(paymentType)) {
+        throw new HttpsError("failed-precondition", "Payments cannot be added to a cancelled booking.");
+      }
+      if (paymentType !== "REFUND") return;
+      if (bookingCancelled) {
+        if (String(booking.get("cancellationSettlementStatus") || "PENDING") !== "DECIDED") {
+          throw new HttpsError(
+            "failed-precondition",
+            "Decide the Direct Booking cancellation settlement before recording a refund."
+          );
+        }
+        const bookingRefunds = await tx.get(
+          hotelRef.collection("bookingPayments")
+            .where("bookingRemoteId", "==", bookingRemoteId)
+            .where("paymentType", "==", "REFUND")
+        );
+        const totalRefunds = bookingRefunds.docs
+          .filter((doc) => doc.id !== entity.remoteId && !booleanValue(doc.get("isDeleted")))
+          .reduce((sum, doc) => sum + numberValue(doc.get("amount")), 0);
+        const refundsAfterDecision = Math.max(
+          0,
+          totalRefunds - numberValue(booking.get("cancellationRefundBaselineAmount"))
+        );
+        const refundDue = Math.max(
+          0,
+          numberValue(booking.get("cancellationApprovedRefundAmount")) - refundsAfterDecision
+        );
+        if (numberValue(entity.cloudData.amount) > refundDue + 0.001) {
+          throw new HttpsError(
+            "failed-precondition",
+            "Refund exceeds the approved cancellation refund."
+          );
+        }
+      }
       const originalPaymentRemoteId = requireString(
         entity.cloudData.originalPaymentRemoteId,
         "original payment"
@@ -931,7 +971,20 @@ export const saveBookingAccountingChargeServer = onCall({ invoker: "public" }, a
     "bookingAccountingCharges",
     "appliedAccountingChargeMutations",
     "service or damage charge",
-    (raw, hotelId, uid) => normaliseBookingAccountingChargePayload(raw, hotelId, null, uid)
+    (raw, hotelId, uid) => normaliseBookingAccountingChargePayload(raw, hotelId, null, uid),
+    async (tx, hotelRef, entity) => {
+      const bookingRemoteId = requireString(
+        entity.cloudData.bookingRemoteId,
+        "accounting charge bookingRemoteId"
+      );
+      const booking = await tx.get(hotelRef.collection("bookings").doc(bookingRemoteId));
+      if (!booking.exists || booleanValue(booking.get("isDeleted"))) {
+        throw new HttpsError("failed-precondition", "Booking was not found.");
+      }
+      if (String(booking.get("bookingStatus") || "") === "CANCELLED") {
+        throw new HttpsError("failed-precondition", "New charges cannot be added to a cancelled booking.");
+      }
+    }
   )
 );
 
@@ -982,6 +1035,16 @@ export const saveFoodOrderAggregateServer = onCall({ invoker: "public" }, async 
     }
 
     const existingOrder = await tx.get(orderDoc);
+    const orderBookingRemoteId = String(order.cloudData.bookingRemoteId || "");
+    if (orderBookingRemoteId) {
+      const booking = await tx.get(hotelRef.collection("bookings").doc(orderBookingRemoteId));
+      if (!booking.exists || booleanValue(booking.get("isDeleted"))) {
+        throw new HttpsError("failed-precondition", "Booking was not found.");
+      }
+      if (String(booking.get("bookingStatus") || "") === "CANCELLED") {
+        throw new HttpsError("failed-precondition", "Food cannot be added to a cancelled booking.");
+      }
+    }
     const remoteOrderRevision = numberValue(existingOrder.get("revision"));
     if (existingOrder.exists && remoteOrderRevision !== order.baseRevision) {
       throw new HttpsError("aborted", "This food order changed on another device. Refresh before syncing.");
@@ -1140,6 +1203,21 @@ export const saveFoodBillAggregateServer = onCall({ invoker: "public" }, async (
     });
 
     const existingBill = await tx.get(billDoc);
+    const finalBillMarker = "_final_bill_";
+    const markerIndex = bill.remoteId.indexOf(finalBillMarker);
+    if (markerIndex > 0) {
+      const bookingRemoteId = bill.remoteId.substring(0, markerIndex);
+      const booking = await tx.get(hotelRef.collection("bookings").doc(bookingRemoteId));
+      if (!booking.exists || booleanValue(booking.get("isDeleted"))) {
+        throw new HttpsError("failed-precondition", "Booking was not found.");
+      }
+      if (String(booking.get("bookingStatus") || "") === "CANCELLED") {
+        throw new HttpsError(
+          "failed-precondition",
+          "A final bill cannot be generated for a cancelled booking."
+        );
+      }
+    }
     const remoteBillRevision = numberValue(existingBill.get("revision"));
     if (existingBill.exists && remoteBillRevision !== bill.baseRevision) {
       throw new HttpsError(
@@ -1338,7 +1416,10 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
   const allowedFields = new Set([
     "bookingUuid", "propertyRemoteId", "guestName", "guestMobile", "sourceName", "sourceRemoteId",
     "sourceType", "adultCount", "childCount", "checkInMillis", "checkOutMillis", "pricingStatus",
-    "bookingStatus", "cancelledAt", "cancellationReason", "notes", "grossCharges", "rate",
+    "bookingStatus", "cancelledAt", "cancellationReason",
+    "cancellationSettlementStatus", "cancellationSettlementOutcome",
+    "cancellationApprovedRefundAmount", "cancellationFeeAmount",
+    "cancellationRefundBaselineAmount", "notes", "grossCharges", "rate",
     "receivable", "roomRevenue", "propertyTax", "commissionAmount", "commissionTax", "sourceFee",
     "tdsAmount", "tcsAmount", "expectedPayout",
   ]);
@@ -1401,8 +1482,103 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
       throw new HttpsError("invalid-argument", "Check-out must be after check-in.");
     }
     if (!String(next.guestName || "").trim()) throw new HttpsError("invalid-argument", "Guest name is required.");
-    if (String(next.bookingStatus || "RESERVED") === "CANCELLED" && !String(next.cancellationReason || "").trim()) {
+    const cancelled = String(next.bookingStatus || "RESERVED") === "CANCELLED";
+    if (cancelled && !String(next.cancellationReason || "").trim()) {
       throw new HttpsError("invalid-argument", "Cancellation reason is required.");
+    }
+    const wasCancelled = String(current.bookingStatus || "RESERVED") === "CANCELLED";
+    if (cancelled && !wasCancelled &&
+        !Object.prototype.hasOwnProperty.call(setFields, "cancellationSettlementStatus")) {
+      // Safe rolling-upgrade behavior: an older APK may cancel without knowing the
+      // settlement fields. Never guess that money is forfeited; require later review.
+      next.cancellationSettlementStatus = "PENDING";
+      next.cancellationSettlementOutcome = null;
+      next.cancellationApprovedRefundAmount = 0;
+      next.cancellationFeeAmount = 0;
+      next.cancellationRefundBaselineAmount = 0;
+    }
+    if (!next.cancellationSettlementStatus) {
+      next.cancellationSettlementStatus = cancelled ? "PENDING" : "NOT_APPLICABLE";
+    }
+    const settlementStatus = String(next.cancellationSettlementStatus);
+    const validSettlementStatuses = new Set(["NOT_APPLICABLE", "NOT_REQUIRED", "PENDING", "DECIDED"]);
+    if (!validSettlementStatuses.has(settlementStatus)) {
+      throw new HttpsError("invalid-argument", "Invalid cancellation settlement status.");
+    }
+    if (cancelled && settlementStatus === "NOT_APPLICABLE") {
+      throw new HttpsError("invalid-argument", "A cancelled booking must have a settlement status.");
+    }
+    if (!cancelled && settlementStatus !== "NOT_APPLICABLE") {
+      throw new HttpsError("invalid-argument", "Settlement decisions apply only to cancelled bookings.");
+    }
+    if (cancelled && String(next.sourceType || "DIRECT") === "OTA" && settlementStatus !== "PENDING") {
+      throw new HttpsError("failed-precondition", "OTA cancellation settlement must remain pending in this version.");
+    }
+    const settlementOutcome = next.cancellationSettlementOutcome == null
+      ? ""
+      : String(next.cancellationSettlementOutcome);
+    const validSettlementOutcomes = new Set(["NO_REFUND", "PARTIAL_REFUND", "FULL_REFUND"]);
+    if (settlementStatus === "DECIDED" && !validSettlementOutcomes.has(settlementOutcome)) {
+      throw new HttpsError("invalid-argument", "A decided cancellation requires a valid outcome.");
+    }
+    if (settlementStatus !== "DECIDED" && settlementOutcome) {
+      throw new HttpsError("invalid-argument", "Only a decided cancellation may have a settlement outcome.");
+    }
+    for (const moneyField of [
+      "cancellationApprovedRefundAmount",
+      "cancellationFeeAmount",
+      "cancellationRefundBaselineAmount",
+    ]) {
+      const amount = numberValue(next[moneyField]);
+      if (!Number.isFinite(amount) || amount < 0) {
+        throw new HttpsError("invalid-argument", `${moneyField} cannot be negative.`);
+      }
+      next[moneyField] = amount;
+    }
+    const priorSettlementStatus = String(current.cancellationSettlementStatus || "NOT_APPLICABLE");
+    const settlementFields = [
+      "cancellationSettlementStatus",
+      "cancellationSettlementOutcome",
+      "cancellationApprovedRefundAmount",
+      "cancellationFeeAmount",
+      "cancellationRefundBaselineAmount",
+    ];
+    if (wasCancelled &&
+        ["DECIDED", "NOT_REQUIRED"].includes(priorSettlementStatus) &&
+        settlementFields.some((field) => Object.prototype.hasOwnProperty.call(setFields, field))) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This cancellation decision is already recorded; use an append-only correction."
+      );
+    }
+    const approvedRefundAmount = numberValue(next.cancellationApprovedRefundAmount);
+    const cancellationFeeAmount = numberValue(next.cancellationFeeAmount);
+    if (settlementStatus !== "DECIDED" &&
+        (approvedRefundAmount > 0.001 || cancellationFeeAmount > 0.001)) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Pending or payment-free cancellation cannot contain a refund approval or cancellation fee."
+      );
+    }
+    if (settlementStatus === "DECIDED") {
+      if (settlementOutcome === "NO_REFUND" && approvedRefundAmount > 0.001) {
+        throw new HttpsError("invalid-argument", "A no-refund decision cannot approve a refund.");
+      }
+      if (settlementOutcome === "FULL_REFUND" && cancellationFeeAmount > 0.001) {
+        throw new HttpsError("invalid-argument", "A full-refund decision cannot contain a cancellation fee.");
+      }
+      if (settlementOutcome === "PARTIAL_REFUND" &&
+          (approvedRefundAmount <= 0.001 || cancellationFeeAmount <= 0.001)) {
+        throw new HttpsError(
+          "invalid-argument",
+          "A partial refund requires both a refund amount and a retained cancellation fee."
+        );
+      }
+    }
+    if (settlementStatus !== priorSettlementStatus &&
+        (settlementStatus === "DECIDED" || settlementStatus === "NOT_REQUIRED")) {
+      next.cancellationDecisionAt = Date.now();
+      next.cancellationDecisionByUid = requestAuth.uid;
     }
 
     const roomSnapshots = new Map<string, DocumentSnapshot>();
@@ -1426,7 +1602,6 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
     const propertyKey = Array.from(propertyKeys)[0];
     next.propertyRemoteId = propertyKey === "__MAIN_PROPERTY__" ? null : propertyKey;
 
-    const cancelled = String(next.bookingStatus || "RESERVED") === "CANCELLED";
     const oldLockIds = currentSnapshot.exists
       ? lockIdsFor(stringList(current.roomRemoteIds), numberValue(current.checkInMillis), numberValue(current.checkOutMillis))
       : new Set<string>();

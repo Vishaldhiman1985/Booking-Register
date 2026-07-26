@@ -56,6 +56,11 @@ data class BookingChangeSet(
             changed("bookingStatus", previous?.bookingStatus, requested.bookingStatus)
             changed("cancelledAt", previous?.cancelledAt, requested.cancelledAt)
             changed("cancellationReason", previous?.cancellationReason, requested.cancellationReason)
+            changed("cancellationSettlementStatus", previous?.cancellationSettlementStatus, requested.cancellationSettlementStatus)
+            changed("cancellationSettlementOutcome", previous?.cancellationSettlementOutcome, requested.cancellationSettlementOutcome)
+            changed("cancellationApprovedRefundAmount", previous?.cancellationApprovedRefundAmount, requested.cancellationApprovedRefundAmount)
+            changed("cancellationFeeAmount", previous?.cancellationFeeAmount, requested.cancellationFeeAmount)
+            changed("cancellationRefundBaselineAmount", previous?.cancellationRefundBaselineAmount, requested.cancellationRefundBaselineAmount)
             changed("notes", previous?.notes, requested.notes)
             changed("grossCharges", previous?.grossCharges, requested.grossCharges)
 

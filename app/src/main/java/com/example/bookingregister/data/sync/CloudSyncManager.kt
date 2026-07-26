@@ -884,6 +884,13 @@ class CloudSyncManager(
             "cancelledAt" to normalized.cancelledAt,
             "cancelledByUid" to normalized.cancelledByUid,
             "cancellationReason" to normalized.cancellationReason,
+            "cancellationSettlementStatus" to normalized.cancellationSettlementStatus,
+            "cancellationSettlementOutcome" to normalized.cancellationSettlementOutcome,
+            "cancellationApprovedRefundAmount" to normalized.cancellationApprovedRefundAmount,
+            "cancellationFeeAmount" to normalized.cancellationFeeAmount,
+            "cancellationRefundBaselineAmount" to normalized.cancellationRefundBaselineAmount,
+            "cancellationDecisionAt" to normalized.cancellationDecisionAt,
+            "cancellationDecisionByUid" to normalized.cancellationDecisionByUid,
             "notes" to normalized.notes,
             "updatedAt" to normalized.updatedAt,
             "isDeleted" to normalized.isDeleted,
@@ -966,6 +973,13 @@ class CloudSyncManager(
             "cancelledAt" to normalized.cancelledAt,
             "cancelledByUid" to normalized.cancelledByUid,
             "cancellationReason" to normalized.cancellationReason,
+            "cancellationSettlementStatus" to normalized.cancellationSettlementStatus,
+            "cancellationSettlementOutcome" to normalized.cancellationSettlementOutcome,
+            "cancellationApprovedRefundAmount" to normalized.cancellationApprovedRefundAmount,
+            "cancellationFeeAmount" to normalized.cancellationFeeAmount,
+            "cancellationRefundBaselineAmount" to normalized.cancellationRefundBaselineAmount,
+            "cancellationDecisionAt" to normalized.cancellationDecisionAt,
+            "cancellationDecisionByUid" to normalized.cancellationDecisionByUid,
             "notes" to normalized.notes,
             "updatedAt" to normalized.updatedAt,
             "isDeleted" to normalized.isDeleted
@@ -1216,6 +1230,18 @@ class CloudSyncManager(
             cancelledByUid = getStringCompat("cancelledByUid"),
             cancellationReason = getStringCompat("cancellationReason")
                 ?: if (legacyCancellation) "Cancelled in an earlier app version" else null,
+            cancellationSettlementStatus = getStringCompat("cancellationSettlementStatus")
+                ?: if (legacyCancellation || cloudStatus == BookingStatus.CANCELLED) {
+                    com.example.bookingregister.booking.domain.CancellationSettlementStatus.PENDING
+                } else {
+                    com.example.bookingregister.booking.domain.CancellationSettlementStatus.NOT_APPLICABLE
+                },
+            cancellationSettlementOutcome = getStringCompat("cancellationSettlementOutcome"),
+            cancellationApprovedRefundAmount = getDoubleCompat("cancellationApprovedRefundAmount") ?: 0.0,
+            cancellationFeeAmount = getDoubleCompat("cancellationFeeAmount") ?: 0.0,
+            cancellationRefundBaselineAmount = getDoubleCompat("cancellationRefundBaselineAmount") ?: 0.0,
+            cancellationDecisionAt = getLongCompat("cancellationDecisionAt"),
+            cancellationDecisionByUid = getStringCompat("cancellationDecisionByUid"),
             notes = getStringCompat("notes"),
             updatedAt = getLongCompat("updatedAt") ?: System.currentTimeMillis(),
             isDeleted = false,
