@@ -312,6 +312,82 @@ describe("Firebase callable Functions integration", () => {
     expect((await db.doc(`hotels/hotel-a/bookingAuditEvents/${operationId}`).get()).exists).toBe(true);
   }, 10_000);
 
+  test("a new cancellation without a receptionist reason remains rejected", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+    await seedRoom("room-a");
+    await seedCloudBooking();
+    const db = getFirestore(adminApp);
+
+    await expectFunctionError(client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "missing-new-cancellation-reason",
+      deviceId: "current-device",
+      changeSet: {
+        bookingRemoteId: "booking-a",
+        create: false,
+        setFields: {
+          bookingStatus: "CANCELLED",
+          cancellationSettlementStatus: "NOT_REQUIRED",
+        },
+        addRoomRemoteIds: [],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: false,
+        financialLineTemplate: null,
+        financialLineRemoteIdsByKey: {},
+      },
+    }), "invalid-argument");
+
+    expect((await db.doc("hotels/hotel-a/bookings/booking-a").get()).get("bookingStatus")).toBe("RESERVED");
+    expect((await db.doc(
+      "hotels/hotel-a/appliedBookingChangeSets/missing-new-cancellation-reason"
+    ).get()).exists).toBe(false);
+  });
+
+  test("a full legacy cancelled aggregate missing its historical reason is recovered honestly", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+    await seedRoom("room-a");
+    const db = getFirestore(adminApp);
+
+    await client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "recover-legacy-cancellation",
+      deviceId: "upgraded-device",
+      changeSet: {
+        bookingRemoteId: "legacy-cancelled-booking",
+        create: true,
+        setFields: {
+          bookingUuid: "legacy-cancelled-booking",
+          guestName: "Legacy Cancelled Guest",
+          checkInMillis: START,
+          checkOutMillis: END,
+          bookingStatus: "CANCELLED",
+          pricingStatus: "CONFIRMED",
+          grossCharges: 3000,
+          cancellationSettlementStatus: "NOT_REQUIRED",
+          cancellationApprovedRefundAmount: 0,
+          cancellationFeeAmount: 0,
+          cancellationRefundBaselineAmount: 0,
+        },
+        addRoomRemoteIds: ["room-a"],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: true,
+        financialLineTemplate: { gstRatePercent: 5 },
+        financialLineRemoteIdsByKey: {
+          [`room-a|${START}`]: "legacy-cancelled-line",
+        },
+      },
+    });
+
+    const booking = await db.doc("hotels/hotel-a/bookings/legacy-cancelled-booking").get();
+    expect(booking.get("bookingStatus")).toBe("CANCELLED");
+    expect(booking.get("cancellationReason")).toBe("Legacy cancellation — reason not recorded");
+    expect((await db.doc(
+      "hotels/hotel-a/appliedBookingChangeSets/recover-legacy-cancellation"
+    ).get()).exists).toBe(true);
+  });
+
   test("older cancellation command defaults safely to pending and a Direct decision becomes immutable", async () => {
     const client = await createClient();
     await seedMembership(client.auth.currentUser!.uid);

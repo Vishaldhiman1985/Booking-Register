@@ -1483,10 +1483,21 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
     }
     if (!String(next.guestName || "").trim()) throw new HttpsError("invalid-argument", "Guest name is required.");
     const cancelled = String(next.bookingStatus || "RESERVED") === "CANCELLED";
-    if (cancelled && !String(next.cancellationReason || "").trim()) {
-      throw new HttpsError("invalid-argument", "Cancellation reason is required.");
-    }
     const wasCancelled = String(current.bookingStatus || "RESERVED") === "CANCELLED";
+    if (cancelled && !String(next.cancellationReason || "").trim()) {
+      const fullAggregateSync =
+        Object.prototype.hasOwnProperty.call(setFields, "bookingUuid") &&
+        Object.prototype.hasOwnProperty.call(setFields, "checkInMillis") &&
+        Object.prototype.hasOwnProperty.call(setFields, "checkOutMillis");
+      if (wasCancelled || fullAggregateSync) {
+        // Versions before cancellation reasons were introduced converted deleted
+        // bookings into CANCELLED records without inventing a reason. Preserve those
+        // records honestly when their full aggregate is synchronized or recovered.
+        next.cancellationReason = "Legacy cancellation — reason not recorded";
+      } else {
+        throw new HttpsError("invalid-argument", "Cancellation reason is required.");
+      }
+    }
     if (cancelled && !wasCancelled &&
         !Object.prototype.hasOwnProperty.call(setFields, "cancellationSettlementStatus")) {
       // Safe rolling-upgrade behavior: an older APK may cancel without knowing the
