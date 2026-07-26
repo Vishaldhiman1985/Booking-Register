@@ -1739,6 +1739,7 @@ internal fun Throwable.toStructuredSyncException(): Throwable {
         FirebaseFunctionsException.Code.ALREADY_EXISTS -> SyncFailureCode.ALREADY_EXISTS
         FirebaseFunctionsException.Code.INVALID_ARGUMENT -> SyncFailureCode.INVALID_ARGUMENT
         FirebaseFunctionsException.Code.FAILED_PRECONDITION -> SyncFailureCode.FAILED_PRECONDITION
+        FirebaseFunctionsException.Code.NOT_FOUND -> SyncFailureCode.NOT_FOUND
         FirebaseFunctionsException.Code.UNAVAILABLE,
         FirebaseFunctionsException.Code.DEADLINE_EXCEEDED -> SyncFailureCode.UNAVAILABLE
         FirebaseFunctionsException.Code.INTERNAL -> SyncFailureCode.INTERNAL

@@ -1710,14 +1710,6 @@ class BookingRepository(
             managedPropertyDao.getUnsyncedProperties(hotelRemoteId).forEach { pushManagedPropertyAndMark(it) }
             bookingSourceDao.getUnsyncedSources(hotelRemoteId).forEach { pushSourceAndMark(it) }
             roomDao.getUnsyncedRooms(hotelRemoteId).forEach { pushRoomAndMark(it) }
-            bookingPaymentDao.getUnsyncedPayments(hotelRemoteId).forEach { pushPaymentAndMark(it) }
-            bookingAccountingChargeDao.getUnsyncedCharges(hotelRemoteId).forEach { charge ->
-                val linkedBillId = charge.linkedFinalBillId?.takeIf { it.isNotBlank() }
-                if (linkedBillId != null && foodBillDao.getByRemoteId(linkedBillId) != null) {
-                    return@forEach
-                }
-                pushAccountingChargeAndMark(charge)
-            }
 
             val executableBookingIds = bookingSyncOutboxDao.getPending(hotelRemoteId)
                 .mapTo(mutableSetOf()) { it.bookingRemoteId }
@@ -1737,6 +1729,17 @@ class BookingRepository(
             val aggregateOperations = bookingSyncOutboxDao.getPending(hotelRemoteId)
 
             aggregateOperations.forEach { pushBookingChangeSetAndMark(it) }
+
+            // Booking aggregates must reach the server before payments and charges that
+            // reference them. This is especially important for a booking first saved offline.
+            bookingPaymentDao.getUnsyncedPayments(hotelRemoteId).forEach { pushPaymentAndMark(it) }
+            bookingAccountingChargeDao.getUnsyncedCharges(hotelRemoteId).forEach { charge ->
+                val linkedBillId = charge.linkedFinalBillId?.takeIf { it.isNotBlank() }
+                if (linkedBillId != null && foodBillDao.getByRemoteId(linkedBillId) != null) {
+                    return@forEach
+                }
+                pushAccountingChargeAndMark(charge)
+            }
 
             clearRealtimeSyncErrorIfClean()
         } finally {
@@ -1961,7 +1964,21 @@ class BookingRepository(
         }
             .recoverCatching { error ->
                 val failureCode = (error as? CodedSyncFailure)?.syncFailureCode
-                if (isLegacySnapshotOperation && failureCode == SyncFailureCode.ALREADY_EXISTS) {
+                if (!changeSet.create && failureCode == SyncFailureCode.NOT_FOUND) {
+                    // The device still owns the complete local aggregate but the cloud
+                    // booking is absent. Re-create that aggregate with the same operation ID.
+                    // Server-side room locks still reject a logical duplicate or overlap.
+                    cloudSyncManager.pushBookingChangeSet(
+                        operationId = operation.operationId,
+                        deviceId = deviceId,
+                        changeSet = BookingChangeSet.create(
+                            previous = null,
+                            requested = booking,
+                            previousLines = emptyList(),
+                            requestedLines = lines
+                        )
+                    )
+                } else if (isLegacySnapshotOperation && failureCode == SyncFailureCode.ALREADY_EXISTS) {
                     // The legacy operation may represent either the booking's first upload or a
                     // later edit. If the booking already exists, apply the same full state as an
                     // update. The unchanged operationId keeps the retry idempotent.

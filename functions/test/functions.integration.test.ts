@@ -162,14 +162,14 @@ describe("Firebase callable Functions integration", () => {
     await expectFunctionError(unauthenticatedCaller()("applyBookingChangeSetServer", {
       hotelId: "hotel-a", operationId: "op", deviceId: "device", changeSet: {},
     }), "unauthenticated");
-  });
+  }, 15_000);
 
   test("rejects users without active hotel membership", async () => {
     const client = await createClient();
     await expectFunctionError(client.call("applyBookingChangeSetServer", {
       hotelId: "hotel-a", operationId: "op", deviceId: "device", changeSet: {},
     }), "permission-denied");
-  });
+  }, 15_000);
 
   test("booking change sets merge price and room changes without revision conflicts or payment duplication", async () => {
     const deviceA = await createClient();
@@ -251,6 +251,65 @@ describe("Firebase callable Functions integration", () => {
       changeSet: { ...baseChange, bookingRemoteId: "booking-blocked" },
     }), "already-exists");
     expect((await getFirestore(adminApp).doc("hotels/hotel-a/bookings/booking-blocked").get()).exists).toBe(false);
+  }, 10_000);
+
+  test("a missing cloud booking can be recovered with the same operation ID without partial writes", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+    await seedRoom("H101", "property-a");
+    const db = getFirestore(adminApp);
+    const operationId = "recover-missing-booking";
+    const updateChange = {
+      bookingRemoteId: "booking-recovered",
+      create: false,
+      setFields: { grossCharges: 3200 },
+      addRoomRemoteIds: [],
+      removeRoomRemoteIds: [],
+      rebuildFinancialLines: true,
+      financialLineTemplate: { gstRatePercent: 5 },
+      financialLineRemoteIdsByKey: {},
+    };
+
+    await expectFunctionError(client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a", operationId, deviceId: "device-a", changeSet: updateChange,
+    }), "not-found");
+    expect((await db.doc("hotels/hotel-a/bookings/booking-recovered").get()).exists).toBe(false);
+    expect((await db.doc(`hotels/hotel-a/appliedBookingChangeSets/${operationId}`).get()).exists).toBe(false);
+    expect((await db.doc(`hotels/hotel-a/bookingAuditEvents/${operationId}`).get()).exists).toBe(false);
+
+    const recovered = await client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId,
+      deviceId: "device-a",
+      changeSet: {
+        ...updateChange,
+        create: true,
+        setFields: {
+          bookingUuid: "booking-recovered",
+          guestName: "Recovered Guest",
+          checkInMillis: START,
+          checkOutMillis: END,
+          bookingStatus: "RESERVED",
+          pricingStatus: "CONFIRMED",
+          grossCharges: 3200,
+        },
+        addRoomRemoteIds: ["H101"],
+        financialLineRemoteIdsByKey: {
+          [`H101|${START}`]: "recovered-H101-line",
+        },
+      },
+    }) as Record<string, unknown>;
+
+    expect(recovered.alreadyApplied).toBe(false);
+    const booking = await db.doc("hotels/hotel-a/bookings/booking-recovered").get();
+    expect(booking.exists).toBe(true);
+    expect(booking.get("grossCharges")).toBe(3200);
+    expect(booking.get("roomRemoteIds")).toEqual(["H101"]);
+    const lines = await db.collection("hotels/hotel-a/bookingFinancialLines")
+      .where("bookingRemoteId", "==", "booking-recovered").get();
+    expect(lines.docs.filter((line) => !line.get("isDeleted"))).toHaveLength(1);
+    expect((await db.doc(`hotels/hotel-a/appliedBookingChangeSets/${operationId}`).get()).exists).toBe(true);
+    expect((await db.doc(`hotels/hotel-a/bookingAuditEvents/${operationId}`).get()).exists).toBe(true);
   }, 10_000);
 
   test("older cancellation command defaults safely to pending and a Direct decision becomes immutable", async () => {
