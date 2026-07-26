@@ -1547,16 +1547,25 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
       next[moneyField] = amount;
     }
     const priorSettlementStatus = String(current.cancellationSettlementStatus || "NOT_APPLICABLE");
-    const settlementFields = [
-      "cancellationSettlementStatus",
-      "cancellationSettlementOutcome",
-      "cancellationApprovedRefundAmount",
-      "cancellationFeeAmount",
-      "cancellationRefundBaselineAmount",
-    ];
+    const priorSettlementOutcome = current.cancellationSettlementOutcome == null
+      ? ""
+      : String(current.cancellationSettlementOutcome);
+    const settlementDecisionChanged =
+      (Object.prototype.hasOwnProperty.call(setFields, "cancellationSettlementStatus") &&
+        settlementStatus !== priorSettlementStatus) ||
+      (Object.prototype.hasOwnProperty.call(setFields, "cancellationSettlementOutcome") &&
+        settlementOutcome !== priorSettlementOutcome) ||
+      [
+        "cancellationApprovedRefundAmount",
+        "cancellationFeeAmount",
+        "cancellationRefundBaselineAmount",
+      ].some((field) =>
+        Object.prototype.hasOwnProperty.call(setFields, field) &&
+        Math.abs(numberValue(next[field]) - numberValue(current[field])) > 0.001
+      );
     if (wasCancelled &&
         ["DECIDED", "NOT_REQUIRED"].includes(priorSettlementStatus) &&
-        settlementFields.some((field) => Object.prototype.hasOwnProperty.call(setFields, field))) {
+        settlementDecisionChanged) {
       throw new HttpsError(
         "failed-precondition",
         "This cancellation decision is already recorded; use an append-only correction."

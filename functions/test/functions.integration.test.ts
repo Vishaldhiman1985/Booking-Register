@@ -386,6 +386,34 @@ describe("Firebase callable Functions integration", () => {
     expect((await db.doc(
       "hotels/hotel-a/appliedBookingChangeSets/recover-legacy-cancellation"
     ).get()).exists).toBe(true);
+
+    await client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "retry-same-legacy-settlement",
+      deviceId: "upgraded-device",
+      changeSet: {
+        bookingRemoteId: "legacy-cancelled-booking",
+        create: false,
+        setFields: {
+          cancellationSettlementStatus: "NOT_REQUIRED",
+          cancellationSettlementOutcome: null,
+          cancellationApprovedRefundAmount: 0,
+          cancellationFeeAmount: 0,
+          cancellationRefundBaselineAmount: 0,
+        },
+        addRoomRemoteIds: [],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: false,
+        financialLineTemplate: null,
+        financialLineRemoteIdsByKey: {},
+      },
+    });
+    const afterRetry = await db.doc("hotels/hotel-a/bookings/legacy-cancelled-booking").get();
+    expect(afterRetry.get("cancellationSettlementStatus")).toBe("NOT_REQUIRED");
+    expect(afterRetry.get("cancellationApprovedRefundAmount")).toBe(0);
+    expect((await db.doc(
+      "hotels/hotel-a/appliedBookingChangeSets/retry-same-legacy-settlement"
+    ).get()).exists).toBe(true);
   });
 
   test("older cancellation command defaults safely to pending and a Direct decision becomes immutable", async () => {
@@ -450,6 +478,9 @@ describe("Firebase callable Functions integration", () => {
       },
     }), "failed-precondition");
     expect((await bookingRef.get()).get("cancellationSettlementOutcome")).toBe("NO_REFUND");
+    expect((await getFirestore(adminApp).doc(
+      "hotels/hotel-a/appliedBookingChangeSets/rewrite-decision-op"
+    ).get()).exists).toBe(false);
   });
 
   test("payment retry is idempotent and does not duplicate", async () => {
