@@ -84,7 +84,13 @@ PLATFORM_ADMIN_EMAILS=your-real-admin-email@gmail.com
 npm run build
 ```
 
-6. Deploy:
+6. Run the emulator safety suite:
+
+```powershell
+npm test
+```
+
+7. Deploy the Functions and the matching Firestore Rules together:
 
 ```powershell
 npm run deploy
@@ -92,4 +98,11 @@ npm run deploy
 
 ## Important
 
-Do not deploy the member-based Firestore rules until the Android app is updated to read custom claims and use shared hotel IDs. For now, deploy only functions.
+The current Android app uses shared hotel IDs and active hotel membership documents.
+Its critical booking, payment, accounting, billing, lock, audit, and room-lifecycle
+writes are server-owned. Do not deploy Functions without the matching checked-in
+Firestore Rules.
+
+After every deployment, verify the production function inventory. Legacy callable
+functions that are no longer exported by `functions/src/index.ts` must not remain
+deployed, because an older APK could otherwise bypass the current server policies.

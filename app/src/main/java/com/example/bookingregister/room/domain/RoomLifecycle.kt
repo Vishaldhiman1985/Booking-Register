@@ -69,7 +69,7 @@ object RoomLifecyclePolicy {
     ): List<BookingEntity> = bookings.filter { booking ->
         !booking.isDeleted &&
             roomRemoteId in booking.roomRemoteIds &&
-            booking.bookingStatus != BookingStatus.CHECKED_OUT &&
+            booking.bookingStatus.ifBlank { BookingStatus.RESERVED } in BookingStatus.ACTIVE_STATUSES &&
             booking.checkOutMillis > nowMillis
     }
 

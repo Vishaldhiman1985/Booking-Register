@@ -129,9 +129,27 @@ describe("firestore.rules", () => {
     await assertFails(setDoc(doc(db, "hotels", "hotel-a", "foodMenuItems", "wrong-hotel"), { hotelRemoteId: "hotel-b" }));
   });
 
-  test("manager may delete room documents under the actual role rules", async () => {
+  test("manager cannot bypass protected room lifecycle fields or hard-delete rooms", async () => {
     await seedHotel("hotel-a", "manager-a", { role: "MANAGER" });
     const db = env.authenticatedContext("manager-a").firestore();
-    await assertSucceeds(deleteDoc(doc(db, "hotels", "hotel-a", "rooms", "room-existing")));
+    const room = doc(db, "hotels", "hotel-a", "rooms", "room-existing");
+    await assertFails(setDoc(room, {
+      hotelRemoteId: "hotel-a",
+      roomName: "Existing",
+      lifecycleStatus: "RETIRED",
+      lifecycleReason: "Client bypass",
+      retiredAtMillis: Date.now(),
+      isDeleted: false,
+    }));
+    await assertFails(deleteDoc(room));
+  });
+
+  test("manager can still edit ordinary room details without changing lifecycle", async () => {
+    await seedHotel("hotel-a", "manager-a", { role: "MANAGER" });
+    const db = env.authenticatedContext("manager-a").firestore();
+    await assertSucceeds(setDoc(doc(db, "hotels", "hotel-a", "rooms", "room-existing"), {
+      hotelRemoteId: "hotel-a",
+      roomName: "Renamed safely",
+    }));
   });
 });

@@ -2426,26 +2426,27 @@ class BookingRepository(
     }
 
     suspend fun deleteRoom(room: RoomEntity): SaveResult {
-        val now = System.currentTimeMillis()
-        val result = db.withTransaction {
-            val current = roomDao.getByRemoteId(room.remoteId)
-                ?: return@withTransaction SaveResult.Error("Room not found.")
-            val history = roomHistoryFacts(current.remoteId)
-            RoomLifecyclePolicy.deleteError(history)?.let {
-                return@withTransaction SaveResult.Error(it)
-            }
-            val deleted = current.copy(
-                isDeleted = true,
-                updatedAt = now,
-                syncState = SyncState.PENDING,
-                lastSyncError = null,
-                baseRevision = current.baseRevision.takeIf { it > 0 } ?: current.revision
-            )
-            roomDao.upsert(deleted)
-            SaveResult.Success(syncPending = true)
+        val current = roomDao.getByRemoteId(room.remoteId)
+            ?: return SaveResult.Error("Room not found.")
+        RoomLifecyclePolicy.deleteError(roomHistoryFacts(current.remoteId))?.let {
+            return SaveResult.Error(it)
         }
-        if (result is SaveResult.Success) enqueueBackgroundSync()
-        return result
+        return runCatching {
+            val result = cloudSyncManager.changeRoomLifecycle(
+                operationId = "room_lifecycle_${UUID.randomUUID()}",
+                roomRemoteId = current.remoteId,
+                action = "DELETE"
+            )
+            roomDao.upsert(
+                current.copy(
+                    isDeleted = true,
+                    updatedAt = System.currentTimeMillis()
+                ).markSynced(result)
+            )
+            SaveResult.Success()
+        }.getOrElse { error ->
+            SaveResult.Error(syncFailureText(error))
+        }
     }
 
     suspend fun disableRoom(room: RoomEntity, reason: String): SaveResult =
@@ -2455,28 +2456,17 @@ class BookingRepository(
         changeRoomLifecycle(room, RoomLifecycleStatus.RETIRED, reason)
 
     suspend fun reactivateRoom(room: RoomEntity): SaveResult {
-        val now = System.currentTimeMillis()
-        val result = db.withTransaction {
-            val current = roomDao.getByRemoteId(room.remoteId)
-                ?: return@withTransaction SaveResult.Error("Room not found.")
-            if (RoomLifecycleStatus.normalize(current.lifecycleStatus) == RoomLifecycleStatus.RETIRED) {
-                return@withTransaction SaveResult.Error("A retired room cannot be reactivated.")
-            }
-            roomDao.upsert(
-                current.copy(
-                    lifecycleStatus = RoomLifecycleStatus.ACTIVE,
-                    lifecycleReason = null,
-                    disabledAtMillis = null,
-                    updatedAt = now,
-                    syncState = SyncState.PENDING,
-                    lastSyncError = null,
-                    baseRevision = current.baseRevision.takeIf { it > 0 } ?: current.revision
-                )
-            )
-            SaveResult.Success(syncPending = true)
+        val current = roomDao.getByRemoteId(room.remoteId)
+            ?: return SaveResult.Error("Room not found.")
+        if (RoomLifecycleStatus.normalize(current.lifecycleStatus) == RoomLifecycleStatus.RETIRED) {
+            return SaveResult.Error("A retired room cannot be reactivated.")
         }
-        if (result is SaveResult.Success) enqueueBackgroundSync()
-        return result
+        return applyRoomLifecycleOnServer(
+            current = current,
+            action = "REACTIVATE",
+            targetStatus = RoomLifecycleStatus.ACTIVE,
+            reason = null
+        )
     }
 
     private suspend fun changeRoomLifecycle(
@@ -2486,50 +2476,68 @@ class BookingRepository(
     ): SaveResult {
         val cleanReason = reason.trim()
         val now = System.currentTimeMillis()
-        val result = db.withTransaction {
-            val current = roomDao.getByRemoteId(room.remoteId)
-                ?: return@withTransaction SaveResult.Error("Room not found.")
-            if (RoomLifecycleStatus.normalize(current.lifecycleStatus) == RoomLifecycleStatus.RETIRED) {
-                return@withTransaction SaveResult.Error("This room is permanently retired.")
-            }
-            val allBookings = bookingDao.getAllBookingsIncludingDeleted(hotelRemoteId)
-            val blocking = RoomLifecyclePolicy.blockingBookings(current.remoteId, allBookings, now)
-            RoomLifecyclePolicy.inactiveTransitionError(targetStatus, cleanReason, blocking)?.let {
-                return@withTransaction SaveResult.Error(it)
-            }
-            if (targetStatus == RoomLifecycleStatus.RETIRED) {
-                val unbilledPastBooking = allBookings
-                    .filter {
-                        !it.isDeleted &&
-                            current.remoteId in it.roomRemoteIds &&
-                            it.checkOutMillis <= now
-                    }
-                    .firstOrNull { pastBooking ->
-                        foodBillDao.getFinalBillForBooking(
-                            hotelRemoteId,
-                            "${pastBooking.remoteId}_final_bill_"
-                        ) == null
-                    }
-                RoomLifecyclePolicy.retirementBillingError(unbilledPastBooking != null)?.let {
-                    return@withTransaction SaveResult.Error(it)
-                }
-            }
-            roomDao.upsert(
-                current.copy(
-                    lifecycleStatus = targetStatus,
-                    lifecycleReason = cleanReason,
-                    disabledAtMillis = if (targetStatus == RoomLifecycleStatus.DISABLED) now else current.disabledAtMillis,
-                    retiredAtMillis = if (targetStatus == RoomLifecycleStatus.RETIRED) now else null,
-                    updatedAt = now,
-                    syncState = SyncState.PENDING,
-                    lastSyncError = null,
-                    baseRevision = current.baseRevision.takeIf { it > 0 } ?: current.revision
-                )
-            )
-            SaveResult.Success(syncPending = true)
+        val current = roomDao.getByRemoteId(room.remoteId)
+            ?: return SaveResult.Error("Room not found.")
+        if (RoomLifecycleStatus.normalize(current.lifecycleStatus) == RoomLifecycleStatus.RETIRED) {
+            return SaveResult.Error("This room is permanently retired.")
         }
-        if (result is SaveResult.Success) enqueueBackgroundSync()
-        return result
+        val allBookings = bookingDao.getAllBookingsIncludingDeleted(hotelRemoteId)
+        val blocking = RoomLifecyclePolicy.blockingBookings(current.remoteId, allBookings, now)
+        RoomLifecyclePolicy.inactiveTransitionError(targetStatus, cleanReason, blocking)?.let {
+            return SaveResult.Error(it)
+        }
+        if (targetStatus == RoomLifecycleStatus.RETIRED) {
+            val unbilledPastBooking = allBookings
+                .filter {
+                    !it.isDeleted &&
+                        it.bookingStatus != BookingStatus.CANCELLED &&
+                        current.remoteId in it.roomRemoteIds &&
+                        it.checkOutMillis <= now
+                }
+                .firstOrNull { pastBooking ->
+                    foodBillDao.getFinalBillForBooking(
+                        hotelRemoteId,
+                        "${pastBooking.remoteId}_final_bill_"
+                    ) == null
+                }
+            RoomLifecyclePolicy.retirementBillingError(unbilledPastBooking != null)?.let {
+                return SaveResult.Error(it)
+            }
+        }
+        return applyRoomLifecycleOnServer(
+            current = current,
+            action = if (targetStatus == RoomLifecycleStatus.RETIRED) "RETIRE" else "DISABLE",
+            targetStatus = targetStatus,
+            reason = cleanReason
+        )
+    }
+
+    private suspend fun applyRoomLifecycleOnServer(
+        current: RoomEntity,
+        action: String,
+        targetStatus: String,
+        reason: String?
+    ): SaveResult = runCatching {
+        val result = cloudSyncManager.changeRoomLifecycle(
+            operationId = "room_lifecycle_${UUID.randomUUID()}",
+            roomRemoteId = current.remoteId,
+            action = action,
+            reason = reason
+        )
+        val now = System.currentTimeMillis()
+        roomDao.upsert(
+            current.copy(
+                lifecycleStatus = targetStatus,
+                lifecycleReason = reason,
+                disabledAtMillis = now.takeIf { targetStatus == RoomLifecycleStatus.DISABLED },
+                retiredAtMillis = now.takeIf { targetStatus == RoomLifecycleStatus.RETIRED },
+                isDeleted = false,
+                updatedAt = now
+            ).markSynced(result)
+        )
+        SaveResult.Success()
+    }.getOrElse { error ->
+        SaveResult.Error(syncFailureText(error))
     }
 
     private suspend fun roomHistoryFacts(roomRemoteId: String): RoomHistoryFacts {

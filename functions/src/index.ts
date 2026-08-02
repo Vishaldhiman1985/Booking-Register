@@ -1394,6 +1394,186 @@ export const saveFoodBillAggregateServer = onCall({ invoker: "public" }, async (
   return result;
 });
 
+/** Applies a protected room lifecycle transition after checking cloud history. */
+export const changeRoomLifecycleServer = onCall({ invoker: "public" }, async (request) => {
+  const requestAuth = await requireAuth(request);
+  const hotelId = requireString(request.data?.hotelId || requestAuth.token.hotelId, "hotelId");
+  await requireOwnerOrManager(requestAuth, hotelId);
+  await requireUsableSubscription(hotelId);
+
+  const operationId = requireString(request.data?.operationId, "operationId");
+  const roomRemoteId = requireString(request.data?.roomRemoteId, "roomRemoteId");
+  const action = requireString(request.data?.action, "action").toUpperCase();
+  const reason = String(request.data?.reason || "").trim();
+  if (!["DELETE", "DISABLE", "RETIRE", "REACTIVATE"].includes(action)) {
+    throw new HttpsError("invalid-argument", "Invalid room lifecycle action.");
+  }
+  if (["DISABLE", "RETIRE"].includes(action) && !reason) {
+    throw new HttpsError("invalid-argument", "A reason is required.");
+  }
+
+  const hotelRef = publicHotelRef(hotelId);
+  const roomDoc = hotelRef.collection("rooms").doc(roomRemoteId);
+  const mutationDoc = hotelRef.collection("appliedRoomLifecycleOperations").doc(operationId);
+  const auditDoc = hotelRef.collection("roomLifecycleAuditEvents").doc(operationId);
+
+  return db.runTransaction(async (tx) => {
+    const applied = await tx.get(mutationDoc);
+    if (applied.exists) {
+      if (String(applied.get("roomRemoteId") || "") !== roomRemoteId ||
+          String(applied.get("action") || "") !== action) {
+        throw new HttpsError("aborted", "This operation ID was already used for another room action.");
+      }
+      return {
+        operationId,
+        roomRemoteId,
+        action,
+        revision: numberValue(applied.get("revision")),
+        updatedByUid: String(applied.get("updatedByUid") || requestAuth.uid),
+        deleted: booleanValue(applied.get("deleted")),
+        alreadyApplied: true,
+      };
+    }
+
+    const roomSnapshot = await tx.get(roomDoc);
+    if (!roomSnapshot.exists) {
+      if (action !== "DELETE") {
+        throw new HttpsError("not-found", "The room no longer exists.");
+      }
+      const missingResult = {
+        operationId,
+        roomRemoteId,
+        action,
+        revision: 0,
+        updatedByUid: requestAuth.uid,
+        deleted: true,
+        alreadyApplied: false,
+      };
+      tx.set(mutationDoc, {
+        ...missingResult,
+        hotelRemoteId: hotelId,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      return missingResult;
+    }
+    if (booleanValue(roomSnapshot.get("isDeleted"))) {
+      if (action !== "DELETE") {
+        throw new HttpsError("failed-precondition", "The room has already been deleted.");
+      }
+    }
+
+    const bookings = await tx.get(
+      hotelRef.collection("bookings").where("roomRemoteIds", "array-contains", roomRemoteId)
+    );
+    const financialLines = await tx.get(
+      hotelRef.collection("bookingFinancialLines").where("roomRemoteId", "==", roomRemoteId).limit(1)
+    );
+    const foodOrders = await tx.get(
+      hotelRef.collection("foodOrders").where("roomRemoteId", "==", roomRemoteId).limit(1)
+    );
+    const hasHistory = !bookings.empty || !financialLines.empty || !foodOrders.empty;
+    const now = Date.now();
+    const blockingBookings = bookings.docs.filter((booking) => {
+      const status = String(booking.get("bookingStatus") || "RESERVED");
+      return !booleanValue(booking.get("isDeleted")) &&
+        ["RESERVED", "CHECKED_IN"].includes(status) &&
+        numberValue(booking.get("checkOutMillis")) > now;
+    });
+
+    if (action === "DELETE" && hasHistory) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This room has booking or billing history and cannot be deleted. Disable or retire it instead."
+      );
+    }
+    if (["DISABLE", "RETIRE"].includes(action) && blockingBookings.length > 0) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Move, cancel, or check out all current/future bookings before changing this room."
+      );
+    }
+
+    if (action === "RETIRE") {
+      const unbilledPastBookings = [];
+      for (const booking of bookings.docs) {
+        const status = String(booking.get("bookingStatus") || "RESERVED");
+        const isPast = !booleanValue(booking.get("isDeleted")) &&
+          status !== "CANCELLED" &&
+          numberValue(booking.get("checkOutMillis")) <= now;
+        if (!isPast) continue;
+        const finalBillPrefix = `${booking.id}_final_bill_`;
+        const finalBills = await tx.get(
+          hotelRef.collection("foodBills")
+            .where(FieldPath.documentId(), ">=", finalBillPrefix)
+            .where(FieldPath.documentId(), "<", `${finalBillPrefix}\uf8ff`)
+            .limit(5)
+        );
+        if (!finalBills.docs.some((bill) => !booleanValue(bill.get("isDeleted")))) {
+          unbilledPastBookings.push(booking.id);
+        }
+      }
+      if (unbilledPastBookings.length > 0) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Generate the final bill for all past bookings before retiring this room."
+        );
+      }
+    }
+
+    const previousStatus = String(roomSnapshot.get("lifecycleStatus") || "ACTIVE");
+    if (previousStatus === "RETIRED" && action !== "RETIRE") {
+      throw new HttpsError("failed-precondition", "A retired room cannot be changed or reactivated.");
+    }
+
+    const revision = numberValue(roomSnapshot.get("revision")) + 1;
+    const deleted = action === "DELETE";
+    const result = {
+      operationId,
+      roomRemoteId,
+      action,
+      revision,
+      updatedByUid: requestAuth.uid,
+      deleted,
+      alreadyApplied: false,
+    };
+
+    if (deleted) {
+      tx.delete(roomDoc);
+    } else {
+      const nextStatus = action === "REACTIVATE" ? "ACTIVE" : action === "DISABLE" ? "DISABLED" : "RETIRED";
+      tx.set(roomDoc, {
+        lifecycleStatus: nextStatus,
+        lifecycleReason: nextStatus === "ACTIVE" ? null : reason,
+        disabledAtMillis: nextStatus === "DISABLED" ? now : null,
+        retiredAtMillis: nextStatus === "RETIRED" ? now : null,
+        isDeleted: false,
+        updatedAt: now,
+        revision,
+        updatedByUid: requestAuth.uid,
+        serverUpdatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+    tx.set(auditDoc, {
+      hotelRemoteId: hotelId,
+      roomRemoteId,
+      operationId,
+      action,
+      reason: reason || null,
+      previousStatus,
+      newStatus: deleted ? "DELETED" :
+        action === "REACTIVATE" ? "ACTIVE" : action === "DISABLE" ? "DISABLED" : "RETIRED",
+      userUid: requestAuth.uid,
+      serverTime: FieldValue.serverTimestamp(),
+    });
+    tx.set(mutationDoc, {
+      ...result,
+      hotelRemoteId: hotelId,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+    return result;
+  });
+});
+
 /** Applies one receptionist Save as a field/room change set against the latest cloud booking. */
 export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (request) => {
   const requestAuth = await requireAuth(request);
@@ -1409,7 +1589,7 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
   const setFields = (changeSet.setFields || {}) as Record<string, unknown>;
   const addRoomIds = new Set(stringList(changeSet.addRoomRemoteIds));
   const removeRoomIds = new Set(stringList(changeSet.removeRoomRemoteIds));
-  const rebuildFinancialLines = booleanValue(changeSet.rebuildFinancialLines);
+  const requestedFinancialLineRebuild = booleanValue(changeSet.rebuildFinancialLines);
   const template = (changeSet.financialLineTemplate || {}) as Record<string, unknown>;
   const requestedLineIds = (changeSet.financialLineRemoteIdsByKey || {}) as Record<string, unknown>;
 
@@ -1432,6 +1612,21 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
   if (addRoomIds.size === 0 && removeRoomIds.size === 0 && Object.keys(setFields).length === 0) {
     throw new HttpsError("invalid-argument", "This save contains no booking changes.");
   }
+  const financialImpactFields = new Set([
+    "propertyRemoteId", "sourceName", "sourceRemoteId", "sourceType",
+    "checkInMillis", "checkOutMillis", "pricingStatus", "grossCharges", "rate",
+    "receivable", "roomRevenue", "propertyTax", "commissionAmount", "commissionTax",
+    "sourceFee", "tdsAmount", "tcsAmount", "expectedPayout",
+  ]);
+  const serverDetectedFinancialImpact =
+    create ||
+    addRoomIds.size > 0 ||
+    removeRoomIds.size > 0 ||
+    Object.keys(setFields).some((field) => financialImpactFields.has(field));
+  // This flag is a calculation instruction, never an authorization boundary.
+  // The server independently detects all known room-billing changes so a stale,
+  // faulty, or modified client cannot bypass issued-bill protection.
+  const rebuildFinancialLines = requestedFinancialLineRebuild || serverDetectedFinancialImpact;
 
   const hotelRef = publicHotelRef(hotelId);
   const bookingDoc = hotelRef.collection("bookings").doc(bookingRemoteId);
@@ -1656,8 +1851,15 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
         .where(FieldPath.documentId(), "<", `${finalBillPrefix}\uf8ff`)
         .limit(5)
     );
-    if (rebuildFinancialLines && finalBills.docs.some((doc) => !booleanValue(doc.get("isDeleted")))) {
-      throw new HttpsError("failed-precondition", "Room price, dates and rooms are locked because the final bill has been issued.");
+    const cancellationRequested =
+      String(next.bookingStatus || "RESERVED") === "CANCELLED" &&
+      String(current.bookingStatus || "RESERVED") !== "CANCELLED";
+    if ((rebuildFinancialLines || cancellationRequested) &&
+        finalBills.docs.some((doc) => !booleanValue(doc.get("isDeleted")))) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This booking's room billing is locked because the final bill has been issued."
+      );
     }
 
     const estimatedFinancialWrites = rebuildFinancialLines ? newLockIds.size + financialSnapshot.size : 0;

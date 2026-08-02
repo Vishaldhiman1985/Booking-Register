@@ -567,6 +567,26 @@ class CloudSyncManager(
         return CloudWriteResult(nextRevision, currentUid())
     }
 
+    suspend fun changeRoomLifecycle(
+        operationId: String,
+        roomRemoteId: String,
+        action: String,
+        reason: String? = null
+    ): CloudWriteResult {
+        val response = functions
+            .getHttpsCallable("changeRoomLifecycleServer")
+            .callSafely(
+                mapOf(
+                    "hotelId" to hotelRemoteId,
+                    "operationId" to operationId,
+                    "roomRemoteId" to roomRemoteId,
+                    "action" to action,
+                    "reason" to reason
+                )
+            )
+        return response.data.toCloudWriteResult()
+    }
+
     suspend fun pushCategory(category: RoomCategoryEntity): CloudWriteResult {
         val nextRevision = nextRevisionFor(category.revision, category.baseRevision)
         hotelDoc.collection("roomCategories")

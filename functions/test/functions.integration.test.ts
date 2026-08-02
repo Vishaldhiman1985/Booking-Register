@@ -51,13 +51,20 @@ function unauthenticatedCaller(): (name: string, data: unknown) => Promise<unkno
   return async (name, data) => (await httpsCallable(functions, name)(data)).data;
 }
 
-async function seedMembership(uid: string, options: { active?: boolean; expired?: boolean } = {}): Promise<void> {
+async function seedMembership(
+  uid: string,
+  options: { active?: boolean; expired?: boolean; role?: "OWNER" | "MANAGER" | "STAFF" } = {}
+): Promise<void> {
   const db = getFirestore(adminApp);
   await db.doc("hotelAccounts/hotel-a").set({
     status: "ACTIVE",
     accessUntil: Timestamp.fromMillis(Date.now() + (options.expired ? -60_000 : 86_400_000)),
   });
-  await db.doc(`hotelAccounts/hotel-a/members/${uid}`).set({ uid, role: "STAFF", active: options.active ?? true });
+  await db.doc(`hotelAccounts/hotel-a/members/${uid}`).set({
+    uid,
+    role: options.role ?? "STAFF",
+    active: options.active ?? true,
+  });
   await db.doc("hotels/hotel-a").set({ hotelRemoteId: "hotel-a", hotelName: "Hotel A" });
 }
 
@@ -711,5 +718,216 @@ describe("Firebase callable Functions integration", () => {
     const db = getFirestore(adminApp);
     expect((await db.doc("hotels/hotel-a/foodBills/bill-two").get()).exists).toBe(false);
     expect((await db.doc("hotels/hotel-a/foodBillItems/bill-item-two").get()).exists).toBe(false);
+  });
+
+  test("server detects a financial edit even when the client rebuild flag is false", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+    await seedRoom("room-a");
+    await seedCloudBooking("booking-a", { grossCharges: 1000 });
+    const db = getFirestore(adminApp);
+    await db.doc("hotels/hotel-a/bookingFinancialLines/line-a").set(
+      financialLine("line-a", "booking-a")
+    );
+    await db.doc("hotels/hotel-a/foodBills/booking-a_final_bill_issued").set({
+      hotelRemoteId: "hotel-a",
+      billNumber: "INV-LOCKED",
+      isDeleted: false,
+    });
+
+    await expectFunctionError(client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "bypass-final-bill-lock",
+      deviceId: "modified-client",
+      changeSet: {
+        bookingRemoteId: "booking-a",
+        create: false,
+        setFields: { grossCharges: 2000 },
+        addRoomRemoteIds: [],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: false,
+      },
+    }), "failed-precondition");
+
+    expect((await db.doc("hotels/hotel-a/bookings/booking-a").get()).get("grossCharges")).toBe(1000);
+    expect((await db.doc("hotels/hotel-a/appliedBookingChangeSets/bypass-final-bill-lock").get()).exists)
+      .toBe(false);
+  });
+
+  test("non-financial guest correction remains allowed after final billing", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+    await seedRoom("room-a");
+    await seedCloudBooking("booking-a", { grossCharges: 1000 });
+    const db = getFirestore(adminApp);
+    await db.doc("hotels/hotel-a/foodBills/booking-a_final_bill_issued").set({
+      hotelRemoteId: "hotel-a",
+      billNumber: "INV-LOCKED",
+      isDeleted: false,
+    });
+
+    await client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "guest-name-correction",
+      deviceId: "device-a",
+      changeSet: {
+        bookingRemoteId: "booking-a",
+        create: false,
+        setFields: { guestName: "Corrected Guest" },
+        addRoomRemoteIds: [],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: false,
+      },
+    });
+
+    expect((await db.doc("hotels/hotel-a/bookings/booking-a").get()).get("guestName"))
+      .toBe("Corrected Guest");
+  });
+
+  test("only owner or manager may change room lifecycle", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid, { role: "STAFF" });
+    await seedRoom("room-a");
+    await expectFunctionError(client.call("changeRoomLifecycleServer", {
+      hotelId: "hotel-a",
+      operationId: "staff-room-change",
+      roomRemoteId: "room-a",
+      action: "DISABLE",
+      reason: "Maintenance",
+    }), "permission-denied");
+  });
+
+  test("room with no history can be hard-deleted idempotently", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid, { role: "MANAGER" });
+    await seedRoom("room-a");
+    const payload = {
+      hotelId: "hotel-a",
+      operationId: "delete-unused-room",
+      roomRemoteId: "room-a",
+      action: "DELETE",
+    };
+    const first = await client.call("changeRoomLifecycleServer", payload) as Record<string, unknown>;
+    const retry = await client.call("changeRoomLifecycleServer", payload) as Record<string, unknown>;
+    expect(first.deleted).toBe(true);
+    expect(retry.alreadyApplied).toBe(true);
+    expect((await getFirestore(adminApp).doc("hotels/hotel-a/rooms/room-a").get()).exists).toBe(false);
+  });
+
+  test("room history blocks hard delete without partial audit documents", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid, { role: "MANAGER" });
+    await seedRoom("room-a");
+    await seedCloudBooking();
+    const db = getFirestore(adminApp);
+
+    await expectFunctionError(client.call("changeRoomLifecycleServer", {
+      hotelId: "hotel-a",
+      operationId: "delete-used-room",
+      roomRemoteId: "room-a",
+      action: "DELETE",
+    }), "failed-precondition");
+
+    expect((await db.doc("hotels/hotel-a/rooms/room-a").get()).exists).toBe(true);
+    expect((await db.doc("hotels/hotel-a/roomLifecycleAuditEvents/delete-used-room").get()).exists)
+      .toBe(false);
+    expect((await db.doc("hotels/hotel-a/appliedRoomLifecycleOperations/delete-used-room").get()).exists)
+      .toBe(false);
+  });
+
+  test("active or future booking blocks room disable and retirement", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid, { role: "MANAGER" });
+    await seedRoom("room-a");
+    await seedCloudBooking();
+
+    for (const action of ["DISABLE", "RETIRE"]) {
+      await expectFunctionError(client.call("changeRoomLifecycleServer", {
+        hotelId: "hotel-a",
+        operationId: `blocked-${action.toLowerCase()}`,
+        roomRemoteId: "room-a",
+        action,
+        reason: "Maintenance",
+      }), "failed-precondition");
+    }
+    expect((await getFirestore(adminApp).doc("hotels/hotel-a/rooms/room-a").get()).get("lifecycleStatus"))
+      .toBe("ACTIVE");
+  });
+
+  test("cancelled future booking no longer blocks room retirement", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid, { role: "MANAGER" });
+    await seedRoom("room-a");
+    await seedCloudBooking("cancelled-future", {
+      bookingStatus: "CANCELLED",
+      cancellationReason: "Guest cancelled",
+      cancellationSettlementStatus: "NOT_REQUIRED",
+    });
+
+    await client.call("changeRoomLifecycleServer", {
+      hotelId: "hotel-a",
+      operationId: "retire-after-cancellation",
+      roomRemoteId: "room-a",
+      action: "RETIRE",
+      reason: "Permanent renovation",
+    });
+
+    expect((await getFirestore(adminApp).doc("hotels/hotel-a/rooms/room-a").get()).get("lifecycleStatus"))
+      .toBe("RETIRED");
+  });
+
+  test("unbilled past booking blocks room retirement", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid, { role: "MANAGER" });
+    await seedRoom("room-a");
+    const pastCheckout = Date.now() - 86_400_000;
+    await seedCloudBooking("unbilled-past", {
+      checkInMillis: pastCheckout - 86_400_000,
+      checkOutMillis: pastCheckout,
+      bookingStatus: "CHECKED_OUT",
+    });
+
+    await expectFunctionError(client.call("changeRoomLifecycleServer", {
+      hotelId: "hotel-a",
+      operationId: "retire-unbilled-past",
+      roomRemoteId: "room-a",
+      action: "RETIRE",
+      reason: "Permanent renovation",
+    }), "failed-precondition");
+
+    expect((await getFirestore(adminApp).doc("hotels/hotel-a/rooms/room-a").get()).get("lifecycleStatus"))
+      .toBe("ACTIVE");
+  });
+
+  test("room with only past billed history can be retired and remains in history", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid, { role: "MANAGER" });
+    await seedRoom("room-a");
+    const pastCheckout = Date.now() - 86_400_000;
+    await seedCloudBooking("past-booking", {
+      checkInMillis: pastCheckout - 86_400_000,
+      checkOutMillis: pastCheckout,
+      bookingStatus: "CHECKED_OUT",
+    });
+    const db = getFirestore(adminApp);
+    await db.doc("hotels/hotel-a/foodBills/past-booking_final_bill_issued").set({
+      hotelRemoteId: "hotel-a",
+      billNumber: "INV-PAST",
+      isDeleted: false,
+    });
+
+    await client.call("changeRoomLifecycleServer", {
+      hotelId: "hotel-a",
+      operationId: "retire-past-room",
+      roomRemoteId: "room-a",
+      action: "RETIRE",
+      reason: "Permanent renovation",
+    });
+
+    const room = await db.doc("hotels/hotel-a/rooms/room-a").get();
+    expect(room.exists).toBe(true);
+    expect(room.get("lifecycleStatus")).toBe("RETIRED");
+    expect(room.get("lifecycleReason")).toBe("Permanent renovation");
+    expect((await db.doc("hotels/hotel-a/bookings/past-booking").get()).exists).toBe(true);
   });
 });

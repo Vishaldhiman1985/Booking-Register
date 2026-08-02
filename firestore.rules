@@ -60,6 +60,19 @@ service cloud.firestore {
       return resource.data.hotelRemoteId == hotelId;
     }
 
+    function roomLifecycleUnchanged() {
+      return request.resource.data.get('lifecycleStatus', 'ACTIVE')
+          == resource.data.get('lifecycleStatus', 'ACTIVE')
+        && request.resource.data.get('lifecycleReason', null)
+          == resource.data.get('lifecycleReason', null)
+        && request.resource.data.get('disabledAtMillis', null)
+          == resource.data.get('disabledAtMillis', null)
+        && request.resource.data.get('retiredAtMillis', null)
+          == resource.data.get('retiredAtMillis', null)
+        && request.resource.data.get('isDeleted', false)
+          == resource.data.get('isDeleted', false);
+    }
+
     match /hotelAccounts/{hotelId} {
       allow read: if isActiveMember(hotelId);
       allow create, update, delete: if false;
@@ -77,8 +90,15 @@ service cloud.firestore {
 
       match /rooms/{roomId} {
         allow read: if canReadHotel(hotelId);
-        allow create, update: if canManageHotel(hotelId) && scopedToHotel(hotelId);
-        allow delete: if canManageHotel(hotelId);
+        allow create: if canManageHotel(hotelId)
+          && scopedToHotel(hotelId)
+          && request.resource.data.get('lifecycleStatus', 'ACTIVE') == 'ACTIVE'
+          && request.resource.data.get('isDeleted', false) == false;
+        allow update: if canManageHotel(hotelId)
+          && scopedToHotel(hotelId)
+          && existingScopedToHotel(hotelId)
+          && roomLifecycleUnchanged();
+        allow delete: if false;
       }
 
       match /managedProperties/{propertyId} {
@@ -169,6 +189,16 @@ service cloud.firestore {
 
       match /bookingAuditEvents/{eventId} {
         allow read: if canReadHotel(hotelId);
+        allow create, update, delete: if false;
+      }
+
+      match /roomLifecycleAuditEvents/{eventId} {
+        allow read: if canReadHotel(hotelId);
+        allow create, update, delete: if false;
+      }
+
+      match /appliedRoomLifecycleOperations/{operationId} {
+        allow read: if canManageHotel(hotelId);
         allow create, update, delete: if false;
       }
     }

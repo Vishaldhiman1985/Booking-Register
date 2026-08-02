@@ -56,6 +56,16 @@ class RoomLifecyclePolicyTest {
     }
 
     @Test
+    fun `cancelled future booking does not block room lifecycle change`() {
+        val cancelled = booking(
+            checkIn = now + 1_000,
+            checkOut = now + 10_000,
+            status = BookingStatus.CANCELLED
+        )
+        assertTrue(RoomLifecyclePolicy.blockingBookings("room_1", listOf(cancelled), now).isEmpty())
+    }
+
+    @Test
     fun `past unbilled booking blocks retirement`() {
         assertTrue(
             RoomLifecyclePolicy.retirementBillingError(hasUnbilledPastBooking = true)
