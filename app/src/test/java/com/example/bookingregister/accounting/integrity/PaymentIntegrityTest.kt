@@ -13,6 +13,79 @@ import org.junit.Test
 class PaymentIntegrityTest {
 
     @Test
+    fun overpayment_correction_reduces_unapplied_credit_without_reopening_room_balance() {
+        val booking = BookingEntity(
+            remoteId = "vinay_booking",
+            bookingUuid = "VINAY-1",
+            hotelRemoteId = "hotel_1",
+            guestName = "Vinay Kansal",
+            sourceName = "Direct",
+            sourceType = BookingSourceType.DIRECT,
+            checkInMillis = 1_700_000_000_000L,
+            checkOutMillis = 1_700_086_400_000L,
+            roomRemoteIds = listOf("M101"),
+            grossCharges = 4_500.0,
+            rate = 4_500.0,
+            receivable = 4_500.0
+        )
+        val roomLines = listOf(
+            BookingFinancialLineEntity(
+                remoteId = "vinay_line",
+                hotelRemoteId = "hotel_1",
+                bookingRemoteId = booking.remoteId,
+                roomRemoteId = "M101",
+                businessDateMillis = booking.checkInMillis,
+                grossAmount = 4_500.0,
+                taxableAmount = 4_285.71,
+                gstRatePercent = 5.0,
+                gstAmount = 214.29
+            )
+        )
+        val payments = listOf(
+            BookingPaymentEntity(
+                remoteId = "advance_1500",
+                hotelRemoteId = "hotel_1",
+                bookingRemoteId = booking.remoteId,
+                paymentType = BookingPaymentType.ADVANCE,
+                paymentCategory = BookingPaymentCategory.STAY,
+                amount = 1_500.0,
+                allocatedStayAmount = 1_500.0
+            ),
+            BookingPaymentEntity(
+                remoteId = "payment_3500",
+                hotelRemoteId = "hotel_1",
+                bookingRemoteId = booking.remoteId,
+                paymentType = BookingPaymentType.PAYMENT,
+                paymentCategory = BookingPaymentCategory.STAY,
+                amount = 3_500.0,
+                allocatedStayAmount = 3_000.0,
+                unappliedAmount = 500.0
+            ),
+            BookingPaymentEntity(
+                remoteId = "correction_500",
+                hotelRemoteId = "hotel_1",
+                bookingRemoteId = booking.remoteId,
+                paymentType = BookingPaymentType.ADJUSTMENT,
+                paymentCategory = BookingPaymentCategory.STAY,
+                amount = 500.0,
+                unappliedAmount = 500.0
+            )
+        )
+
+        val folio = FolioSummaryBuilder.build(
+            booking = booking,
+            payments = payments,
+            foodOrders = emptyList(),
+            bookingFinancialLines = roomLines
+        )
+
+        assertEquals(4_500.0, folio.stayPaid, 0.01)
+        assertEquals(0.0, folio.stayBalance, 0.01)
+        assertEquals(4_500.0, folio.totalPaid, 0.01)
+        assertEquals(0.0, folio.grandBalance, 0.01)
+    }
+
+    @Test
     fun payment_refund_and_adjustment_change_balance_consistently() {
         val booking = BookingEntity(
             remoteId = "booking_1",

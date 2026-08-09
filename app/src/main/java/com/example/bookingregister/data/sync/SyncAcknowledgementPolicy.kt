@@ -11,4 +11,9 @@ object SyncAcknowledgementPolicy {
     ): Boolean = sentUpdatedAt == currentUpdatedAt &&
         sentRevision == currentRevision &&
         sentBaseRevision == currentBaseRevision
+
+    fun canMarkAggregateSynced(
+        sentVersionIsCurrent: Boolean,
+        hasLaterOperation: Boolean
+    ): Boolean = sentVersionIsCurrent && !hasLaterOperation
 }

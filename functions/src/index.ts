@@ -1609,7 +1609,8 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
   if (Array.from(addRoomIds).some((roomId) => removeRoomIds.has(roomId))) {
     throw new HttpsError("invalid-argument", "The same room cannot be added and removed in one save.");
   }
-  if (addRoomIds.size === 0 && removeRoomIds.size === 0 && Object.keys(setFields).length === 0) {
+  if (addRoomIds.size === 0 && removeRoomIds.size === 0 && Object.keys(setFields).length === 0 &&
+      !requestedFinancialLineRebuild) {
     throw new HttpsError("invalid-argument", "This save contains no booking changes.");
   }
   const financialImpactFields = new Set([

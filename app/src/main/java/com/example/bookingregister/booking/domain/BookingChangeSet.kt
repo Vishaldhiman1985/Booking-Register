@@ -15,6 +15,13 @@ data class BookingChangeSet(
     val financialLineTemplate: Map<String, Any?>?,
     val financialLineRemoteIdsByKey: Map<String, String>
 ) {
+    val hasChanges: Boolean
+        get() = create ||
+            setFields.isNotEmpty() ||
+            addRoomRemoteIds.isNotEmpty() ||
+            removeRoomRemoteIds.isNotEmpty() ||
+            rebuildFinancialLines
+
     fun toMap(): Map<String, Any?> = mapOf(
         "bookingRemoteId" to bookingRemoteId,
         "create" to create,

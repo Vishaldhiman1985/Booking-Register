@@ -56,6 +56,15 @@ class BookingChangeSetTest {
         assertFalse(changeSet.rebuildFinancialLines)
     }
 
+    @Test
+    fun `unchanged booking does not create an empty sync command`() {
+        val existing = booking(3_000.0, listOf("H101"))
+
+        val changeSet = BookingChangeSet.create(existing, existing, emptyList(), emptyList())
+
+        assertFalse(changeSet.hasChanges)
+    }
+
     private fun booking(total: Double, rooms: List<String>) = BookingEntity(
         remoteId = "booking-a", bookingUuid = "booking-a", hotelRemoteId = "hotel-a",
         guestName = "Guest", checkInMillis = 1_000, checkOutMillis = 2_000,

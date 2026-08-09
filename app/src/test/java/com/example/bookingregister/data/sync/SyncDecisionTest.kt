@@ -48,6 +48,32 @@ class SyncDecisionTest {
     }
 
     @Test
+    fun failedHistoricalPaymentRewrite_recoversFromExistingCloudRevision() {
+        val accepted = shouldAcceptRemotePaymentEntity(
+            localSyncState = SyncState.FAILED,
+            localRevision = 4L,
+            localUpdatedAt = 9_000L,
+            remoteRevision = 4L,
+            remoteUpdatedAt = 5_000L
+        )
+
+        assertTrue(accepted)
+    }
+
+    @Test
+    fun newPendingPayment_isNeverOverwrittenByListener() {
+        val accepted = shouldAcceptRemotePaymentEntity(
+            localSyncState = SyncState.PENDING,
+            localRevision = 0L,
+            localUpdatedAt = 9_000L,
+            remoteRevision = 99L,
+            remoteUpdatedAt = 10_000L
+        )
+
+        assertFalse(accepted)
+    }
+
+    @Test
     fun syncBoundary_returnsNullForFreshInstallSoCloudCanHydrateLocalDatabase() {
         assertNull(syncBoundary(localCount = 0, maxUpdatedAt = null))
     }

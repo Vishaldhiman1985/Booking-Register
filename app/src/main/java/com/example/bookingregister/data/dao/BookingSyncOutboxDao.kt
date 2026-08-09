@@ -29,4 +29,7 @@ interface BookingSyncOutboxDao {
 
     @Query("SELECT COUNT(*) FROM booking_sync_outbox WHERE hotelRemoteId = :hotelRemoteId")
     suspend fun countPending(hotelRemoteId: String): Int
+
+    @Query("SELECT COUNT(*) FROM booking_sync_outbox WHERE hotelRemoteId = :hotelRemoteId AND bookingRemoteId = :bookingRemoteId")
+    suspend fun countPendingForBooking(hotelRemoteId: String, bookingRemoteId: String): Int
 }

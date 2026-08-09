@@ -144,7 +144,7 @@ class FolioSnapshotBuilder {
                 totals.addTo(BookingPaymentCategory.FOOD, sign * payment.allocatedFoodAmount)
                 totals.addTo(BookingPaymentCategory.SERVICE, sign * payment.allocatedServiceAmount)
                 totals.addTo(BookingPaymentCategory.DAMAGE, sign * payment.allocatedDamageAmount)
-            } else {
+            } else if (!(payment.paymentType == BookingPaymentType.ADJUSTMENT && payment.unappliedAmount > 0.0)) {
                 val category = BookingPaymentCategory.normalize(payment.paymentCategory)
                 val bucket = when (category) {
                     BookingPaymentCategory.FOOD,

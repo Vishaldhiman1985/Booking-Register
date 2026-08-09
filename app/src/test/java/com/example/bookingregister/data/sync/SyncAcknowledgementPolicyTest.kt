@@ -19,4 +19,24 @@ class SyncAcknowledgementPolicyTest {
     fun `revision changes are not mistaken for the sent version`() {
         assertFalse(SyncAcknowledgementPolicy.isSameVersion(100, 2, 2, 100, 3, 3))
     }
+
+    @Test
+    fun `earlier operation cannot mark aggregate synced while a later save is waiting`() {
+        assertFalse(
+            SyncAcknowledgementPolicy.canMarkAggregateSynced(
+                sentVersionIsCurrent = true,
+                hasLaterOperation = true
+            )
+        )
+    }
+
+    @Test
+    fun `latest unchanged operation may mark aggregate synced`() {
+        assertTrue(
+            SyncAcknowledgementPolicy.canMarkAggregateSynced(
+                sentVersionIsCurrent = true,
+                hasLaterOperation = false
+            )
+        )
+    }
 }
