@@ -12,7 +12,10 @@ object BookingPaymentStatus {
 
 object BookingPaymentCalculator {
     fun normalize(booking: BookingEntity): BookingEntity {
-        if (booking.paymentStatus == BookingPaymentStatus.COMPLIMENTARY) {
+        if (
+            BookingPricingStatus.isComplimentary(booking.pricingStatus) ||
+            booking.paymentStatus == BookingPaymentStatus.COMPLIMENTARY
+        ) {
             return booking.copy(
                 rate = 0.0,
                 receivable = 0.0,

@@ -13,6 +13,8 @@ object BookingPricingStatus {
 
     fun isPending(value: String?): Boolean = normalize(value) == PENDING
 
+    fun isComplimentary(value: String?): Boolean = normalize(value) == COMPLIMENTARY
+
     fun canTakeStayPayment(value: String?): Boolean = !isPending(value)
 
     fun canGenerateRoomBill(value: String?): Boolean = !isPending(value)

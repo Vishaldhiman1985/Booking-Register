@@ -43,6 +43,13 @@ class BookingPricingStatusTest {
         assertTrue(BookingPricingStatus.canGenerateRoomBill(BookingPricingStatus.COMPLIMENTARY))
     }
 
+    @Test
+    fun complimentaryClassificationIsIndependentOfPaymentAmount() {
+        assertTrue(BookingPricingStatus.isComplimentary(BookingPricingStatus.COMPLIMENTARY))
+        assertFalse(BookingPricingStatus.isComplimentary(BookingPricingStatus.CONFIRMED))
+        assertFalse(BookingPricingStatus.isComplimentary(BookingPricingStatus.PENDING))
+    }
+
     private fun pendingOtaBooking() = BookingEntity(
         remoteId = "ota_pending_1",
         bookingUuid = "OTA-PENDING-1",

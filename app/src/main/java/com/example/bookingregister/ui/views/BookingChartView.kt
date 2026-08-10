@@ -15,6 +15,7 @@ import android.view.View
 import android.widget.OverScroller
 import androidx.core.view.GestureDetectorCompat
 import com.example.bookingregister.booking.domain.BookingChartVisibilityPolicy
+import com.example.bookingregister.booking.domain.BookingPricingStatus
 import com.example.bookingregister.booking.domain.BookingStatus
 import com.example.bookingregister.data.repository.PaymentStatus
 import com.example.bookingregister.data.entities.BookingEntity
@@ -722,6 +723,7 @@ class BookingChartView @JvmOverloads constructor(
     }
 
     private fun getBookingPaint(booking: BookingEntity): Paint {
+        if (BookingPricingStatus.isComplimentary(booking.pricingStatus)) return bookingComplimentaryPaint
         if (booking.sourceType == BookingSourceType.OTA) return bookingFullyPaidPaint
         return when (booking.paymentStatus) {
             PaymentStatus.FULLY_PAID -> bookingFullyPaidPaint
