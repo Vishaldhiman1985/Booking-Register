@@ -65,6 +65,7 @@ import com.example.bookingregister.data.sync.StructuredSyncException
 import com.example.bookingregister.data.sync.SyncFailureCode
 import com.example.bookingregister.data.sync.SyncWorkScheduler
 import com.example.bookingregister.data.sync.SyncAcknowledgementPolicy
+import com.example.bookingregister.data.sync.BookingOrphanReconciliationPolicy
 import com.example.bookingregister.data.sync.shouldAcceptRemotePaymentEntity
 import com.example.bookingregister.data.withCalculatedPayment
 import com.example.bookingregister.tax.domain.FoodGstCalculator
@@ -1849,6 +1850,10 @@ class BookingRepository(
         } else {
             BookingChangeSet.fromJson(operation.changeSetJson)
         }
+        if (!changeSet.hasChanges) {
+            acknowledgeEmptyBookingOperation(operation)
+            return
+        }
         val deviceId = Settings.Secure.getString(appContext.contentResolver, Settings.Secure.ANDROID_ID)
             ?.takeIf { it.isNotBlank() } ?: "unknown-android-device"
 
@@ -1966,6 +1971,21 @@ class BookingRepository(
         }
     }
 
+    private suspend fun acknowledgeEmptyBookingOperation(operation: BookingSyncOutboxEntity) {
+        db.withTransaction {
+            bookingSyncOutboxDao.delete(operation.operationId)
+            val hasLaterOperation = bookingSyncOutboxDao.countPendingForBooking(
+                hotelRemoteId = operation.hotelRemoteId,
+                bookingRemoteId = operation.bookingRemoteId
+            ) > 0
+            if (!hasLaterOperation) {
+                bookingDao.getByRemoteId(operation.bookingRemoteId)?.let { current ->
+                    bookingDao.upsert(current.markSynced())
+                }
+            }
+        }
+    }
+
     private suspend fun pushAccountingChargeAndMark(charge: BookingAccountingChargeEntity) {
         runCatching { cloudSyncManager.pushAccountingCharge(charge) }
             .onSuccess { result ->
@@ -2065,8 +2085,18 @@ class BookingRepository(
 
     private suspend fun upsertRemoteBookingIfNewer(remote: BookingEntity) {
         val local = bookingDao.getByRemoteId(remote.remoteId)
+        val hasPendingIntent = local != null && bookingSyncOutboxDao.countPendingForBooking(
+            hotelRemoteId = hotelRemoteId,
+            bookingRemoteId = remote.remoteId
+        ) > 0
+        val resolvesMatchingOrphan = local != null &&
+            BookingOrphanReconciliationPolicy.canAcceptMatchingCloudBooking(
+                local = local,
+                cloud = remote,
+                hasPendingIntent = hasPendingIntent
+            )
 
-        if (local == null || shouldAcceptRemote(local, remote.revision, remote.updatedAt)) {
+        if (local == null || resolvesMatchingOrphan || shouldAcceptRemote(local, remote.revision, remote.updatedAt)) {
             bookingDao.upsert(
                 remote.copy(localId = local?.localId ?: 0)
                     .withCalculatedPayment()

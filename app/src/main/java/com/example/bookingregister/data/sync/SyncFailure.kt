@@ -24,3 +24,6 @@ fun syncFailureText(error: Throwable): String {
 
 fun isStaleRevisionFailure(message: String?): Boolean =
     message?.trim()?.startsWith("[${SyncFailureCode.STALE_REVISION.name}]") == true
+
+fun isOrphanedBookingIntentFailure(message: String?): Boolean =
+    message?.trim()?.startsWith("[${SyncFailureCode.ORPHANED_BOOKING_INTENT.name}]") == true

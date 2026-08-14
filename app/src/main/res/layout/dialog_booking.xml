@@ -830,13 +830,16 @@
                 <EditText
                     android:id="@+id/etNotes"
                     android:layout_width="match_parent"
-                    android:layout_height="52dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="96dp"
+                    android:minLines="4"
                     android:background="@drawable/bg_booking_field_world"
                     android:backgroundTint="#FFFFFF"
                     android:gravity="top|start"
                     android:hint="Add notes..."
                     android:inputType="textMultiLine"
                     android:padding="10dp"
+                    android:scrollHorizontally="false"
                     android:textColor="#24212A"
                     android:textSize="12sp" />
             </LinearLayout>
