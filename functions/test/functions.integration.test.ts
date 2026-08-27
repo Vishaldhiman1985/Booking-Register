@@ -178,6 +178,111 @@ describe("Firebase callable Functions integration", () => {
     }), "permission-denied");
   }, 15_000);
 
+  test("first device claim activates that device", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+
+    const result = await client.call("claimMyDevice", {
+      deviceId: "device-one",
+      deviceName: "Test Phone One",
+    }) as {
+      allowed: boolean;
+      deviceId: string;
+      deviceStatus: string;
+      decision: string;
+    };
+
+    expect(result.allowed).toBe(true);
+    expect(result.deviceId).toBe("device-one");
+    expect(result.deviceStatus).toBe("ACTIVE");
+    expect(result.decision).toBe("ACTIVATE");
+
+    const db = getFirestore(adminApp);
+
+    const member = await db
+      .doc(`hotelAccounts/hotel-a/members/${client.auth.currentUser!.uid}`)
+      .get();
+
+    expect(member.get("activeDeviceId")).toBe("device-one");
+
+    const device = await db
+      .doc(
+        `hotelAccounts/hotel-a/members/${client.auth.currentUser!.uid}/devices/device-one`
+      )
+      .get();
+
+    expect(device.exists).toBe(true);
+    expect(device.get("status")).toBe("ACTIVE");
+  }, 15_000);
+
+  test("same device claim refreshes without creating another active device", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+
+    await client.call("claimMyDevice", {
+      deviceId: "device-one",
+      deviceName: "Test Phone One",
+    });
+
+    const result = await client.call("claimMyDevice", {
+      deviceId: "device-one",
+      deviceName: "Test Phone One",
+    }) as {
+      allowed: boolean;
+      decision: string;
+    };
+
+    expect(result.allowed).toBe(true);
+    expect(result.decision).toBe("REFRESH");
+
+    const db = getFirestore(adminApp);
+
+    const devices = await db
+      .collection(
+        `hotelAccounts/hotel-a/members/${client.auth.currentUser!.uid}/devices`
+      )
+      .get();
+
+    expect(devices.size).toBe(1);
+  }, 15_000);
+
+  test("different device is blocked while first device remains active", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+
+    await client.call("claimMyDevice", {
+      deviceId: "device-one",
+      deviceName: "Test Phone One",
+    });
+
+    const result = await client.call("claimMyDevice", {
+      deviceId: "device-two",
+      deviceName: "Test Phone Two",
+    }) as {
+      allowed: boolean;
+      reason: string;
+    };
+
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("DEVICE_ALREADY_ACTIVE");
+
+    const db = getFirestore(adminApp);
+
+    const member = await db
+      .doc(`hotelAccounts/hotel-a/members/${client.auth.currentUser!.uid}`)
+      .get();
+
+    expect(member.get("activeDeviceId")).toBe("device-one");
+
+    const secondDevice = await db
+      .doc(
+        `hotelAccounts/hotel-a/members/${client.auth.currentUser!.uid}/devices/device-two`
+      )
+      .get();
+
+    expect(secondDevice.exists).toBe(false);
+  }, 15_000);
+
   test("booking change sets merge price and room changes without revision conflicts or payment duplication", async () => {
     const deviceA = await createClient();
     const deviceB = await createClient();

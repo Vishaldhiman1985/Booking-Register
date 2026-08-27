@@ -4,6 +4,12 @@ import { DocumentReference, DocumentSnapshot, FieldPath, FieldValue, Timestamp, 
 import { CallableRequest, HttpsError, onCall } from "firebase-functions/v2/https";
 import { logger, setGlobalOptions } from "firebase-functions/v2";
 
+import {
+  DEVICE_STATUS_ACTIVE,
+  decideDeviceClaim,
+  normalizeDeviceId,
+} from "./deviceSessionPolicy";
+
 initializeApp();
 setGlobalOptions({ region: "asia-south1", maxInstances: 10 });
 
@@ -65,6 +71,10 @@ function accountRef(hotelId: string) {
 
 function memberRef(hotelId: string, uid: string) {
   return accountRef(hotelId).collection("members").doc(uid);
+}
+
+function deviceRef(hotelId: string, uid: string, deviceId: string) {
+  return memberRef(hotelId, uid).collection("devices").doc(deviceId);
 }
 
 function publicHotelRef(hotelId: string) {
@@ -297,6 +307,136 @@ export const setHotelUserActive = onCall({ invoker: "public" }, async (request) 
   return { uid, active };
 });
 
+export const claimMyDevice = onCall({ invoker: "public" }, async (request) => {
+      const requestAuth = await requireAuth(request);
+
+      let hotelId = String(requestAuth.token.hotelId || "").trim();
+      let member = hotelId
+        ? await memberRef(hotelId, requestAuth.uid).get()
+        : undefined;
+
+      if (!hotelId || !member?.exists || member.get("active") !== true) {
+        const memberships = await db.collectionGroup("members")
+          .where("uid", "==", requestAuth.uid)
+          .where("active", "==", true)
+          .limit(1)
+          .get();
+
+        if (memberships.empty) {
+          return {
+            allowed: false,
+            reason: "NO_ACTIVE_MEMBERSHIP",
+          };
+        }
+
+        member = memberships.docs[0];
+        hotelId = member.ref.parent.parent?.id || "";
+
+        if (!hotelId) {
+          return {
+            allowed: false,
+            reason: "NO_ACTIVE_MEMBERSHIP",
+          };
+        }
+      }
+
+      await requireUsableSubscription(hotelId);
+
+      let deviceId: string;
+
+      try {
+        deviceId = normalizeDeviceId(request.data?.deviceId);
+      } catch {
+        throw new HttpsError(
+          "invalid-argument",
+          "Device identity is invalid."
+        );
+      }
+
+      const deviceName = String(request.data?.deviceName || "")
+        .trim()
+        .slice(0, 120);
+
+      const memberDocument = memberRef(hotelId, requestAuth.uid);
+      const deviceDocument = deviceRef(
+        hotelId,
+        requestAuth.uid,
+        deviceId
+      );
+
+      const decision = await db.runTransaction(async (tx) => {
+        const currentMember = await tx.get(memberDocument);
+
+        if (!currentMember.exists || currentMember.get("active") !== true) {
+          return "NO_ACTIVE_MEMBERSHIP" as const;
+        }
+
+        const activeDeviceId = currentMember.get("activeDeviceId");
+        const claimDecision = decideDeviceClaim(
+          activeDeviceId,
+          deviceId
+        );
+
+        if (claimDecision === "BLOCKED") {
+          return "BLOCKED" as const;
+        }
+
+        const currentDevice = await tx.get(deviceDocument);
+        const now = FieldValue.serverTimestamp();
+
+        if (!currentDevice.exists) {
+          tx.set(deviceDocument, {
+            uid: requestAuth.uid,
+            deviceId,
+            deviceName,
+            status: DEVICE_STATUS_ACTIVE,
+            firstSeenAt: now,
+            lastSeenAt: now,
+          });
+        } else {
+          tx.set(deviceDocument, {
+            deviceName,
+            status: DEVICE_STATUS_ACTIVE,
+            lastSeenAt: now,
+          }, { merge: true });
+        }
+
+        tx.set(memberDocument, {
+          activeDeviceId: deviceId,
+          activeDeviceUpdatedAt: now,
+        }, { merge: true });
+
+        return claimDecision;
+      });
+
+      if (decision === "NO_ACTIVE_MEMBERSHIP") {
+        return {
+          allowed: false,
+          reason: "NO_ACTIVE_MEMBERSHIP",
+        };
+      }
+
+      if (decision === "BLOCKED") {
+        return {
+          allowed: false,
+          reason: "DEVICE_ALREADY_ACTIVE",
+        };
+      }
+
+      logger.info("Device session claimed", {
+        hotelId,
+        uid: requestAuth.uid,
+        decision,
+      });
+
+      return {
+        allowed: true,
+        hotelId,
+        deviceId,
+        deviceStatus: DEVICE_STATUS_ACTIVE,
+        decision,
+      };
+    });
 export const setHotelSubscription = onCall({ invoker: "public" }, async (request) => {
   const requestAuth = await requireAuth(request);
   if (!isPlatformAdmin(requestAuth)) {
