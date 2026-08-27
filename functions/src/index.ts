@@ -899,8 +899,10 @@ export const saveBookingPaymentServer = onCall({ invoker: "public" }, async (req
       if (bookingCancelled && ["PAYMENT", "ADVANCE"].includes(paymentType)) {
         throw new HttpsError("failed-precondition", "Payments cannot be added to a cancelled booking.");
       }
-      if (paymentType !== "REFUND") return;
-      if (bookingCancelled) {
+      const isRefund = paymentType === "REFUND";
+      const isCorrection = paymentType === "ADJUSTMENT";
+      if (!isRefund && !isCorrection) return;
+      if (isRefund && bookingCancelled) {
         if (String(booking.get("cancellationSettlementStatus") || "PENDING") !== "DECIDED") {
           throw new HttpsError(
             "failed-precondition",
@@ -932,7 +934,7 @@ export const saveBookingPaymentServer = onCall({ invoker: "public" }, async (req
       }
       const originalPaymentRemoteId = requireString(
         entity.cloudData.originalPaymentRemoteId,
-        "original payment"
+        isCorrection ? "payment to correct" : "original payment"
       );
       const original = await tx.get(hotelRef.collection("bookingPayments").doc(originalPaymentRemoteId));
       if (!original.exists || booleanValue(original.get("isDeleted"))) {
@@ -942,25 +944,68 @@ export const saveBookingPaymentServer = onCall({ invoker: "public" }, async (req
         throw new HttpsError("invalid-argument", "Original payment belongs to another booking.");
       }
       if (!["PAYMENT", "ADVANCE"].includes(String(original.get("paymentType") || ""))) {
-        throw new HttpsError("failed-precondition", "Only a payment or advance can be refunded.");
+        throw new HttpsError(
+          "failed-precondition",
+          isCorrection ? "Only a payment or advance can be corrected." : "Only a payment or advance can be refunded."
+        );
       }
-      const priorRefunds = await tx.get(
+      const priorReversals = await tx.get(
         hotelRef.collection("bookingPayments")
           .where("originalPaymentRemoteId", "==", originalPaymentRemoteId)
       );
-      const refundedAmount = priorRefunds.docs
+      const reversedAmount = priorReversals.docs
         .filter((doc) => doc.id !== entity.remoteId && !booleanValue(doc.get("isDeleted")))
+        .filter((doc) => ["REFUND", "ADJUSTMENT"].includes(String(doc.get("paymentType") || "")))
         .reduce((sum, doc) => sum + numberValue(doc.get("amount")), 0);
-      if (numberValue(entity.cloudData.amount) > numberValue(original.get("amount")) - refundedAmount + 0.001) {
-        throw new HttpsError("failed-precondition", "Refund exceeds the remaining refundable amount.");
+      const remainingAmount = Math.max(0, numberValue(original.get("amount")) - reversedAmount);
+      const requestedAmount = numberValue(entity.cloudData.amount);
+      if (requestedAmount > remainingAmount + 0.001) {
+        throw new HttpsError(
+          "failed-precondition",
+          isCorrection ?
+            "Correction exceeds the remaining original payment." :
+            "Refund exceeds the remaining refundable amount."
+        );
       }
-      const ratio = numberValue(entity.cloudData.amount) / numberValue(original.get("amount"));
-      entity.cloudData.paymentCategory = String(original.get("paymentCategory") || "AUTO");
-      entity.cloudData.allocatedStayAmount = numberValue(original.get("allocatedStayAmount")) * ratio;
-      entity.cloudData.allocatedFoodAmount = numberValue(original.get("allocatedFoodAmount")) * ratio;
-      entity.cloudData.allocatedServiceAmount = numberValue(original.get("allocatedServiceAmount")) * ratio;
-      entity.cloudData.allocatedDamageAmount = numberValue(original.get("allocatedDamageAmount")) * ratio;
-      entity.cloudData.unappliedAmount = numberValue(original.get("unappliedAmount")) * ratio;
+      if (isCorrection && Math.abs(requestedAmount - remainingAmount) > 0.001) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Correction must reverse the full remaining original payment. Re-enter the correct payment afterwards."
+        );
+      }
+      const ratio = requestedAmount / numberValue(original.get("amount"));
+      const originalCategory = String(original.get("paymentCategory") || "AUTO").toUpperCase();
+      const originalAllocationTotal =
+        numberValue(original.get("allocatedStayAmount")) +
+        numberValue(original.get("allocatedFoodAmount")) +
+        numberValue(original.get("allocatedServiceAmount")) +
+        numberValue(original.get("allocatedDamageAmount")) +
+        numberValue(original.get("unappliedAmount"));
+      if (isCorrection && originalAllocationTotal <= 0.001) {
+        const correctionCategory = ["FOOD", "SERVICE", "DAMAGE"].includes(originalCategory) ? originalCategory : "STAY";
+        entity.cloudData.paymentCategory = correctionCategory;
+        entity.cloudData.allocatedStayAmount = correctionCategory === "STAY" ? requestedAmount : 0;
+        entity.cloudData.allocatedFoodAmount = correctionCategory === "FOOD" ? requestedAmount : 0;
+        entity.cloudData.allocatedServiceAmount = correctionCategory === "SERVICE" ? requestedAmount : 0;
+        entity.cloudData.allocatedDamageAmount = correctionCategory === "DAMAGE" ? requestedAmount : 0;
+        entity.cloudData.unappliedAmount = 0;
+      } else {
+        if (isCorrection && originalAllocationTotal > numberValue(original.get("amount")) + 0.02) {
+          throw new HttpsError(
+            "failed-precondition",
+            "Original payment allocation is inconsistent. Contact support before correcting it."
+          );
+        }
+        const implicitUnapplied = isCorrection ?
+          Math.max(0, numberValue(original.get("amount")) - originalAllocationTotal) : 0;
+        entity.cloudData.paymentCategory = originalCategory;
+        entity.cloudData.allocatedStayAmount = numberValue(original.get("allocatedStayAmount")) * ratio;
+        entity.cloudData.allocatedFoodAmount = numberValue(original.get("allocatedFoodAmount")) * ratio;
+        entity.cloudData.allocatedServiceAmount = numberValue(original.get("allocatedServiceAmount")) * ratio;
+        entity.cloudData.allocatedDamageAmount = numberValue(original.get("allocatedDamageAmount")) * ratio;
+        entity.cloudData.unappliedAmount =
+          (numberValue(original.get("unappliedAmount")) + implicitUnapplied) * ratio;
+      }
     }
   )
 );

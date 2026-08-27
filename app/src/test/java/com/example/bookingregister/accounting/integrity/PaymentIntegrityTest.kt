@@ -86,6 +86,79 @@ class PaymentIntegrityTest {
     }
 
     @Test
+    fun danish_wrong_payment_full_correction_restores_original_advance_and_balance() {
+        val booking = BookingEntity(
+            remoteId = "danish_booking",
+            bookingUuid = "DANISH-1",
+            hotelRemoteId = "hotel_1",
+            guestName = "Danish",
+            sourceName = "Direct",
+            sourceType = BookingSourceType.DIRECT,
+            checkInMillis = 1_700_000_000_000L,
+            checkOutMillis = 1_700_086_400_000L,
+            roomRemoteIds = listOf("duplex_2"),
+            grossCharges = 5_000.0,
+            rate = 5_000.0,
+            receivable = 5_000.0
+        )
+        val roomLines = listOf(
+            BookingFinancialLineEntity(
+                remoteId = "danish_line",
+                hotelRemoteId = "hotel_1",
+                bookingRemoteId = booking.remoteId,
+                roomRemoteId = "duplex_2",
+                businessDateMillis = booking.checkInMillis,
+                grossAmount = 5_000.0,
+                taxableAmount = 4_761.90,
+                gstRatePercent = 5.0,
+                gstAmount = 238.10
+            )
+        )
+        val payments = listOf(
+            BookingPaymentEntity(
+                remoteId = "advance_1500",
+                hotelRemoteId = "hotel_1",
+                bookingRemoteId = booking.remoteId,
+                paymentType = BookingPaymentType.ADVANCE,
+                paymentCategory = BookingPaymentCategory.STAY,
+                amount = 1_500.0,
+                allocatedStayAmount = 1_500.0
+            ),
+            BookingPaymentEntity(
+                remoteId = "wrong_payment_2000",
+                hotelRemoteId = "hotel_1",
+                bookingRemoteId = booking.remoteId,
+                paymentType = BookingPaymentType.PAYMENT,
+                paymentCategory = BookingPaymentCategory.STAY,
+                amount = 2_000.0,
+                allocatedStayAmount = 2_000.0
+            ),
+            BookingPaymentEntity(
+                remoteId = "correction_2000",
+                hotelRemoteId = "hotel_1",
+                bookingRemoteId = booking.remoteId,
+                originalPaymentRemoteId = "wrong_payment_2000",
+                paymentType = BookingPaymentType.ADJUSTMENT,
+                paymentCategory = BookingPaymentCategory.STAY,
+                amount = 2_000.0,
+                allocatedStayAmount = 2_000.0
+            )
+        )
+
+        val folio = FolioSummaryBuilder.build(
+            booking = booking,
+            payments = payments,
+            foodOrders = emptyList(),
+            bookingFinancialLines = roomLines
+        )
+
+        assertEquals(1_500.0, folio.stayPaid, 0.01)
+        assertEquals(3_500.0, folio.stayBalance, 0.01)
+        assertEquals(1_500.0, folio.totalPaid, 0.01)
+        assertEquals(3_500.0, folio.grandBalance, 0.01)
+    }
+
+    @Test
     fun payment_refund_and_adjustment_change_balance_consistently() {
         val booking = BookingEntity(
             remoteId = "booking_1",

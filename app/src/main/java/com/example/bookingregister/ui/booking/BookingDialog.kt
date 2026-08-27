@@ -30,6 +30,7 @@ import androidx.appcompat.app.AlertDialog
 import com.example.bookingregister.R
 import com.example.bookingregister.accounting.domain.BookingFinancialCalculator
 import com.example.bookingregister.accounting.domain.BookingFinancialSummary
+import com.example.bookingregister.accounting.domain.PaymentCorrectionPolicy
 import com.example.bookingregister.data.repository.PaymentStatus
 import com.example.bookingregister.data.repository.SaveResult
 import com.example.bookingregister.data.entities.BookingAccountingChargeEntity
@@ -92,7 +93,7 @@ class BookingDialog(
     private val roomRateLocked: Boolean = false,
     private val onBookingSaved: (BookingEntity, List<BookingFinancialLineEntity>, (SaveResult) -> Unit) -> Unit,
     private val onBookingDeleted: (BookingEntity, CancellationRequest, (SaveResult) -> Unit) -> Unit,
-    private val onPaymentSaved: (BookingEntity, Double, String, String, String?, (SaveResult) -> Unit) -> Unit,
+    private val onPaymentSaved: (BookingEntity, Double, String, String, String?, String?, (SaveResult) -> Unit) -> Unit,
     private val onAccountingChargeSaved: (BookingEntity, String, Double, String, String?, String?, (SaveResult) -> Unit) -> Unit,
     private val onFinalBillGenerated: (BookingEntity, (SaveResult) -> Unit) -> Unit
 ) {
@@ -826,6 +827,22 @@ class BookingDialog(
         defaultAmountOverride: Double? = null,
         generateFinalBillAfterSave: Boolean = false
     ) {
+        val correctionCandidates = if (paymentType == BookingPaymentType.ADJUSTMENT) {
+            existingPaymentEntries
+                .filter {
+                    !it.isDeleted &&
+                        it.paymentType in setOf(BookingPaymentType.PAYMENT, BookingPaymentType.ADVANCE) &&
+                        PaymentCorrectionPolicy.remainingCorrectable(it, existingPaymentEntries) > 0.001
+                }
+                .sortedByDescending { it.paymentMillis }
+        } else {
+            emptyList()
+        }
+        if (paymentType == BookingPaymentType.ADJUSTMENT && correctionCandidates.isEmpty()) {
+            Toast.makeText(context, "No payment is available to correct", Toast.LENGTH_LONG).show()
+            return
+        }
+
         val container = android.widget.LinearLayout(context).apply {
             orientation = android.widget.LinearLayout.VERTICAL
             setPadding(32, 8, 32, 0)
@@ -838,8 +855,16 @@ class BookingDialog(
             }
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
             setSingleLine(true)
-            setText(defaultAmountOverride?.takeIf { it > 0.0 }?.let { amountText(it) } ?: defaultPaymentAmount(booking, paymentType))
+            val correctionAmount = correctionCandidates.firstOrNull()
+                ?.let { PaymentCorrectionPolicy.remainingCorrectable(it, existingPaymentEntries) }
+                ?.takeIf { paymentType == BookingPaymentType.ADJUSTMENT }
+            setText(
+                correctionAmount?.let { amountText(it) }
+                    ?: defaultAmountOverride?.takeIf { it > 0.0 }?.let { amountText(it) }
+                    ?: defaultPaymentAmount(booking, paymentType)
+            )
             setSelection(text.length)
+            isEnabled = paymentType != BookingPaymentType.ADJUSTMENT
         }
         val paymentCategoryOptions = paymentCategoryOptions(booking)
         val categorySpinner = Spinner(context).apply {
@@ -853,10 +878,44 @@ class BookingDialog(
                 )
             }
         }
+        val originalPaymentSpinner = Spinner(context).apply {
+            adapter = spinnerAdapter(correctionCandidates.map { payment ->
+                val remaining = PaymentCorrectionPolicy.remainingCorrectable(payment, existingPaymentEntries)
+                "${payment.paymentType.displayPaymentType()} Rs ${amountText(remaining)} • ${dateFormat.format(Date(payment.paymentMillis))}"
+            })
+            visibility = if (paymentType == BookingPaymentType.ADJUSTMENT) View.VISIBLE else View.GONE
+        }
+        if (paymentType == BookingPaymentType.ADJUSTMENT) {
+            originalPaymentSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    correctionCandidates.getOrNull(position)?.let { original ->
+                        amountInput.setText(amountText(PaymentCorrectionPolicy.remainingCorrectable(original, existingPaymentEntries)))
+                        amountInput.setSelection(amountInput.text.length)
+                    }
+                }
+
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+            }
+        }
         val noteInput = EditText(context).apply {
             hint = if (paymentType == BookingPaymentType.PAYMENT) "Note optional" else "Reason required"
             setSingleLine(false)
             minLines = 2
+        }
+        if (paymentType == BookingPaymentType.ADJUSTMENT) {
+            container.addView(TextView(context).apply {
+                text = "Payment to correct"
+                textSize = 12f
+                setTextColor(Color.parseColor("#6B7280"))
+                setPadding(0, 8, 0, 0)
+            })
+            container.addView(originalPaymentSpinner)
+            container.addView(TextView(context).apply {
+                text = "The selected payment will be fully reversed. If the intended amount was different, add the correct payment afterwards."
+                textSize = 12f
+                setTextColor(Color.parseColor("#8A5A00"))
+                setPadding(0, 8, 0, 8)
+            })
         }
         container.addView(amountInput)
         if (paymentType == BookingPaymentType.PAYMENT) {
@@ -889,16 +948,23 @@ class BookingDialog(
                             Toast.makeText(context, "Please enter a reason", Toast.LENGTH_SHORT).show()
                             return@setOnClickListener
                         }
+                        val originalPaymentRemoteId = if (paymentType == BookingPaymentType.ADJUSTMENT) {
+                            correctionCandidates.getOrNull(originalPaymentSpinner.selectedItemPosition)?.remoteId
+                        } else {
+                            null
+                        }
                         savePaymentButton.isEnabled = false
                         savePaymentButton.text = "Saving..."
                         amountInput.isEnabled = false
                         noteInput.isEnabled = false
+                        originalPaymentSpinner.isEnabled = false
                         val category = if (paymentType == BookingPaymentType.PAYMENT) categorySpinner.selectedItem as String else BookingPaymentCategory.STAY
-                        onPaymentSaved(booking, amount, paymentType, category, note) { result ->
+                        onPaymentSaved(booking, amount, paymentType, category, note, originalPaymentRemoteId) { result ->
                             savePaymentButton.isEnabled = true
                             savePaymentButton.text = "Save"
-                            amountInput.isEnabled = true
+                            amountInput.isEnabled = paymentType != BookingPaymentType.ADJUSTMENT
                             noteInput.isEnabled = true
+                            originalPaymentSpinner.isEnabled = true
                             when (result) {
                                 is SaveResult.Success -> {
                                     if (generateFinalBillAfterSave && paymentType == BookingPaymentType.PAYMENT) {

@@ -1239,9 +1239,18 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                     onResult(repository.cancelBooking(booking, request))
                 }
             },
-            onPaymentSaved = { booking, amount, paymentType, paymentCategory, note, onResult ->
+            onPaymentSaved = { booking, amount, paymentType, paymentCategory, note, originalPaymentRemoteId, onResult ->
                 lifecycleScope.launch {
-                    onResult(repository.addBookingPayment(booking, amount, paymentType = paymentType, paymentCategory = paymentCategory, note = note))
+                    onResult(
+                        repository.addBookingPayment(
+                            booking,
+                            amount,
+                            paymentType = paymentType,
+                            paymentCategory = paymentCategory,
+                            note = note,
+                            originalPaymentRemoteId = originalPaymentRemoteId
+                        )
+                    )
                 }
             },
             onAccountingChargeSaved = { booking, chargeType, amount, description, reason, accountBucket, onResult ->

@@ -15,6 +15,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.example.bookingregister.data.repository.BookingRepository
 import com.example.bookingregister.data.repository.SaveResult
+import com.example.bookingregister.accounting.domain.PaymentCorrectionPolicy
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.BookingPaymentCategory
 import com.example.bookingregister.data.entities.BookingPaymentEntity
@@ -505,20 +506,19 @@ class PaymentsActivity : AppCompatActivity() {
         paymentType: String,
         preferredRefundAmount: Double? = null
     ) {
-        val refundablePayments = payments.filter {
+        val reversiblePayments = payments.filter {
             it.bookingRemoteId == booking.remoteId &&
                 !it.isDeleted &&
                 it.paymentType in setOf(BookingPaymentType.PAYMENT, BookingPaymentType.ADVANCE)
         }.filter { original ->
-            val refunded = payments.filter {
-                it.paymentType == BookingPaymentType.REFUND &&
-                    it.originalPaymentRemoteId == original.remoteId &&
-                    !it.isDeleted
-            }.sumOf { it.amount }
-            original.amount - refunded > 0.001
-        }
-        if (paymentType == BookingPaymentType.REFUND && refundablePayments.isEmpty()) {
+            PaymentCorrectionPolicy.remainingCorrectable(original, payments) > 0.001
+        }.sortedByDescending { it.paymentMillis }
+        if (paymentType == BookingPaymentType.REFUND && reversiblePayments.isEmpty()) {
             Toast.makeText(this, "No refundable payment is available", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (paymentType == BookingPaymentType.ADJUSTMENT && reversiblePayments.isEmpty()) {
+            Toast.makeText(this, "No payment is available to correct", Toast.LENGTH_LONG).show()
             return
         }
         val amountInput = EditText(this).apply {
@@ -529,23 +529,19 @@ class PaymentsActivity : AppCompatActivity() {
             }
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
             setSingleLine(true)
-            val firstRefundableRemaining = refundablePayments.firstOrNull()?.let { original ->
-                val refunded = payments.filter {
-                    it.paymentType == BookingPaymentType.REFUND &&
-                        it.originalPaymentRemoteId == original.remoteId &&
-                        !it.isDeleted
-                }.sumOf { it.amount }
-                (original.amount - refunded).coerceAtLeast(0.0)
-            } ?: 0.0
+            val firstRemaining = reversiblePayments.firstOrNull()
+                ?.let { PaymentCorrectionPolicy.remainingCorrectable(it, payments) }
+                ?: 0.0
             val defaultAmount = when (paymentType) {
                 BookingPaymentType.REFUND -> preferredRefundAmount
-                    ?.coerceAtMost(firstRefundableRemaining)
+                    ?.coerceAtMost(firstRemaining)
                     ?: (booking.paid - booking.receivable).coerceAtLeast(0.0)
-                BookingPaymentType.ADJUSTMENT -> (booking.paid - booking.receivable).coerceAtLeast(0.0)
+                BookingPaymentType.ADJUSTMENT -> firstRemaining
                 else -> booking.balance
             }
             setText(if (defaultAmount > 0.0) defaultAmount.roundToInt().toString() else "")
             setSelection(text.length)
+            isEnabled = paymentType != BookingPaymentType.ADJUSTMENT
         }
         val categorySpinner = Spinner(this).apply {
             adapter = android.widget.ArrayAdapter(
@@ -559,11 +555,26 @@ class PaymentsActivity : AppCompatActivity() {
             adapter = android.widget.ArrayAdapter(
                 this@PaymentsActivity,
                 android.R.layout.simple_spinner_dropdown_item,
-                refundablePayments.map { payment ->
-                    "${formatMoney(payment.amount)} • ${payment.paymentCategory} • ${dateFormat.format(Date(payment.paymentMillis))}"
+                reversiblePayments.map { payment ->
+                    val remaining = PaymentCorrectionPolicy.remainingCorrectable(payment, payments)
+                    val displayAmount = if (paymentType == BookingPaymentType.ADJUSTMENT) remaining else payment.amount
+                    "${formatMoney(displayAmount)} • ${payment.paymentCategory} • ${dateFormat.format(Date(payment.paymentMillis))}"
                 }
             )
-            visibility = if (paymentType == BookingPaymentType.REFUND) View.VISIBLE else View.GONE
+            visibility = if (paymentType in setOf(BookingPaymentType.REFUND, BookingPaymentType.ADJUSTMENT)) View.VISIBLE else View.GONE
+        }
+        if (paymentType == BookingPaymentType.ADJUSTMENT) {
+            originalPaymentSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    reversiblePayments.getOrNull(position)?.let { original ->
+                        val remaining = PaymentCorrectionPolicy.remainingCorrectable(original, payments)
+                        amountInput.setText(remaining.roundToInt().toString())
+                        amountInput.setSelection(amountInput.text.length)
+                    }
+                }
+
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+            }
         }
         val noteInput = EditText(this).apply {
             hint = if (paymentType == BookingPaymentType.PAYMENT) "Note optional" else "Reason required"
@@ -573,6 +584,16 @@ class PaymentsActivity : AppCompatActivity() {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), 0, dp(20), 0)
+            if (paymentType == BookingPaymentType.ADJUSTMENT) {
+                addView(TextView(this@PaymentsActivity).apply { text = "Payment to correct" })
+                addView(originalPaymentSpinner)
+                addView(TextView(this@PaymentsActivity).apply {
+                    text = "The selected payment will be fully reversed. If the intended amount was different, add the correct payment afterwards."
+                    textSize = 12f
+                    setTextColor(Color.rgb(138, 90, 0))
+                    setPadding(0, dp(8), 0, dp(8))
+                })
+            }
             addView(amountInput)
             if (paymentType == BookingPaymentType.REFUND) {
                 addView(TextView(this@PaymentsActivity).apply { text = "Original payment" })
@@ -606,8 +627,8 @@ class PaymentsActivity : AppCompatActivity() {
                     return@setPositiveButton
                 }
                 val category = if (paymentType == BookingPaymentType.PAYMENT) categorySpinner.selectedItem as String else BookingPaymentCategory.STAY
-                val originalPaymentRemoteId = if (paymentType == BookingPaymentType.REFUND) {
-                    refundablePayments.getOrNull(originalPaymentSpinner.selectedItemPosition)?.remoteId
+                val originalPaymentRemoteId = if (paymentType in setOf(BookingPaymentType.REFUND, BookingPaymentType.ADJUSTMENT)) {
+                    reversiblePayments.getOrNull(originalPaymentSpinner.selectedItemPosition)?.remoteId
                 } else null
                 savePayment(booking, amount, paymentType, category, note, originalPaymentRemoteId)
             }

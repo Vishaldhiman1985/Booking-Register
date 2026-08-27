@@ -529,6 +529,114 @@ describe("Firebase callable Functions integration", () => {
     expect(refund.get("unappliedAmount")).toBe(25);
   });
 
+  test("correction requires the original payment and reverses its full remaining allocation", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+    await seedCloudBooking();
+    await client.call("saveBookingPaymentServer", {
+      hotelId: "hotel-a",
+      operationId: "correction-original-op",
+      entity: payment("correction-original"),
+    });
+
+    await expectFunctionError(client.call("saveBookingPaymentServer", {
+      hotelId: "hotel-a",
+      operationId: "correction-missing-link-op",
+      entity: payment("correction-missing-link", {
+        paymentType: "ADJUSTMENT",
+        amount: 1000,
+        allocatedStayAmount: 1000,
+        allocatedFoodAmount: 0,
+        allocatedServiceAmount: 0,
+        allocatedDamageAmount: 0,
+        unappliedAmount: 0,
+      }),
+    }), "invalid-argument");
+
+    await expectFunctionError(client.call("saveBookingPaymentServer", {
+      hotelId: "hotel-a",
+      operationId: "correction-partial-op",
+      entity: payment("correction-partial", {
+        paymentType: "ADJUSTMENT",
+        originalPaymentRemoteId: "correction-original",
+        amount: 500,
+        allocatedStayAmount: 500,
+        allocatedFoodAmount: 0,
+        allocatedServiceAmount: 0,
+        allocatedDamageAmount: 0,
+        unappliedAmount: 0,
+      }),
+    }), "failed-precondition");
+
+    await client.call("saveBookingPaymentServer", {
+      hotelId: "hotel-a",
+      operationId: "correction-full-op",
+      entity: payment("correction-full", {
+        paymentType: "ADJUSTMENT",
+        originalPaymentRemoteId: "correction-original",
+        amount: 1000,
+        allocatedStayAmount: 1000,
+        allocatedFoodAmount: 0,
+        allocatedServiceAmount: 0,
+        allocatedDamageAmount: 0,
+        unappliedAmount: 0,
+      }),
+    });
+
+    const correction = await getFirestore(adminApp)
+      .doc("hotels/hotel-a/bookingPayments/correction-full")
+      .get();
+    expect(correction.get("originalPaymentRemoteId")).toBe("correction-original");
+    expect(correction.get("allocatedStayAmount")).toBe(600);
+    expect(correction.get("allocatedFoodAmount")).toBe(200);
+    expect(correction.get("allocatedServiceAmount")).toBe(100);
+    expect(correction.get("allocatedDamageAmount")).toBe(50);
+    expect(correction.get("unappliedAmount")).toBe(50);
+  });
+
+  test("correction safely reverses a legacy payment without explicit allocation fields", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+    await seedCloudBooking();
+    const db = getFirestore(adminApp);
+    await db.doc("hotels/hotel-a/bookingPayments/legacy-original").set({
+      hotelRemoteId: "hotel-a",
+      bookingRemoteId: "booking-a",
+      paymentType: "PAYMENT",
+      paymentCategory: "STAY",
+      amount: 2000,
+      allocatedStayAmount: 0,
+      allocatedFoodAmount: 0,
+      allocatedServiceAmount: 0,
+      allocatedDamageAmount: 0,
+      unappliedAmount: 0,
+      isDeleted: false,
+      revision: 1,
+      updatedAt: START,
+    });
+
+    await client.call("saveBookingPaymentServer", {
+      hotelId: "hotel-a",
+      operationId: "legacy-correction-op",
+      entity: payment("legacy-correction", {
+        paymentType: "ADJUSTMENT",
+        originalPaymentRemoteId: "legacy-original",
+        paymentCategory: "STAY",
+        amount: 2000,
+        allocatedStayAmount: 2000,
+        allocatedFoodAmount: 0,
+        allocatedServiceAmount: 0,
+        allocatedDamageAmount: 0,
+        unappliedAmount: 0,
+      }),
+    });
+    const correction = await db
+      .doc("hotels/hotel-a/bookingPayments/legacy-correction")
+      .get();
+    expect(correction.get("allocatedStayAmount")).toBe(2000);
+    expect(correction.get("unappliedAmount")).toBe(0);
+  });
+
   test("cancelled booking accepts only an approved Direct refund and leaves rejected writes absent", async () => {
     const client = await createClient();
     await seedMembership(client.auth.currentUser!.uid);

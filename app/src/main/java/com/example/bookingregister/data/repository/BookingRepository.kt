@@ -10,6 +10,7 @@ import com.example.bookingregister.booking.domain.BookingPaymentStatus
 import com.example.bookingregister.accounting.domain.FoodBillTotalsCalculator
 import com.example.bookingregister.accounting.domain.FinalBillChargeSelectionPolicy
 import com.example.bookingregister.accounting.domain.PaymentAllocationPolicy
+import com.example.bookingregister.accounting.domain.PaymentCorrectionPolicy
 import com.example.bookingregister.accounting.domain.InitialPaymentFactory
 import com.example.bookingregister.accounting.domain.RefundAllocationPolicy
 import com.example.bookingregister.accounting.domain.StayBillItemBuilder
@@ -575,34 +576,48 @@ class BookingRepository(
                     "Accounting integrity error: ${currentSummary.integrityErrors.joinToString()}"
                 )
             }
-            val originalPayment = if (paymentType == BookingPaymentType.REFUND) {
+            val isRefund = paymentType == BookingPaymentType.REFUND
+            val isCorrection = paymentType == BookingPaymentType.ADJUSTMENT
+            val originalPayment = if (isRefund || isCorrection) {
                 val originalId = originalPaymentRemoteId?.takeIf { it.isNotBlank() }
-                    ?: return@withTransaction SaveResult.Error("Select the original payment to refund")
+                    ?: return@withTransaction SaveResult.Error(
+                        if (isCorrection) "Select the payment to correct" else "Select the original payment to refund"
+                    )
                 existingPayments.firstOrNull {
-                    it.remoteId == originalId &&
+                    !it.isDeleted &&
+                        it.remoteId == originalId &&
                         it.paymentType in setOf(BookingPaymentType.PAYMENT, BookingPaymentType.ADVANCE)
                 } ?: return@withTransaction SaveResult.Error("Original payment was not found")
             } else null
-            val alreadyRefunded = originalPayment?.let { original ->
-                existingPayments.filter {
-                    it.paymentType == BookingPaymentType.REFUND &&
-                        it.originalPaymentRemoteId == original.remoteId
-                }.sumOf { it.amount }
-            } ?: 0.0
             val allocationCategory = if (paymentType == BookingPaymentType.PAYMENT || paymentType == BookingPaymentType.ADVANCE) {
                 paymentCategory
             } else {
                 BookingPaymentCategory.STAY
             }
-            val allocation = if (originalPayment != null) {
-                RefundAllocationPolicy.reverse(originalPayment, amount, alreadyRefunded)
-                    ?: return@withTransaction SaveResult.Error("Refund exceeds the remaining refundable amount")
-            } else PaymentAllocationPolicy.allocate(
-                amount = amount,
-                selectedCategory = allocationCategory,
-                charges = currentSummary.chargeBuckets,
-                alreadyPaid = currentSummary.paidBuckets
-            )
+            val allocation = when {
+                isCorrection && originalPayment != null -> {
+                    val remaining = PaymentCorrectionPolicy.remainingCorrectable(originalPayment, existingPayments)
+                    PaymentCorrectionPolicy.reverseRemaining(originalPayment, existingPayments, amount)
+                        ?: return@withTransaction SaveResult.Error(
+                            if (remaining <= 0.001) {
+                                "This payment has already been fully corrected or refunded"
+                            } else {
+                                "Correction must reverse the full remaining payment of ${formatAmount(remaining)}. Re-enter the correct payment afterwards."
+                            }
+                        )
+                }
+                isRefund && originalPayment != null -> {
+                    val alreadyReversed = PaymentCorrectionPolicy.alreadyReversed(originalPayment, existingPayments)
+                    RefundAllocationPolicy.reverse(originalPayment, amount, alreadyReversed)
+                        ?: return@withTransaction SaveResult.Error("Refund exceeds the remaining refundable amount")
+                }
+                else -> PaymentAllocationPolicy.allocate(
+                    amount = amount,
+                    selectedCategory = allocationCategory,
+                    charges = currentSummary.chargeBuckets,
+                    alreadyPaid = currentSummary.paidBuckets
+                )
+            }
             val payment = BookingPaymentEntity(
                 remoteId = "${currentBooking.remoteId}_payment_${UUID.randomUUID()}",
                 hotelRemoteId = hotelRemoteId,
