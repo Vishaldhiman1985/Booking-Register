@@ -28,6 +28,24 @@ class BackendAccessManager(
         return BackendAccess.from(result.data)
     }
 
+    suspend fun claimMyDevice(
+        deviceId: String,
+        deviceName: String
+    ): DeviceClaimResult {
+        val result = functions
+            .getHttpsCallable("claimMyDevice")
+            .call(
+                mapOf(
+                    "deviceId" to deviceId.trim(),
+                    "deviceName" to deviceName.trim()
+                )
+            )
+            .await()
+
+        return DeviceClaimResult.from(result.data)
+    }
+
+
     suspend fun createHotelUser(
         email: String,
         password: String,
@@ -80,6 +98,29 @@ data class CreatedHotelUser(
     }
 }
 
+data class DeviceClaimResult(
+    val allowed: Boolean,
+    val hotelId: String?,
+    val deviceId: String?,
+    val deviceStatus: String?,
+    val decision: String?,
+    val reason: String?
+) {
+    companion object {
+        fun from(data: Any?): DeviceClaimResult {
+            val map = data as? Map<*, *> ?: emptyMap<String, Any?>()
+
+            return DeviceClaimResult(
+                allowed = map["allowed"] as? Boolean ?: false,
+                hotelId = map["hotelId"] as? String,
+                deviceId = map["deviceId"] as? String,
+                deviceStatus = map["deviceStatus"] as? String,
+                decision = map["decision"] as? String,
+                reason = map["reason"] as? String
+            )
+        }
+    }
+}
 data class BackendAccess(
     val allowed: Boolean,
     val hotelId: String?,
