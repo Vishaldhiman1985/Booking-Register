@@ -7,6 +7,8 @@ import { logger, setGlobalOptions } from "firebase-functions/v2";
 import {
   DEVICE_STATUS_ACTIVE,
   DEVICE_STATUS_LOGGED_OUT,
+  DEVICE_STATUS_REPLACED,
+  DEVICE_STATUS_LOST,
   decideDeviceClaim,
   normalizeDeviceId,
 } from "./deviceSessionPolicy";
@@ -531,6 +533,135 @@ export const logoutMyDevice = onCall({ invoker: "public" }, async (request) => {
     hotelId,
     deviceId,
     deviceStatus: DEVICE_STATUS_LOGGED_OUT,
+  };
+});
+
+
+export const checkMyDeviceSession = onCall({ invoker: "public" }, async (request) => {
+  const requestAuth = await requireAuth(request);
+
+  const hotelId = requireString(
+    request.data?.hotelId || requestAuth.token.hotelId,
+    "hotelId"
+  );
+
+  let deviceId: string;
+
+  try {
+    deviceId = normalizeDeviceId(request.data?.deviceId);
+  } catch {
+    throw new HttpsError(
+      "invalid-argument",
+      "Device identity is invalid."
+    );
+  }
+
+  const memberDocument = memberRef(
+    hotelId,
+    requestAuth.uid
+  );
+
+  const deviceDocument = deviceRef(
+    hotelId,
+    requestAuth.uid,
+    deviceId
+  );
+
+  const [member, device] = await Promise.all([
+    memberDocument.get(),
+    deviceDocument.get(),
+  ]);
+
+  if (!member.exists) {
+    return {
+      active: false,
+      hotelId,
+      deviceId,
+      reason: "NO_MEMBERSHIP",
+    };
+  }
+
+  if (member.get("active") !== true) {
+    return {
+      active: false,
+      hotelId,
+      deviceId,
+      reason: "MEMBERSHIP_INACTIVE",
+    };
+  }
+
+  if (!device.exists) {
+    return {
+      active: false,
+      hotelId,
+      deviceId,
+      reason: "DEVICE_NOT_FOUND",
+    };
+  }
+
+  const deviceStatus = String(
+    device.get("status") || ""
+  ).trim().toUpperCase();
+
+  if (deviceStatus === DEVICE_STATUS_LOGGED_OUT) {
+    return {
+      active: false,
+      hotelId,
+      deviceId,
+      deviceStatus,
+      reason: "DEVICE_LOGGED_OUT",
+    };
+  }
+
+  if (deviceStatus === DEVICE_STATUS_REPLACED) {
+    return {
+      active: false,
+      hotelId,
+      deviceId,
+      deviceStatus,
+      reason: "DEVICE_REPLACED",
+    };
+  }
+
+  if (deviceStatus === DEVICE_STATUS_LOST) {
+    return {
+      active: false,
+      hotelId,
+      deviceId,
+      deviceStatus,
+      reason: "DEVICE_LOST",
+    };
+  }
+
+  if (deviceStatus !== DEVICE_STATUS_ACTIVE) {
+    return {
+      active: false,
+      hotelId,
+      deviceId,
+      deviceStatus,
+      reason: "DEVICE_NOT_ACTIVE",
+    };
+  }
+
+  const activeDeviceId = String(
+    member.get("activeDeviceId") || ""
+  ).trim();
+
+  if (activeDeviceId !== deviceId) {
+    return {
+      active: false,
+      hotelId,
+      deviceId,
+      deviceStatus,
+      reason: "NOT_ACTIVE_DEVICE",
+    };
+  }
+
+  return {
+    active: true,
+    hotelId,
+    deviceId,
+    deviceStatus: DEVICE_STATUS_ACTIVE,
   };
 });
 

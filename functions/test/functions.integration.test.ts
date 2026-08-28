@@ -381,6 +381,148 @@ describe("Firebase callable Functions integration", () => {
     expect(activeDevice.get("status")).toBe("ACTIVE");
   }, 15_000);
 
+test("current active device passes session check", async () => {
+  const client = await createClient();
+  await seedMembership(client.auth.currentUser!.uid);
+
+  await client.call("claimMyDevice", {
+    deviceId: "device-one",
+    deviceName: "Test Phone One",
+  });
+
+  const result = await client.call("checkMyDeviceSession", {
+    hotelId: "hotel-a",
+    deviceId: "device-one",
+  }) as {
+    active: boolean;
+    deviceId: string;
+    deviceStatus: string;
+    reason?: string;
+  };
+
+  expect(result.active).toBe(true);
+  expect(result.deviceId).toBe("device-one");
+  expect(result.deviceStatus).toBe("ACTIVE");
+  expect(result.reason).toBeUndefined();
+}, 15_000);
+
+test("logged out device fails session check", async () => {
+  const client = await createClient();
+  await seedMembership(client.auth.currentUser!.uid);
+
+  await client.call("claimMyDevice", {
+    deviceId: "device-one",
+    deviceName: "Test Phone One",
+  });
+
+  await client.call("logoutMyDevice", {
+    hotelId: "hotel-a",
+    deviceId: "device-one",
+  });
+
+  const result = await client.call("checkMyDeviceSession", {
+    hotelId: "hotel-a",
+    deviceId: "device-one",
+  }) as {
+    active: boolean;
+    deviceStatus: string;
+    reason: string;
+  };
+
+  expect(result.active).toBe(false);
+  expect(result.deviceStatus).toBe("LOGGED_OUT");
+  expect(result.reason).toBe("DEVICE_LOGGED_OUT");
+}, 15_000);
+
+test("device fails session check when another device is the active device", async () => {
+  const client = await createClient();
+  await seedMembership(client.auth.currentUser!.uid);
+
+  await client.call("claimMyDevice", {
+    deviceId: "device-one",
+    deviceName: "Test Phone One",
+  });
+
+  const db = getFirestore(adminApp);
+
+  await db
+    .doc(`hotelAccounts/hotel-a/members/${client.auth.currentUser!.uid}`)
+    .set({
+      activeDeviceId: "device-two",
+    }, { merge: true });
+
+  await db
+    .doc(
+      `hotelAccounts/hotel-a/members/${client.auth.currentUser!.uid}/devices/device-two`
+    )
+    .set({
+      uid: client.auth.currentUser!.uid,
+      deviceId: "device-two",
+      status: "ACTIVE",
+    });
+
+  const result = await client.call("checkMyDeviceSession", {
+    hotelId: "hotel-a",
+    deviceId: "device-one",
+  }) as {
+    active: boolean;
+    deviceStatus: string;
+    reason: string;
+  };
+
+  expect(result.active).toBe(false);
+  expect(result.deviceStatus).toBe("ACTIVE");
+  expect(result.reason).toBe("NOT_ACTIVE_DEVICE");
+}, 15_000);
+
+test("lost and replaced devices fail session check", async () => {
+  const client = await createClient();
+  await seedMembership(client.auth.currentUser!.uid);
+
+  await client.call("claimMyDevice", {
+    deviceId: "device-one",
+    deviceName: "Test Phone One",
+  });
+
+  const db = getFirestore(adminApp);
+  const devicePath =
+    `hotelAccounts/hotel-a/members/${client.auth.currentUser!.uid}/devices/device-one`;
+
+  await db.doc(devicePath).set({
+    status: "LOST",
+  }, { merge: true });
+
+  const lostResult = await client.call("checkMyDeviceSession", {
+    hotelId: "hotel-a",
+    deviceId: "device-one",
+  }) as {
+    active: boolean;
+    deviceStatus: string;
+    reason: string;
+  };
+
+  expect(lostResult.active).toBe(false);
+  expect(lostResult.deviceStatus).toBe("LOST");
+  expect(lostResult.reason).toBe("DEVICE_LOST");
+
+  await db.doc(devicePath).set({
+    status: "REPLACED",
+  }, { merge: true });
+
+  const replacedResult = await client.call("checkMyDeviceSession", {
+    hotelId: "hotel-a",
+    deviceId: "device-one",
+  }) as {
+    active: boolean;
+    deviceStatus: string;
+    reason: string;
+  };
+
+  expect(replacedResult.active).toBe(false);
+  expect(replacedResult.deviceStatus).toBe("REPLACED");
+  expect(replacedResult.reason).toBe("DEVICE_REPLACED");
+}, 15_000);
+
   test("booking change sets merge price and room changes without revision conflicts or payment duplication", async () => {
     const deviceA = await createClient();
     const deviceB = await createClient();
