@@ -61,6 +61,9 @@ import com.google.android.material.button.MaterialButton
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import java.io.File
 import java.io.FileOutputStream
 import java.io.FileWriter
@@ -72,6 +75,7 @@ import com.example.bookingregister.data.repository.GstRepository
 import com.example.bookingregister.data.entities.RoomGstSlabEntity
 import java.util.UUID
 import com.example.bookingregister.account.domain.DeviceInstallationId
+
 class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
 
     companion object {
@@ -111,6 +115,8 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
     private val occupancyCalculator = OccupancyCalculator()
     private val accessManager = BackendAccessManager()
     private var currentPermissions: Set<String> = emptySet()
+    private var deviceSessionMonitorJob: Job? = null
+    private var deviceSessionInvalidated = false
     private var roomsLoaded = false
     private var bookingsLoaded = false
     private var emptyRoomPromptShown = false
@@ -207,6 +213,13 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
     override fun onResume() {
         super.onResume()
         refreshOpenBookingDialogFolioData()
+        startDeviceSessionMonitor()
+    }
+
+    override fun onPause() {
+        deviceSessionMonitorJob?.cancel()
+        deviceSessionMonitorJob = null
+        super.onPause()
     }
 
     private fun verifyAccessInBackground(hotelRemoteId: String) {
@@ -225,6 +238,89 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                     }
                 }
         }
+    }
+
+    private fun startDeviceSessionMonitor() {
+        if (deviceSessionMonitorJob != null || deviceSessionInvalidated) return
+
+        deviceSessionMonitorJob = lifecycleScope.launch {
+            while (isActive) {
+                checkCurrentDeviceSession()
+                delay(60_000)
+            }
+        }
+    }
+
+    private suspend fun checkCurrentDeviceSession() {
+        if (FirebaseAuth.getInstance().currentUser == null) return
+
+        val deviceId = DeviceInstallationId.get(applicationContext)
+
+        try {
+            val result = accessManager.checkMyDeviceSession(
+                hotelId = repository.hotelRemoteId,
+                deviceId = deviceId
+            )
+
+            if (!result.active) {
+                forceDeviceSessionExit(result.reason)
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // Temporary network/server failure:
+            // keep the current user signed in and try again later.
+        }
+    }
+
+    private fun forceDeviceSessionExit(reason: String?) {
+        if (deviceSessionInvalidated) return
+        deviceSessionInvalidated = true
+
+        repository.stopRealtimeSync()
+
+        if (::foodBillingRepository.isInitialized) {
+            foodBillingRepository.stopRealtimeSync()
+        }
+
+        clearCachedAccess()
+        FirebaseAuth.getInstance().signOut()
+
+        val message = when (reason) {
+            "DEVICE_LOST" ->
+                "This phone has been marked as lost and has been signed out."
+
+            "DEVICE_REPLACED" ->
+                "This phone has been replaced and has been signed out."
+
+            "DEVICE_LOGGED_OUT" ->
+                "This phone has been logged out."
+
+            "NOT_ACTIVE_DEVICE" ->
+                "This account is now active on another device."
+
+            "MEMBERSHIP_INACTIVE",
+            "NO_MEMBERSHIP" ->
+                "Your access to this hotel account is no longer active."
+
+            else ->
+                "This device is no longer authorized for this account."
+        }
+
+        Toast.makeText(
+            this,
+            message,
+            Toast.LENGTH_LONG
+        ).show()
+
+        startActivity(
+            Intent(this, LoginActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TASK
+            }
+        )
+
+        finish()
     }
 
     override fun onEmptyCellClicked(room: RoomEntity, dateMillis: Long) {
