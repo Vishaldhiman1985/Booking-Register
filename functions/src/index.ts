@@ -6,6 +6,7 @@ import { logger, setGlobalOptions } from "firebase-functions/v2";
 
 import {
   DEVICE_STATUS_ACTIVE,
+  DEVICE_STATUS_LOGGED_OUT,
   decideDeviceClaim,
   normalizeDeviceId,
 } from "./deviceSessionPolicy";
@@ -437,6 +438,102 @@ export const claimMyDevice = onCall({ invoker: "public" }, async (request) => {
         decision,
       };
     });
+export const logoutMyDevice = onCall({ invoker: "public" }, async (request) => {
+  const requestAuth = await requireAuth(request);
+
+  const hotelId = requireString(
+    request.data?.hotelId || requestAuth.token.hotelId,
+    "hotelId"
+  );
+
+  let deviceId: string;
+
+  try {
+    deviceId = normalizeDeviceId(request.data?.deviceId);
+  } catch {
+    throw new HttpsError(
+      "invalid-argument",
+      "Device identity is invalid."
+    );
+  }
+
+  const memberDocument = memberRef(hotelId, requestAuth.uid);
+  const deviceDocument = deviceRef(
+    hotelId,
+    requestAuth.uid,
+    deviceId
+  );
+
+  const decision = await db.runTransaction(async (tx) => {
+    const currentMember = await tx.get(memberDocument);
+
+    if (!currentMember.exists) {
+      return "NO_MEMBERSHIP" as const;
+    }
+
+    const activeDeviceId = String(
+      currentMember.get("activeDeviceId") || ""
+    ).trim();
+
+    if (activeDeviceId !== deviceId) {
+      return "NOT_ACTIVE_DEVICE" as const;
+    }
+
+    const currentDevice = await tx.get(deviceDocument);
+    const now = FieldValue.serverTimestamp();
+
+    if (!currentDevice.exists) {
+      tx.set(deviceDocument, {
+        uid: requestAuth.uid,
+        deviceId,
+        status: DEVICE_STATUS_LOGGED_OUT,
+        lastSeenAt: now,
+        loggedOutAt: now,
+      });
+    } else {
+      tx.set(deviceDocument, {
+        status: DEVICE_STATUS_LOGGED_OUT,
+        lastSeenAt: now,
+        loggedOutAt: now,
+      }, { merge: true });
+    }
+
+    tx.set(memberDocument, {
+      activeDeviceId: FieldValue.delete(),
+      activeDeviceUpdatedAt: now,
+    }, { merge: true });
+
+    return "LOGGED_OUT" as const;
+  });
+
+  if (decision === "NO_MEMBERSHIP") {
+    return {
+      released: false,
+      reason: "NO_MEMBERSHIP",
+    };
+  }
+
+  if (decision === "NOT_ACTIVE_DEVICE") {
+    return {
+      released: false,
+      reason: "NOT_ACTIVE_DEVICE",
+    };
+  }
+
+  logger.info("Device session logged out", {
+    hotelId,
+    uid: requestAuth.uid,
+    deviceId,
+  });
+
+  return {
+    released: true,
+    hotelId,
+    deviceId,
+    deviceStatus: DEVICE_STATUS_LOGGED_OUT,
+  };
+});
+
 export const setHotelSubscription = onCall({ invoker: "public" }, async (request) => {
   const requestAuth = await requireAuth(request);
   if (!isPlatformAdmin(requestAuth)) {

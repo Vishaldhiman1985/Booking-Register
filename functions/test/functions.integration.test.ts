@@ -282,6 +282,104 @@ describe("Firebase callable Functions integration", () => {
 
     expect(secondDevice.exists).toBe(false);
   }, 15_000);
+  test("active device logout releases the user for another device", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+
+    await client.call("claimMyDevice", {
+      deviceId: "device-one",
+      deviceName: "Test Phone One",
+    });
+
+    const logout = await client.call("logoutMyDevice", {
+      hotelId: "hotel-a",
+      deviceId: "device-one",
+    }) as {
+      released: boolean;
+      deviceId: string;
+      deviceStatus: string;
+    };
+
+    expect(logout.released).toBe(true);
+    expect(logout.deviceId).toBe("device-one");
+    expect(logout.deviceStatus).toBe("LOGGED_OUT");
+
+    const db = getFirestore(adminApp);
+
+    const memberAfterLogout = await db
+      .doc(`hotelAccounts/hotel-a/members/${client.auth.currentUser!.uid}`)
+      .get();
+
+    expect(memberAfterLogout.get("activeDeviceId")).toBeUndefined();
+
+    const oldDevice = await db
+      .doc(
+        `hotelAccounts/hotel-a/members/${client.auth.currentUser!.uid}/devices/device-one`
+      )
+      .get();
+
+    expect(oldDevice.get("status")).toBe("LOGGED_OUT");
+
+    const secondClaim = await client.call("claimMyDevice", {
+      deviceId: "device-two",
+      deviceName: "Test Phone Two",
+    }) as {
+      allowed: boolean;
+      deviceId: string;
+      decision: string;
+    };
+
+    expect(secondClaim.allowed).toBe(true);
+    expect(secondClaim.deviceId).toBe("device-two");
+    expect(secondClaim.decision).toBe("ACTIVATE");
+  }, 15_000);
+
+  test("stale device logout cannot release the newer active device", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+
+    await client.call("claimMyDevice", {
+      deviceId: "device-one",
+      deviceName: "Test Phone One",
+    });
+
+    await client.call("logoutMyDevice", {
+      hotelId: "hotel-a",
+      deviceId: "device-one",
+    });
+
+    await client.call("claimMyDevice", {
+      deviceId: "device-two",
+      deviceName: "Test Phone Two",
+    });
+
+    const staleLogout = await client.call("logoutMyDevice", {
+      hotelId: "hotel-a",
+      deviceId: "device-one",
+    }) as {
+      released: boolean;
+      reason: string;
+    };
+
+    expect(staleLogout.released).toBe(false);
+    expect(staleLogout.reason).toBe("NOT_ACTIVE_DEVICE");
+
+    const db = getFirestore(adminApp);
+
+    const member = await db
+      .doc(`hotelAccounts/hotel-a/members/${client.auth.currentUser!.uid}`)
+      .get();
+
+    expect(member.get("activeDeviceId")).toBe("device-two");
+
+    const activeDevice = await db
+      .doc(
+        `hotelAccounts/hotel-a/members/${client.auth.currentUser!.uid}/devices/device-two`
+      )
+      .get();
+
+    expect(activeDevice.get("status")).toBe("ACTIVE");
+  }, 15_000);
 
   test("booking change sets merge price and room changes without revision conflicts or payment duplication", async () => {
     const deviceA = await createClient();
