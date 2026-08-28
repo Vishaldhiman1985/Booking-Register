@@ -21,7 +21,10 @@ import com.example.bookingregister.ui.booking.BookingChartActivity
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import kotlinx.coroutines.launch
-
+import android.os.Build
+import com.example.bookingregister.account.domain.DeviceInstallationId
+import com.google.firebase.FirebaseNetworkException
+import com.google.firebase.functions.FirebaseFunctionsException
 class LoginActivity : AppCompatActivity() {
 
     private lateinit var auth: FirebaseAuth
@@ -37,11 +40,6 @@ class LoginActivity : AppCompatActivity() {
 
         val currentUser = auth.currentUser
         if (currentUser != null) {
-            val cachedHotelId = accessPrefs.getString(KEY_HOTEL_ID, null)
-            if (currentUser.isEmailVerified && !cachedHotelId.isNullOrBlank()) {
-                goToMain(cachedHotelId)
-                return
-            }
 
             showLoadingScreen("Opening your hotel...")
             currentUser.reload()
@@ -53,9 +51,20 @@ class LoginActivity : AppCompatActivity() {
                         showLoginForm("Please verify your email before login.")
                     }
                 }
-                .addOnFailureListener {
-                    auth.signOut()
-                    showLoginForm(null)
+                .addOnFailureListener { error ->
+                    val cachedHotelId =
+                        if (error is FirebaseNetworkException) {
+                            cachedHotelIdForCurrentDevice(currentUser)
+                        } else {
+                            null
+                        }
+
+                    if (!cachedHotelId.isNullOrBlank()) {
+                        goToMain(cachedHotelId)
+                    } else {
+                        auth.signOut()
+                        showLoginForm("Could not verify account status. Please try again.")
+                    }
                 }
             return
         }
@@ -216,34 +225,131 @@ class LoginActivity : AppCompatActivity() {
 
     private fun checkAccessAndOpen() {
         lifecycleScope.launch {
-            runCatching { accessManager.getMyAccess() }
-                .onSuccess { access ->
-                    val hotelId = access.hotelId
-                    if (access.allowed && !hotelId.isNullOrBlank()) {
-                        cacheAccess(hotelId)
-                        auth.currentUser?.getIdToken(false)
-                        goToMain(hotelId)
-                    } else {
-                        clearCachedAccess()
-                        auth.signOut()
-                        showLoginForm(access.blockedMessage())
+            try {
+                val access = accessManager.getMyAccess()
+                val hotelId = access.hotelId
+
+                if (!access.allowed || hotelId.isNullOrBlank()) {
+                    clearCachedAccess()
+                    auth.signOut()
+                    showLoginForm(access.blockedMessage())
+                    return@launch
+                }
+
+                val deviceId = DeviceInstallationId.get(this@LoginActivity)
+
+                val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}"
+                    .trim()
+                    .ifBlank { "Android device" }
+
+                val claim = accessManager.claimMyDevice(
+                    deviceId = deviceId,
+                    deviceName = deviceName
+                )
+
+                if (!claim.allowed) {
+                    clearCachedAccess()
+                    auth.signOut()
+
+                    val message = when (claim.reason) {
+                        "DEVICE_ALREADY_ACTIVE" ->
+                            "This user is already active on another device."
+
+                        "NO_ACTIVE_MEMBERSHIP" ->
+                            "This login is not connected to an active hotel account."
+
+                        else ->
+                            "This device could not be activated. Please contact support."
                     }
+
+                    showLoginForm(message)
+                    return@launch
                 }
-                .onFailure {
-                    showAccessError(it.message)
+
+                val claimedHotelId = claim.hotelId
+
+                if (claimedHotelId.isNullOrBlank() || claimedHotelId != hotelId) {
+                    showAccessError(
+                        "Could not verify this device for the hotel account."
+                    )
+                    return@launch
                 }
+
+                val uid = auth.currentUser?.uid
+                if (uid.isNullOrBlank()) {
+                    showAccessError("Please login again.")
+                    return@launch
+                }
+
+                cacheAccess(
+                    hotelId = hotelId,
+                    deviceId = deviceId,
+                    uid = uid
+                )
+                auth.currentUser?.getIdToken(false)
+                goToMain(hotelId)
+            } catch (error: Exception) {
+                val user = auth.currentUser
+
+                val cachedHotelId =
+                    if (user != null && isTemporaryNetworkFailure(error)) {
+                        cachedHotelIdForCurrentDevice(user)
+                    } else {
+                        null
+                    }
+
+                if (!cachedHotelId.isNullOrBlank()) {
+                    goToMain(cachedHotelId)
+                } else {
+                    showAccessError(error.message)
+                }
+            }
         }
     }
 
+    private fun cachedHotelIdForCurrentDevice(user: FirebaseUser): String? {
+        if (!user.isEmailVerified) {
+            return null
+        }
+
+        val cachedHotelId = accessPrefs.getString(KEY_HOTEL_ID, null)
+        val verifiedUid = accessPrefs.getString(KEY_VERIFIED_UID, null)
+        val verifiedDeviceId = accessPrefs.getString(KEY_VERIFIED_DEVICE_ID, null)
+        val installationId = DeviceInstallationId.get(this)
+
+        return cachedHotelId?.takeIf {
+            it.isNotBlank() &&
+                    verifiedUid == user.uid &&
+                    verifiedDeviceId == installationId
+        }
+    }
+
+    private fun isTemporaryNetworkFailure(error: Exception): Boolean {
+        if (error is FirebaseNetworkException) {
+            return true
+        }
+
+        val functionsError = error as? FirebaseFunctionsException
+            ?: return false
+
+        return functionsError.code == FirebaseFunctionsException.Code.UNAVAILABLE ||
+                functionsError.code == FirebaseFunctionsException.Code.DEADLINE_EXCEEDED
+    }
     private fun showAccessError(message: String?) {
         clearCachedAccess()
         auth.signOut()
         showLoginForm(message ?: "Could not check account access. Please try again.")
     }
 
-    private fun cacheAccess(hotelId: String) {
+    private fun cacheAccess(
+        hotelId: String,
+        deviceId: String,
+        uid: String
+    ) {
         accessPrefs.edit()
             .putString(KEY_HOTEL_ID, hotelId)
+            .putString(KEY_VERIFIED_DEVICE_ID, deviceId)
+            .putString(KEY_VERIFIED_UID, uid)
             .putLong(KEY_CACHED_AT, System.currentTimeMillis())
             .apply()
     }
@@ -253,6 +359,8 @@ class LoginActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val KEY_VERIFIED_DEVICE_ID = "verified_device_id"
+        private const val KEY_VERIFIED_UID = "verified_uid"
         private const val KEY_HOTEL_ID = "hotel_id"
         private const val KEY_CACHED_AT = "cached_at"
     }
