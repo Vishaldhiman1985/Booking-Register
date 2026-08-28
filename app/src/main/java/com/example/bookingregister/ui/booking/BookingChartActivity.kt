@@ -71,7 +71,7 @@ import java.util.Locale
 import com.example.bookingregister.data.repository.GstRepository
 import com.example.bookingregister.data.entities.RoomGstSlabEntity
 import java.util.UUID
-
+import com.example.bookingregister.account.domain.DeviceInstallationId
 class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
 
     companion object {
@@ -1359,14 +1359,56 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         }.timeInMillis
     }
     private fun logout() {
-        repository.stopRealtimeSync()
-        clearCachedAccess()
-        FirebaseAuth.getInstance().signOut()
+        lifecycleScope.launch {
+            val deviceId = DeviceInstallationId.get(applicationContext)
 
-        val intent = android.content.Intent(this, com.example.bookingregister.ui.login.LoginActivity::class.java)
-        intent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
-        startActivity(intent)
-        finish()
+            runCatching {
+                accessManager.logoutMyDevice(
+                    hotelId = repository.hotelRemoteId,
+                    deviceId = deviceId
+                )
+            }.onSuccess { result ->
+                val safeToLogout =
+                    result.released ||
+                            result.reason == "NOT_ACTIVE_DEVICE" ||
+                            result.reason == "NO_MEMBERSHIP"
+
+                if (!safeToLogout) {
+                    Toast.makeText(
+                        this@BookingChartActivity,
+                        "Could not release this device safely. Please try again.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return@onSuccess
+                }
+
+                repository.stopRealtimeSync()
+
+                if (::foodBillingRepository.isInitialized) {
+                    foodBillingRepository.stopRealtimeSync()
+                }
+
+                clearCachedAccess()
+                FirebaseAuth.getInstance().signOut()
+
+                val intent = Intent(
+                    this@BookingChartActivity,
+                    LoginActivity::class.java
+                ).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TASK
+                }
+
+                startActivity(intent)
+                finish()
+            }.onFailure {
+                Toast.makeText(
+                    this@BookingChartActivity,
+                    "Logout could not be completed safely. Check your internet connection and try again.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
     }
 
     private fun clearCachedAccess() {
