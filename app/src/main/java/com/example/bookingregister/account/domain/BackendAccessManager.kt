@@ -62,6 +62,22 @@ class BackendAccessManager(
         return DeviceLogoutResult.from(result.data)
     }
 
+    suspend fun checkMyDeviceSession(
+        hotelId: String,
+        deviceId: String
+    ): DeviceSessionCheckResult {
+        val result = functions
+            .getHttpsCallable("checkMyDeviceSession")
+            .call(
+                mapOf(
+                    "hotelId" to hotelId.trim(),
+                    "deviceId" to deviceId.trim()
+                )
+            )
+            .await()
+
+        return DeviceSessionCheckResult.from(result.data)
+    }
 
     suspend fun createHotelUser(
         email: String,
@@ -160,6 +176,29 @@ data class DeviceLogoutResult(
         }
     }
 }
+
+data class DeviceSessionCheckResult(
+    val active: Boolean,
+    val hotelId: String?,
+    val deviceId: String?,
+    val deviceStatus: String?,
+    val reason: String?
+) {
+    companion object {
+        fun from(data: Any?): DeviceSessionCheckResult {
+            val map = data as? Map<*, *> ?: emptyMap<String, Any?>()
+
+            return DeviceSessionCheckResult(
+                active = map["active"] as? Boolean ?: false,
+                hotelId = map["hotelId"] as? String,
+                deviceId = map["deviceId"] as? String,
+                deviceStatus = map["deviceStatus"] as? String,
+                reason = map["reason"] as? String
+            )
+        }
+    }
+}
+
 data class BackendAccess(
     val allowed: Boolean,
     val hotelId: String?,
