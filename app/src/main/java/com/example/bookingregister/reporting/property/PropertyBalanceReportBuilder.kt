@@ -11,6 +11,8 @@ import com.example.bookingregister.folio.domain.FolioSnapshotBuilder
  * - Amount due follows the application's existing BookingPaymentCalculator policy.
  * - Amount received is reconstructed from actual payment/refund/correction rows
  *   through the existing FolioSnapshotBuilder payment-allocation logic.
+ * - Excess payment on one booking is reported separately and is never applied
+ *   to another booking's outstanding balance.
  */
 class PropertyBalanceReportBuilder(
     private val folioSnapshotBuilder: FolioSnapshotBuilder = FolioSnapshotBuilder()
@@ -46,7 +48,9 @@ class PropertyBalanceReportBuilder(
             }.coerceAtLeast(0.0)
 
             val received = snapshot.room.paid.coerceAtLeast(0.0)
-            val outstanding = (receivable - received).coerceAtLeast(0.0)
+            val appliedReceived = received.coerceAtMost(receivable)
+            val excessPayment = (received - receivable).coerceAtLeast(0.0)
+            val outstanding = (receivable - appliedReceived).coerceAtLeast(0.0)
 
             PropertyBalanceBookingFacts(
                 bookingRemoteId = booking.remoteId,
@@ -58,7 +62,9 @@ class PropertyBalanceReportBuilder(
                 received = received,
                 outstanding = outstanding,
                 storedPaidCache = booking.paid,
-                storedBalanceCache = booking.balance
+                storedBalanceCache = booking.balance,
+                appliedReceived = appliedReceived,
+                excessPayment = excessPayment
             )
         }
 
@@ -73,7 +79,9 @@ class PropertyBalanceReportBuilder(
                 .filter { it.sourceType != BookingSourceType.OTA }
                 .sumOf { it.outstanding },
             openBookingCount = rows.count { it.outstanding > 0.001 },
-            bookings = rows
+            bookings = rows,
+            totalAppliedReceived = rows.sumOf { it.appliedReceived },
+            totalExcessPayment = rows.sumOf { it.excessPayment }
         )
     }
 }
