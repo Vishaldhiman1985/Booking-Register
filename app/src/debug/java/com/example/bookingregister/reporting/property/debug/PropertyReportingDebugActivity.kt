@@ -22,9 +22,9 @@ import com.example.bookingregister.data.entities.BookingFinancialLineEntity
 import com.example.bookingregister.data.entities.BookingPaymentEntity
 import com.example.bookingregister.data.entities.ManagedPropertyEntity
 import com.example.bookingregister.data.entities.RoomEntity
-import com.example.bookingregister.data.repository.BookingRepository
 import com.example.bookingregister.reporting.property.PropertyReportRawData
 import com.example.bookingregister.reporting.property.PropertyReportScope
+import com.example.bookingregister.reporting.property.PropertyReportingDataSource
 import com.example.bookingregister.reporting.property.PropertyReportingEngine
 import com.example.bookingregister.revenue.domain.RevenuePeriod
 import kotlinx.coroutines.Dispatchers
@@ -40,7 +40,7 @@ import kotlin.math.roundToInt
  * DEBUG-ONLY, READ-ONLY test screen.
  *
  * This class:
- * - reads the existing local Room database through BookingRepository observers
+ * - reads one consistent point-in-time snapshot from the existing local Room database
  * - never calls startRealtimeSync()
  * - exposes no save, edit, payout, refund or correction action
  * - never ships in the release source set
@@ -64,7 +64,6 @@ class PropertyReportingDebugActivity : AppCompatActivity() {
     private lateinit var statusLabel: TextView
     private lateinit var reportContainer: LinearLayout
 
-    private var repository: BookingRepository? = null
     private var activeHotel: HotelChoice? = null
 
     private var properties: List<ManagedPropertyEntity> = emptyList()
@@ -220,7 +219,7 @@ class PropertyReportingDebugActivity : AppCompatActivity() {
     private fun bindHotel(hotel: HotelChoice) {
         activeHotel = hotel
         hotelLabel.text = "Hotel: ${hotel.name}"
-        statusLabel.text = "Loading local Room database only..."
+        statusLabel.text = "Loading one consistent local database snapshot..."
 
         propertiesLoaded = false
         roomsLoaded = false
@@ -228,37 +227,34 @@ class PropertyReportingDebugActivity : AppCompatActivity() {
         financialLinesLoaded = false
         paymentsLoaded = false
 
-        val repo = BookingRepository(applicationContext, lifecycleScope, hotel.remoteId)
-        repository = repo
+        lifecycleScope.launch {
+            try {
+                // Intentionally local/read-only. This does not start realtime sync.
+                val raw = PropertyReportingDataSource(
+                    context = applicationContext,
+                    hotelRemoteId = hotel.remoteId
+                ).loadRawData()
 
-        // Intentionally DO NOT call repo.startRealtimeSync().
-        repo.observeManagedProperties().observe(this) {
-            properties = it
-            propertiesLoaded = true
-            rebuildPropertyChoices()
-            renderReport()
-        }
-        repo.observeRooms().observe(this) {
-            rooms = it
-            roomsLoaded = true
-            rebuildPropertyChoices()
-            renderReport()
-        }
-        repo.observeBookings().observe(this) {
-            bookings = it
-            bookingsLoaded = true
-            rebuildPropertyChoices()
-            renderReport()
-        }
-        repo.observeFinancialLines().observe(this) {
-            financialLines = it
-            financialLinesLoaded = true
-            renderReport()
-        }
-        repo.observePayments().observe(this) {
-            payments = it
-            paymentsLoaded = true
-            renderReport()
+                // Publish all report inputs together only after the transaction has
+                // returned a complete point-in-time snapshot.
+                properties = raw.properties
+                rooms = raw.rooms
+                bookings = raw.bookings
+                financialLines = raw.financialLines
+                payments = raw.payments
+
+                propertiesLoaded = true
+                roomsLoaded = true
+                bookingsLoaded = true
+                financialLinesLoaded = true
+                paymentsLoaded = true
+
+                rebuildPropertyChoices()
+                renderReport()
+            } catch (error: Throwable) {
+                statusLabel.text =
+                    "Could not load consistent local snapshot: ${error.message ?: error.javaClass.simpleName}"
+            }
         }
     }
 
@@ -343,7 +339,7 @@ class PropertyReportingDebugActivity : AppCompatActivity() {
         val snapshot = engine.build(raw, scope)
 
         statusLabel.text =
-            "LOCAL DATABASE ONLY • ${choice.label} • ${formatRange(range.startMillis, range.endMillis)}"
+            "CONSISTENT SNAPSHOT | LOCAL DATABASE ONLY | ${choice.label} | ${formatRange(range.startMillis, range.endMillis)}"
 
         reportContainer.removeAllViews()
 
