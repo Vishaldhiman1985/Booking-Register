@@ -12,6 +12,8 @@ import android.widget.Spinner
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.bookingregister.common.domain.BusinessDates
 import com.example.bookingregister.data.AppDatabase
@@ -105,6 +107,14 @@ class PropertyReportingDebugActivity : AppCompatActivity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.WHITE)
+        }
+
+        // Target SDK 36 draws edge-to-edge. Keep this DEBUG header clear of
+        // the phone status/navigation bars without changing the production theme.
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(0, systemBars.top, 0, systemBars.bottom)
+            insets
         }
 
         root.addView(TextView(this).apply {
@@ -381,6 +391,63 @@ class PropertyReportingDebugActivity : AppCompatActivity() {
         reportContainer.addView(note(
             "Received is reconstructed from actual payment rows. Refunds and corrections reduce received money. This screen cannot record or change a payment."
         ))
+
+        // DEBUG-only reconciliation. This does not alter balance calculations.
+        // It explains why SUM(booking outstanding) can be higher than
+        // total receivable minus total received when one booking has received
+        // more money than its own reporting receivable.
+        val excessRows = snapshot.balance.bookings.mapNotNull { row ->
+            val excess = (row.received - row.receivable).coerceAtLeast(0.0)
+            if (excess > 0.001) row to excess else null
+        }
+        val receivedAboveReceivable = excessRows.sumOf { it.second }
+        val arithmeticOutstanding =
+            snapshot.balance.totalReceivable - snapshot.balance.totalReceived
+        val reconciliationDifference =
+            snapshot.balance.totalOutstanding - arithmeticOutstanding
+
+        reportContainer.addView(sectionTitle("Balance Reconciliation Audit"))
+        reportContainer.addView(metric(
+            "Receivable âˆ’ Received",
+            money(arithmeticOutstanding)
+        ))
+        reportContainer.addView(metric(
+            "Booking-wise Outstanding",
+            money(snapshot.balance.totalOutstanding)
+        ))
+        reportContainer.addView(metric(
+            "Difference",
+            money(reconciliationDifference)
+        ))
+        reportContainer.addView(metric(
+            "Received Above Receivable",
+            money(receivedAboveReceivable)
+        ))
+        reportContainer.addView(note(
+            "Outstanding is calculated booking by booking. Excess money received on one booking is not used to reduce another booking's balance. The diagnostic rows below identify any booking where received money is above that booking's reporting receivable."
+        ))
+
+        if (excessRows.isNotEmpty()) {
+            reportContainer.addView(subTitle("Bookings causing the difference"))
+            excessRows
+                .sortedByDescending { it.second }
+                .forEach { (row, excess) ->
+                    val sourceLabel = row.sourceName
+                        ?.takeIf { it.isNotBlank() }
+                        ?: row.sourceType
+                    reportContainer.addView(metric(
+                        "${row.guestName} â€¢ $sourceLabel",
+                        "+${money(excess)}"
+                    ))
+                    reportContainer.addView(note(
+                        "Booking ${row.bookingRemoteId}: receivable ${money(row.receivable)}, received ${money(row.received)}, above receivable ${money(excess)}."
+                    ))
+                }
+        } else {
+            reportContainer.addView(note(
+                "No booking in this property scope has received money above its reporting receivable."
+            ))
+        }
 
         reportContainer.addView(sectionTitle("Read-only Audit Counts"))
         reportContainer.addView(metric("Scoped Rooms", snapshot.dataset.rooms.size.toString()))
