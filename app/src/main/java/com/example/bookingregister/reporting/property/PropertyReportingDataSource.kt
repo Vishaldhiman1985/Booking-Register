@@ -1,6 +1,7 @@
 package com.example.bookingregister.reporting.property
 
 import android.content.Context
+import androidx.room.withTransaction
 import com.example.bookingregister.data.AppDatabase
 
 /**
@@ -19,16 +20,16 @@ class PropertyReportingDataSource(
         require(hotelRemoteId.isNotBlank()) { "Hotel id is required for reporting." }
     }
 
-    suspend fun loadRawData(): PropertyReportRawData {
+    suspend fun loadRawData(): PropertyReportRawData = db.withTransaction {
+        // One read transaction gives every report component the same
+        // point-in-time Room database snapshot.
         val properties = db.managedPropertyDao().getProperties(hotelRemoteId)
         val rooms = db.roomDao().getRooms(hotelRemoteId)
         val bookings = db.bookingDao().getBookings(hotelRemoteId)
         val payments = db.bookingPaymentDao().getPayments(hotelRemoteId)
-        val financialLines = bookings.flatMap { booking ->
-            db.bookingFinancialLineDao().getLinesForBooking(hotelRemoteId, booking.remoteId)
-        }
+        val financialLines = db.bookingFinancialLineDao().getLines(hotelRemoteId)
 
-        return PropertyReportRawData(
+        PropertyReportRawData(
             properties = properties,
             rooms = rooms,
             bookings = bookings,
