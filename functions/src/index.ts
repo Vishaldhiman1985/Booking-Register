@@ -1010,6 +1010,334 @@ export const saveBookingPaymentServer = onCall({ invoker: "public" }, async (req
   )
 );
 
+function otaStayPaidFromPaymentDocs(paymentDocs: DocumentSnapshot[]): number {
+  let stayPaid = 0;
+  for (const payment of paymentDocs) {
+    if (!payment.exists || booleanValue(payment.get("isDeleted"))) continue;
+    const paymentType = String(payment.get("paymentType") || "PAYMENT").toUpperCase();
+    const sign = paymentType === "REFUND" || paymentType === "ADJUSTMENT" ? -1 : 1;
+    const allocatedStay = numberValue(payment.get("allocatedStayAmount"));
+    const allocatedFood = numberValue(payment.get("allocatedFoodAmount"));
+    const allocatedService = numberValue(payment.get("allocatedServiceAmount"));
+    const allocatedDamage = numberValue(payment.get("allocatedDamageAmount"));
+    const allocatedTotal = allocatedStay + allocatedFood + allocatedService + allocatedDamage;
+
+    if (allocatedTotal > 0) {
+      stayPaid += sign * allocatedStay;
+      continue;
+    }
+
+    if (paymentType === "ADJUSTMENT" && numberValue(payment.get("unappliedAmount")) > 0) {
+      continue;
+    }
+
+    const category = String(payment.get("paymentCategory") || "AUTO").trim().toUpperCase();
+    if (!["FOOD", "SERVICE", "DAMAGE"].includes(category)) {
+      stayPaid += sign * numberValue(payment.get("amount"));
+    }
+  }
+  return Math.max(0, stayPaid);
+}
+
+export const recordOtaSettlementServer = onCall({ invoker: "public" }, async (request) => {
+  const requestAuth = await requireAuth(request);
+  const hotelId = requireString(request.data?.hotelId || requestAuth.token.hotelId, "hotelId");
+  await requireActiveHotelMember(requestAuth, hotelId);
+  await requireUsableSubscription(hotelId);
+
+  const operationId = requireString(request.data?.operationId, "operationId");
+  if (!/^[A-Za-z0-9_-]{8,120}$/.test(operationId)) {
+    throw new HttpsError("invalid-argument", "Invalid OTA settlement operation ID.");
+  }
+
+  const propertyRemoteId = requireString(request.data?.propertyRemoteId, "propertyRemoteId");
+  const sourceRemoteId = requireString(request.data?.sourceRemoteId, "sourceRemoteId");
+  const requestedSourceName = requireString(request.data?.sourceName, "sourceName");
+  const settlementMillisRaw = numberValue(request.data?.settlementMillis, Date.now());
+  const settlementMillis =
+    Number.isFinite(settlementMillisRaw) && settlementMillisRaw > 0 ? settlementMillisRaw : Date.now();
+  const settlementReference = String(request.data?.settlementReference || "").trim().slice(0, 120);
+  const note = String(request.data?.note || "").trim().slice(0, 500);
+
+  const rawSelections = Array.isArray(request.data?.selections)
+    ? request.data.selections as Array<Record<string, unknown>>
+    : [];
+  if (rawSelections.length === 0) {
+    throw new HttpsError("invalid-argument", "Select at least one OTA booking.");
+  }
+  if (rawSelections.length > 100) {
+    throw new HttpsError(
+      "invalid-argument",
+      "A single OTA settlement cannot contain more than 100 bookings."
+    );
+  }
+
+  const selections = rawSelections.map((raw) => ({
+    bookingRemoteId: requireString(raw.bookingRemoteId, "bookingRemoteId"),
+    expectedOutstanding: numberValue(raw.expectedOutstanding),
+  }));
+  if (new Set(selections.map((item) => item.bookingRemoteId)).size !== selections.length) {
+    throw new HttpsError("invalid-argument", "The same booking cannot be selected twice.");
+  }
+  if (selections.some((item) => item.expectedOutstanding <= 0.001)) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Every selected booking must have a positive outstanding OTA receivable."
+    );
+  }
+
+  const requestFingerprint = selections
+    .map((item) => ({
+      bookingRemoteId: item.bookingRemoteId,
+      expectedOutstandingPaise: Math.round(item.expectedOutstanding * 100),
+    }))
+    .sort((a, b) => a.bookingRemoteId.localeCompare(b.bookingRemoteId))
+    .map((item) => `${item.bookingRemoteId}:${item.expectedOutstandingPaise}`)
+    .join("|");
+
+  const hotelRef = publicHotelRef(hotelId);
+  const sourceDoc = hotelRef.collection("bookingSources").doc(sourceRemoteId);
+  const mutationDoc = hotelRef.collection("appliedOtaSettlementMutations").doc(operationId);
+  const settlementRemoteId = `ota_settlement_${operationId}`;
+  const settlementDoc = hotelRef.collection("otaSettlements").doc(settlementRemoteId);
+  const nowMillis = Date.now();
+
+  return db.runTransaction(async (tx) => {
+    const alreadyApplied = await tx.get(mutationDoc);
+    if (alreadyApplied.exists) {
+      const stored = alreadyApplied.get("result") as Record<string, unknown> | undefined;
+      if (!stored) {
+        throw new HttpsError("aborted", "Existing OTA settlement mutation has no result.");
+      }
+      if (
+        String(stored.propertyRemoteId || "") !== propertyRemoteId ||
+        String(stored.sourceRemoteId || "") !== sourceRemoteId
+      ) {
+        throw new HttpsError(
+          "aborted",
+          "This OTA settlement operation ID was already used for another property or source."
+        );
+      }
+
+      const storedFingerprint = String(alreadyApplied.get("requestFingerprint") || "");
+      if (!storedFingerprint || storedFingerprint !== requestFingerprint) {
+        throw new HttpsError(
+          "aborted",
+          "This OTA settlement operation ID was already used for a different booking selection or amount."
+        );
+      }
+
+      return { ...stored, alreadyApplied: true };
+    }
+
+    const source = await tx.get(sourceDoc);
+    if (source.exists) {
+      if (String(source.get("sourceType") || "").toUpperCase() !== "OTA") {
+        throw new HttpsError("failed-precondition", "Selected source is not an OTA.");
+      }
+      const sourcePropertyId = String(source.get("propertyRemoteId") || "").trim();
+      if (sourcePropertyId && sourcePropertyId !== propertyRemoteId) {
+        throw new HttpsError(
+          "failed-precondition",
+          "This OTA source belongs to another property."
+        );
+      }
+    }
+    // Historical bookings must remain settleable even if an old OTA source
+    // configuration was later retired. Every selected booking is still
+    // independently revalidated against property + sourceRemoteId below.
+    const sourceName =
+      String(source.exists ? source.get("sourceName") || requestedSourceName : requestedSourceName).trim() ||
+      requestedSourceName;
+
+    const bookingSnapshots = new Map<string, DocumentSnapshot>();
+    const paymentSnapshots = new Map<string, DocumentSnapshot[]>();
+
+    for (const selection of selections) {
+      const booking = await tx.get(hotelRef.collection("bookings").doc(selection.bookingRemoteId));
+      bookingSnapshots.set(selection.bookingRemoteId, booking);
+    }
+
+    for (const selection of selections) {
+      const bookingPayments = await tx.get(
+        hotelRef.collection("bookingPayments")
+          .where("bookingRemoteId", "==", selection.bookingRemoteId)
+      );
+      paymentSnapshots.set(selection.bookingRemoteId, bookingPayments.docs);
+    }
+
+    const allocations = selections.map((selection, index) => {
+      const booking = bookingSnapshots.get(selection.bookingRemoteId);
+      if (!booking?.exists || booleanValue(booking.get("isDeleted"))) {
+        throw new HttpsError("failed-precondition", "One selected booking was not found.");
+      }
+      if (String(booking.get("bookingStatus") || "") === "CANCELLED") {
+        throw new HttpsError(
+          "failed-precondition",
+          "A cancelled booking cannot be included in an OTA settlement."
+        );
+      }
+      if (String(booking.get("sourceType") || "").toUpperCase() !== "OTA") {
+        throw new HttpsError(
+          "failed-precondition",
+          "A selected booking is not an OTA booking."
+        );
+      }
+      if (String(booking.get("propertyRemoteId") || "") !== propertyRemoteId) {
+        throw new HttpsError(
+          "failed-precondition",
+          "A selected booking belongs to another property."
+        );
+      }
+      if (String(booking.get("sourceRemoteId") || "") !== sourceRemoteId) {
+        throw new HttpsError(
+          "failed-precondition",
+          "A selected booking belongs to another OTA source."
+        );
+      }
+
+      const receivable = Math.max(
+        0,
+        numberValue(booking.get("expectedPayout")) > 0
+          ? numberValue(booking.get("expectedPayout"))
+          : numberValue(booking.get("receivable")) > 0
+            ? numberValue(booking.get("receivable"))
+            : numberValue(booking.get("rate"))
+      );
+      const received = otaStayPaidFromPaymentDocs(
+        paymentSnapshots.get(selection.bookingRemoteId) || []
+      );
+      const appliedReceived = Math.min(received, receivable);
+      const outstanding = Math.max(0, receivable - appliedReceived);
+
+      if (outstanding <= 0.001) {
+        throw new HttpsError(
+          "aborted",
+          "One selected OTA booking is already fully settled. Refresh the report."
+        );
+      }
+      if (Math.abs(outstanding - selection.expectedOutstanding) > 0.02) {
+        throw new HttpsError(
+          "aborted",
+          "One or more OTA balances changed on another device. Refresh the report before recording."
+        );
+      }
+
+      const paymentRemoteId = `${settlementRemoteId}_payment_${index + 1}`;
+      const allocationRemoteId = `${settlementRemoteId}_allocation_${index + 1}`;
+      const paymentNote =
+        `OTA settlement ${sourceName}` +
+        (settlementReference ? ` | ${settlementReference}` : "");
+
+      return {
+        bookingRemoteId: selection.bookingRemoteId,
+        paymentRemoteId,
+        allocationRemoteId,
+        amount: outstanding,
+        paymentRevision: 1,
+        paymentMillis: settlementMillis,
+        paymentUpdatedAt: nowMillis,
+        paymentMethod: "OTA_SETTLEMENT",
+        paymentNote,
+      };
+    });
+
+    const totalAmount = allocations.reduce((sum, item) => sum + item.amount, 0);
+
+    for (const allocation of allocations) {
+      tx.set(hotelRef.collection("bookingPayments").doc(allocation.paymentRemoteId), {
+        hotelRemoteId: hotelId,
+        bookingRemoteId: allocation.bookingRemoteId,
+        originalPaymentRemoteId: null,
+        paymentType: "PAYMENT",
+        paymentCategory: "STAY",
+        amount: allocation.amount,
+        allocatedStayAmount: allocation.amount,
+        allocatedFoodAmount: 0,
+        allocatedServiceAmount: 0,
+        allocatedDamageAmount: 0,
+        unappliedAmount: 0,
+        paymentMillis: allocation.paymentMillis,
+        method: allocation.paymentMethod,
+        note: allocation.paymentNote,
+        updatedAt: allocation.paymentUpdatedAt,
+        isDeleted: false,
+        revision: allocation.paymentRevision,
+        updatedByUid: requestAuth.uid,
+        serverUpdatedAt: FieldValue.serverTimestamp(),
+      });
+
+      tx.set(
+        hotelRef.collection("otaSettlementAllocations").doc(allocation.allocationRemoteId),
+        {
+          hotelRemoteId: hotelId,
+          propertyRemoteId,
+          settlementRemoteId,
+          sourceRemoteId,
+          sourceName,
+          bookingRemoteId: allocation.bookingRemoteId,
+          paymentRemoteId: allocation.paymentRemoteId,
+          amount: allocation.amount,
+          createdAt: nowMillis,
+          updatedAt: nowMillis,
+          createdByUid: requestAuth.uid,
+          serverUpdatedAt: FieldValue.serverTimestamp(),
+        }
+      );
+    }
+
+    tx.set(settlementDoc, {
+      hotelRemoteId: hotelId,
+      propertyRemoteId,
+      sourceRemoteId,
+      sourceName,
+      operationId,
+      totalAmount,
+      bookingCount: allocations.length,
+      settlementMillis,
+      settlementReference: settlementReference || null,
+      note: note || null,
+      status: "CONFIRMED",
+      createdAt: nowMillis,
+      updatedAt: nowMillis,
+      createdByUid: requestAuth.uid,
+      serverUpdatedAt: FieldValue.serverTimestamp(),
+    });
+
+    const result = {
+      settlementRemoteId,
+      propertyRemoteId,
+      sourceRemoteId,
+      sourceName,
+      totalAmount,
+      bookingCount: allocations.length,
+      settlementMillis,
+      updatedAt: nowMillis,
+      updatedByUid: requestAuth.uid,
+      alreadyApplied: false,
+      allocations: allocations.map((allocation) => ({
+        bookingRemoteId: allocation.bookingRemoteId,
+        paymentRemoteId: allocation.paymentRemoteId,
+        amount: allocation.amount,
+        paymentRevision: allocation.paymentRevision,
+        paymentMillis: allocation.paymentMillis,
+        paymentUpdatedAt: allocation.paymentUpdatedAt,
+        paymentMethod: allocation.paymentMethod,
+        paymentNote: allocation.paymentNote,
+      })),
+    };
+
+    tx.set(mutationDoc, {
+      result,
+      requestFingerprint,
+      createdAt: nowMillis,
+      serverCreatedAt: FieldValue.serverTimestamp(),
+    });
+
+    return result;
+  });
+});
+
 export const saveBookingAccountingChargeServer = onCall({ invoker: "public" }, async (request) =>
   saveRevisionCheckedRecord(
     request,

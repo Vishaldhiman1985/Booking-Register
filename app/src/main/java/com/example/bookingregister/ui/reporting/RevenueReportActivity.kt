@@ -11,13 +11,24 @@ import android.view.View
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.example.bookingregister.common.domain.BusinessDates
 import com.example.bookingregister.common.domain.DateRange
+import com.example.bookingregister.reporting.property.PropertyReportRawData
+import com.example.bookingregister.reporting.property.PropertyReportScope
+import com.example.bookingregister.reporting.property.PropertyReportingDataSource
+import com.example.bookingregister.reporting.property.PropertyReportingEngine
+import com.example.bookingregister.reporting.property.OtaReceivableGroup
+import com.example.bookingregister.reporting.property.OtaReceivableGrouping
+import com.example.bookingregister.data.entities.BookingSourceType
 import com.example.bookingregister.data.repository.BookingRepository
+import com.example.bookingregister.data.repository.OtaSettlementSelection
+import com.example.bookingregister.data.repository.SaveResult
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.RoomEntity
 import com.example.bookingregister.room.domain.RoomLifecyclePolicy
@@ -44,10 +55,18 @@ class RevenueReportActivity : AppCompatActivity() {
         const val EXTRA_HOTEL_REMOTE_ID = "hotel_remote_id"
         const val KIND_REVENUE = "revenue"
         const val KIND_OCCUPANCY = "occupancy"
+        const val KIND_BALANCE = "balance"
     }
 
-    private lateinit var repository: BookingRepository
+    private lateinit var dataSource: PropertyReportingDataSource
+    private lateinit var hotelRemoteId: String
+    private lateinit var settlementRepository: BookingRepository
+    private var otaSettlementInProgress: Boolean = false
     private lateinit var content: LinearLayout
+    private lateinit var customRangeButton: MaterialButton
+
+    private var rawData: PropertyReportRawData? = null
+    private val reportingEngine = PropertyReportingEngine()
 
     private val rooms = mutableListOf<RoomEntity>()
     private val bookings = mutableListOf<BookingEntity>()
@@ -60,6 +79,11 @@ class RevenueReportActivity : AppCompatActivity() {
     private var weekRange: DateRange = RevenuePeriod.weekContaining(System.currentTimeMillis())
     private var customRange: DateRange? = null
     private var reportKind: ReportKind = ReportKind.REVENUE
+    private var selectedProperty = ReportPropertyChoice(
+        label = "All Properties - Consolidated",
+        propertyRemoteId = null,
+        includeAllProperties = true
+    )
     private var bookingsLoadJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -70,21 +94,20 @@ class RevenueReportActivity : AppCompatActivity() {
         )
         reportKind = when (intent.getStringExtra(EXTRA_REPORT_KIND)) {
             KIND_OCCUPANCY -> ReportKind.OCCUPANCY
+            KIND_BALANCE -> ReportKind.BALANCE
             else -> ReportKind.REVENUE
         }
-        val hotelRemoteId = intent.getStringExtra(EXTRA_HOTEL_REMOTE_ID)
-        if (hotelRemoteId.isNullOrBlank()) {
+        val requestedHotelRemoteId = intent.getStringExtra(EXTRA_HOTEL_REMOTE_ID)
+        if (requestedHotelRemoteId.isNullOrBlank()) {
             finish()
             return
         }
-        repository = BookingRepository(applicationContext, lifecycleScope, hotelRemoteId)
+        hotelRemoteId = requestedHotelRemoteId
+        dataSource = PropertyReportingDataSource(applicationContext, hotelRemoteId)
+        // This repository is used only for the explicit OTA-settlement command.
+        // Creating it does not start realtime sync.
+        settlementRepository = BookingRepository(applicationContext, lifecycleScope, hotelRemoteId)
         setContentView(buildRoot())
-
-        repository.observeRooms().observe(this) { updated ->
-            rooms.clear()
-            rooms.addAll(updated)
-            refreshReportData()
-        }
         refreshReportData()
     }
 
@@ -127,34 +150,50 @@ class RevenueReportActivity : AppCompatActivity() {
             }, LinearLayout.LayoutParams(dp(52), LinearLayout.LayoutParams.MATCH_PARENT))
 
             addView(TextView(this@RevenueReportActivity).apply {
-                text = if (reportKind == ReportKind.OCCUPANCY) "Occupancy" else "Reports"
+                text = "Property Reports"
                 textSize = 22f
                 typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
                 setTextColor(Color.WHITE)
                 gravity = Gravity.CENTER_VERTICAL
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
 
-            addView(MaterialButton(this@RevenueReportActivity).apply {
+            customRangeButton = MaterialButton(this@RevenueReportActivity).apply {
                 text = "Custom"
                 textSize = 12f
                 isAllCaps = false
                 setTextColor(Color.WHITE)
                 setBackgroundColor(Color.TRANSPARENT)
-                visibility = if (reportKind == ReportKind.OCCUPANCY) View.GONE else View.VISIBLE
+                visibility = if (reportKind == ReportKind.REVENUE) View.VISIBLE else View.GONE
                 setOnClickListener { chooseCustomRange() }
-            }, LinearLayout.LayoutParams(dp(92), dp(42)))
+            }
+            addView(customRangeButton, LinearLayout.LayoutParams(dp(92), dp(42)))
         }
     }
 
     private fun refreshReportData() {
         if (!::content.isInitialized) return
         bookingsLoadJob?.cancel()
-        val range = visibleReportRange()
         bookingsLoadJob = lifecycleScope.launch {
-            val scopedBookings = repository.getBookingsForWindow(range.startMillis, range.endMillis)
-            bookings.clear()
-            bookings.addAll(scopedBookings)
-            render()
+            content.removeAllViews()
+            content.addView(TextView(this@RevenueReportActivity).apply {
+                text = "Loading one consistent local reporting snapshot..."
+                textSize = 14f
+                setTextColor(Color.rgb(80, 80, 80))
+                setPadding(dp(4), dp(14), dp(4), dp(14))
+            })
+            try {
+                rawData = dataSource.loadRawData()
+                ensureSelectedPropertyStillAvailable()
+                render()
+            } catch (error: Throwable) {
+                content.removeAllViews()
+                content.addView(TextView(this@RevenueReportActivity).apply {
+                    text = "Could not load property report: ${error.message ?: error.javaClass.simpleName}"
+                    textSize = 15f
+                    setTextColor(Color.rgb(150, 30, 30))
+                    setPadding(dp(4), dp(14), dp(4), dp(14))
+                })
+            }
         }
     }
 
@@ -169,13 +208,36 @@ class RevenueReportActivity : AppCompatActivity() {
 
     private fun render() {
         if (!::content.isInitialized) return
+        val raw = rawData ?: return
+
         content.removeAllViews()
 
-        val ledger = ledgerBuilder.build(rooms, bookings)
-        if (reportKind == ReportKind.OCCUPANCY) {
-            renderOccupancyDashboard()
-            return
+        val visibleSnapshot = reportingEngine.build(raw, scopeFor(visibleReportRange()))
+        rooms.clear()
+        rooms.addAll(visibleSnapshot.dataset.rooms)
+        bookings.clear()
+        bookings.addAll(visibleSnapshot.dataset.bookings)
+
+        if (::customRangeButton.isInitialized) {
+            customRangeButton.visibility =
+                if (reportKind == ReportKind.REVENUE) View.VISIBLE else View.GONE
         }
+
+        content.addView(reportModeSelector())
+        content.addView(spacer(8))
+        content.addView(propertySelectorSection())
+        content.addView(spacer(10))
+
+        when (reportKind) {
+            ReportKind.REVENUE -> renderRevenueDashboard()
+            ReportKind.OCCUPANCY -> renderOccupancyDashboard()
+            ReportKind.BALANCE -> renderBalanceDashboard()
+        }
+    }
+
+    private fun renderRevenueDashboard() {
+        val ledger = ledgerBuilder.build(rooms, bookings)
+        content.addView(revenueSummarySection())
 
         val annualStats = revenueStats(ledger, annualRange, fiscalMonthBuckets(annualRange))
         val monthStats = revenueStats(ledger, monthRange, dayBuckets(monthRange))
@@ -230,6 +292,400 @@ class RevenueReportActivity : AppCompatActivity() {
             rangeText = formatMonth(monthRange.startMillis),
             breakdown = settlementBreakdown(monthRange)
         ))
+    }
+
+    private fun reportModeSelector(): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            isBaselineAligned = false
+            listOf(
+                ReportKind.REVENUE to "Revenue",
+                ReportKind.OCCUPANCY to "Occupancy",
+                ReportKind.BALANCE to "Balance"
+            ).forEach { (kind, label) ->
+                addView(MaterialButton(this@RevenueReportActivity).apply {
+                    text = label
+                    textSize = 12f
+                    isAllCaps = false
+                    alpha = if (reportKind == kind) 1f else 0.65f
+                    setOnClickListener {
+                        if (reportKind != kind) {
+                            reportKind = kind
+                            render()
+                        }
+                    }
+                }, weightParams())
+            }
+        }
+    }
+
+    private fun propertySelectorSection(): View {
+        return sectionCard().apply {
+            addView(TextView(this@RevenueReportActivity).apply {
+                text = "Property"
+                textSize = 13f
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                setTextColor(Color.rgb(80, 80, 80))
+            })
+            addView(LinearLayout(this@RevenueReportActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(TextView(this@RevenueReportActivity).apply {
+                    text = selectedProperty.label
+                    textSize = 17f
+                    typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                    setTextColor(Color.rgb(25, 25, 25))
+                }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                addView(MaterialButton(this@RevenueReportActivity).apply {
+                    text = "Change"
+                    textSize = 12f
+                    isAllCaps = false
+                    setOnClickListener { showPropertyPicker() }
+                }, LinearLayout.LayoutParams(dp(100), dp(42)))
+            })
+        }
+    }
+
+    private fun showPropertyPicker() {
+        val choices = propertyChoices()
+        val labels = choices.map { it.label }.toTypedArray()
+        val selectedIndex = choices.indexOfFirst {
+            it.includeAllProperties == selectedProperty.includeAllProperties &&
+                it.propertyRemoteId == selectedProperty.propertyRemoteId
+        }.coerceAtLeast(0)
+
+        AlertDialog.Builder(this)
+            .setTitle("Select property")
+            .setSingleChoiceItems(labels, selectedIndex) { dialog, which ->
+                selectedProperty = choices[which]
+                dialog.dismiss()
+                render()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun propertyChoices(): List<ReportPropertyChoice> {
+        val raw = rawData ?: return listOf(selectedProperty)
+        val choices = mutableListOf(
+            ReportPropertyChoice(
+                label = "All Properties - Consolidated",
+                propertyRemoteId = null,
+                includeAllProperties = true
+            )
+        )
+
+        raw.properties
+            .filter { !it.isDeleted }
+            .sortedWith(compareBy({ it.sortOrder }, { it.propertyName.lowercase(Locale.getDefault()) }))
+            .forEach { property ->
+                choices.add(
+                    ReportPropertyChoice(
+                        label = property.propertyName,
+                        propertyRemoteId = property.remoteId,
+                        includeAllProperties = false
+                    )
+                )
+            }
+
+        val hasLegacyOrUnassigned =
+            raw.rooms.any { !it.isDeleted && it.propertyRemoteId.isNullOrBlank() } ||
+                raw.bookings.any { !it.isDeleted && it.propertyRemoteId.isNullOrBlank() }
+        if (hasLegacyOrUnassigned) {
+            choices.add(
+                ReportPropertyChoice(
+                    label = "Legacy / Unassigned",
+                    propertyRemoteId = null,
+                    includeAllProperties = false
+                )
+            )
+        }
+        return choices
+    }
+
+    private fun ensureSelectedPropertyStillAvailable() {
+        if (selectedProperty.includeAllProperties) return
+        val stillExists = propertyChoices().any {
+            !it.includeAllProperties &&
+                it.propertyRemoteId == selectedProperty.propertyRemoteId &&
+                it.label == selectedProperty.label
+        }
+        if (!stillExists) {
+            selectedProperty = ReportPropertyChoice(
+                label = "All Properties - Consolidated",
+                propertyRemoteId = null,
+                includeAllProperties = true
+            )
+        }
+    }
+
+    private fun scopeFor(range: DateRange): PropertyReportScope {
+        return PropertyReportScope(
+            hotelRemoteId = hotelRemoteId,
+            propertyRemoteId = selectedProperty.propertyRemoteId,
+            includeAllProperties = selectedProperty.includeAllProperties,
+            startMillis = range.startMillis,
+            endMillis = range.endMillis
+        )
+    }
+
+    private fun snapshotFor(range: DateRange) =
+        reportingEngine.build(rawData ?: error("Reporting data is not loaded"), scopeFor(range))
+
+    private fun revenueSummarySection(): View {
+        val facts = snapshotFor(annualRange).revenue
+        return sectionCard().apply {
+            addView(sectionHeader(
+                "Financial Year Summary",
+                financialYearTitle(annualRange),
+                null,
+                null
+            ))
+            addView(metricStrip(listOf(
+                "Gross Billing" to moneyWithCurrency(facts.grossRoomBilling),
+                "Revenue ex-GST" to moneyWithCurrency(facts.roomRevenue),
+                "GST" to moneyWithCurrency(facts.gstCollected),
+                "Payments" to moneyWithCurrency(facts.paymentsRecordedInPeriod)
+            )))
+            addView(metricStrip(listOf(
+                "CGST" to moneyWithCurrency(facts.cgstCollected),
+                "SGST" to moneyWithCurrency(facts.sgstCollected),
+                "Cess" to moneyWithCurrency(facts.cessCollected),
+                "Refunds" to moneyWithCurrency(facts.refundsRecordedInPeriod)
+            )))
+        }
+    }
+
+    private fun renderBalanceDashboard() {
+        val balance = snapshotFor(annualRange).balance
+
+        content.addView(sectionCard().apply {
+            addView(sectionHeader("Current Balance", selectedProperty.label, null, null))
+            addView(metricStrip(listOf(
+                "Receivable" to moneyWithCurrency(balance.totalReceivable),
+                "Payments Received" to moneyWithCurrency(balance.totalReceived),
+                "Applied Received" to moneyWithCurrency(balance.totalAppliedReceived)
+            )))
+            addView(metricStrip(listOf(
+                "Excess Payment" to moneyWithCurrency(balance.totalExcessPayment),
+                "Outstanding" to moneyWithCurrency(balance.totalOutstanding),
+                "Open Bookings" to balance.openBookingCount.toString()
+            )))
+            addView(metricStrip(listOf(
+                "OTA Outstanding" to moneyWithCurrency(balance.otaOutstanding),
+                "Guest Outstanding" to moneyWithCurrency(balance.guestOutstanding)
+            )))
+        })
+
+        val otaGroups = OtaReceivableGrouping.build(balance.bookings)
+        content.addView(sectionCard().apply {
+            addView(sectionHeader(
+                "OTA Receivables",
+                "${otaGroups.sumOf { it.bookingCount }} pending bookings",
+                null,
+                null
+            ))
+            if (otaGroups.isEmpty()) {
+                addView(TextView(this@RevenueReportActivity).apply {
+                    text = "No pending OTA receivables."
+                    textSize = 14f
+                    setTextColor(Color.rgb(80, 80, 80))
+                    setPadding(0, dp(10), 0, dp(4))
+                })
+            } else {
+                otaGroups.forEach { group ->
+                    addView(otaReceivableCompanyRow(group))
+                }
+                if (selectedProperty.propertyRemoteId == null) {
+                    addView(TextView(this@RevenueReportActivity).apply {
+                        text = "Select one specific property before recording an OTA payment."
+                        textSize = 12f
+                        setTextColor(Color.rgb(120, 90, 20))
+                        setPadding(0, dp(10), 0, dp(2))
+                    })
+                }
+            }
+        })
+
+        val directRows = balance.bookings
+            .filter {
+                it.sourceType != BookingSourceType.OTA &&
+                    it.outstanding > 0.001
+            }
+            .sortedByDescending { it.outstanding }
+
+        content.addView(sectionCard().apply {
+            addView(sectionHeader(
+                "Direct Guest Balances",
+                "${directRows.size} pending bookings",
+                null,
+                null
+            ))
+            addView(TextView(this@RevenueReportActivity).apply {
+                text = "Direct guest payments continue to be recorded from the Booking Chart."
+                textSize = 12f
+                setTextColor(Color.rgb(90, 90, 90))
+                setPadding(0, dp(4), 0, dp(8))
+            })
+            if (directRows.isEmpty()) {
+                addView(TextView(this@RevenueReportActivity).apply {
+                    text = "No pending direct guest balances."
+                    textSize = 14f
+                    setTextColor(Color.rgb(80, 80, 80))
+                    setPadding(0, dp(8), 0, dp(4))
+                })
+            } else {
+                directRows.forEach { row ->
+                    addView(LinearLayout(this@RevenueReportActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(0, dp(8), 0, dp(8))
+                        addView(TextView(this@RevenueReportActivity).apply {
+                            text = row.guestName.ifBlank { "Guest" }
+                            textSize = 13f
+                            setTextColor(Color.rgb(45, 45, 45))
+                        }, LinearLayout.LayoutParams(
+                            0,
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                            1f
+                        ))
+                        addView(TextView(this@RevenueReportActivity).apply {
+                            text = moneyWithCurrency(row.outstanding)
+                            textSize = 15f
+                            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                            setTextColor(Color.parseColor("#FF5A5F"))
+                            gravity = Gravity.END
+                        })
+                    })
+                }
+            }
+        })
+    }
+
+    private fun otaReceivableCompanyRow(group: OtaReceivableGroup): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(9), 0, dp(9))
+
+            addView(LinearLayout(this@RevenueReportActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+
+                addView(TextView(this@RevenueReportActivity).apply {
+                    text = "${group.sourceName}\n${group.bookingCount} pending booking(s)"
+                    textSize = 14f
+                    typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                    setTextColor(Color.rgb(35, 35, 35))
+                }, LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+                ))
+
+                addView(TextView(this@RevenueReportActivity).apply {
+                    text = moneyWithCurrency(group.totalOutstanding)
+                    textSize = 16f
+                    typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                    setTextColor(Color.parseColor("#FF5A5F"))
+                    gravity = Gravity.END
+                })
+            })
+
+            addView(MaterialButton(this@RevenueReportActivity).apply {
+                text = if (
+                    selectedProperty.propertyRemoteId != null &&
+                    !group.sourceRemoteId.isNullOrBlank()
+                ) {
+                    "Open ${group.sourceName}"
+                } else {
+                    "Select a property to settle"
+                }
+                textSize = 12f
+                isAllCaps = false
+                isEnabled =
+                    selectedProperty.propertyRemoteId != null &&
+                        !group.sourceRemoteId.isNullOrBlank() &&
+                        !otaSettlementInProgress
+                setOnClickListener { showOtaSettlementSelection(group) }
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(42)
+            ).apply {
+                setMargins(0, dp(7), 0, 0)
+            })
+        }
+    }
+
+    private fun showOtaSettlementSelection(group: OtaReceivableGroup) {
+        if (otaSettlementInProgress) {
+            Toast.makeText(this, "Another OTA settlement is being recorded.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val propertyRemoteId = selectedProperty.propertyRemoteId
+        if (propertyRemoteId.isNullOrBlank()) {
+            Toast.makeText(this, "Select one specific property first.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val sourceRemoteId = group.sourceRemoteId
+        if (sourceRemoteId.isNullOrBlank()) {
+            Toast.makeText(
+                this,
+                "This consolidated or legacy OTA source cannot be settled until one property/source is selected.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        OtaSettlementSelectionDialog.show(
+            activity = this,
+            propertyName = selectedProperty.label,
+            sourceName = group.sourceName,
+            bookings = group.bookings,
+            moneyFormatter = ::moneyWithCurrency
+        ) { selectedRows, settlementReference, note ->
+            val selectedTotal = selectedRows.sumOf { it.outstanding }
+            otaSettlementInProgress = true
+            lifecycleScope.launch {
+                val result = settlementRepository.recordOtaSettlement(
+                    propertyRemoteId = propertyRemoteId,
+                    sourceRemoteId = sourceRemoteId,
+                    sourceName = group.sourceName,
+                    selections = selectedRows.map {
+                        OtaSettlementSelection(
+                            bookingRemoteId = it.bookingRemoteId,
+                            expectedOutstanding = it.outstanding
+                        )
+                    },
+                    settlementReference = settlementReference,
+                    note = note
+                )
+
+                when (result) {
+                    is SaveResult.Success -> {
+                        Toast.makeText(
+                            this@RevenueReportActivity,
+                            "${group.sourceName} payment ${moneyWithCurrency(selectedTotal)} recorded.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        refreshReportData()
+                    }
+                    is SaveResult.Conflict -> Toast.makeText(
+                        this@RevenueReportActivity,
+                        result.message,
+                        Toast.LENGTH_LONG
+                    ).show()
+                    is SaveResult.Error -> Toast.makeText(
+                        this@RevenueReportActivity,
+                        result.message,
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                otaSettlementInProgress = false
+                if (result !is SaveResult.Success) {
+                    render()
+                }
+            }
+        }
     }
 
     private fun summaryCard(label: String, value: String, fill: String): View {
@@ -305,7 +761,7 @@ class RevenueReportActivity : AppCompatActivity() {
                 ),
                 fill = "#F4F7FF"
             ))
-            addView(breakdownTotalRow("Expected Net Collection", money(breakdown.netCollection)))
+            addView(breakdownTotalRow("Stored Expected OTA Payout", money(breakdown.expectedPayout)))
         }
     }
 
@@ -495,33 +951,39 @@ class RevenueReportActivity : AppCompatActivity() {
         range: DateRange,
         buckets: List<PeriodBucket>
     ): RevenueBlockStats {
-        val summary = revenueCalculator.summarize(ledger, range)
-        val entries = revenuePeriodValues(ledger, buckets)
-        val occupiedNights = occupiedRoomNights(range)
-        val availableNights = availableRoomNights(range)
-        val arrDivider = occupiedNights.coerceAtLeast(1)
-        val occupancyPercent = if (availableNights <= 0) 0 else ((occupiedNights.toDouble() / availableNights) * 100).roundToInt()
+        // The ledger parameter is intentionally retained so the existing chart method
+        // signature and layout remain stable. Monetary values below come only from the
+        // property reporting SSOT (stored financial lines), not BookingEntity caches.
+        if (ledger.isEmpty()) {
+            // No special fallback is needed; snapshotFor() safely returns zero facts.
+        }
+        val snapshot = snapshotFor(range)
+        val facts = snapshot.revenue
+        val occupancy = snapshot.occupancy
+        val entries = buckets.map { bucket ->
+            bucket.label to snapshotFor(bucket.range).revenue.roomRevenue
+        }
+        val arrDivider = occupancy.occupiedRoomNights.coerceAtLeast(1)
         return RevenueBlockStats(
-            total = summary.roomRevenue,
-            occupancyPercent = occupancyPercent,
-            arr = summary.roomRevenue / arrDivider,
-            occupiedNights = occupiedNights,
-            availableNights = availableNights,
+            total = facts.roomRevenue,
+            occupancyPercent = occupancy.occupancyPercent,
+            arr = facts.roomRevenue / arrDivider,
+            occupiedNights = occupancy.occupiedRoomNights,
+            availableNights = occupancy.availableRoomNights,
             entries = entries
         )
     }
 
     private fun occupancyStats(range: DateRange, buckets: List<PeriodBucket>): OccupancyBlockStats {
-        val occupied = occupiedRoomNights(range)
-        val available = availableRoomNights(range)
-        val percent = if (available <= 0) 0 else ((occupied.toDouble() / available) * 100).roundToInt()
-        val entries = buckets.map { it.label to occupancyCalculator.occupancyPercent(rooms, bookings, it.range).toDouble() }
-        val averageOccupiedRooms = occupied.toDouble() / BusinessDates.rangeDays(range).coerceAtLeast(1)
+        val facts = snapshotFor(range).occupancy
+        val entries = buckets.map { bucket ->
+            bucket.label to snapshotFor(bucket.range).occupancy.occupancyPercent.toDouble()
+        }
         return OccupancyBlockStats(
-            percent = percent,
-            occupied = occupied,
-            available = available,
-            averageOccupiedRooms = averageOccupiedRooms,
+            percent = facts.occupancyPercent,
+            occupied = facts.occupiedRoomNights,
+            available = facts.availableRoomNights,
+            averageOccupiedRooms = facts.averageOccupiedRoomsPerDay,
             entries = entries
         )
     }
@@ -537,29 +999,55 @@ class RevenueReportActivity : AppCompatActivity() {
     }
 
     private fun settlementBreakdown(range: DateRange): SettlementBreakdown {
-        val activeRoomIds = rooms.filter { !it.isDeleted }.map { it.remoteId }.toSet()
-        if (activeRoomIds.isEmpty()) return SettlementBreakdown()
+        val facts = snapshotFor(range).revenue
+        val settlements = facts.bookingSettlements
 
-        return bookings
-            .filter { !it.isDeleted && it.bookingStatus != BookingStatus.CANCELLED }
-            .fold(SettlementBreakdown()) { total, booking ->
-                val allocation = booking.periodAllocation(range, activeRoomIds)
-                if (allocation <= 0.0) {
-                    total
-                } else {
-                    total + SettlementBreakdown(
-                        grossSales = booking.grossCharges.takeIf { it > 0.0 }
-                            ?: booking.receivable + booking.propertyTax,
-                        gstCollected = booking.propertyTax,
-                        netRevenue = booking.roomRevenue.takeIf { it > 0.0 } ?: booking.receivable,
-                        commission = booking.commissionAmount,
-                        commissionGst = booking.commissionTax,
-                        sourceFees = booking.sourceFee,
-                        tcs = booking.tcsAmount,
-                        tds = booking.tdsAmount
-                    ).scaled(allocation)
-                }
+        fun allocation(periodRevenue: Double, fullRevenue: Double): Double {
+            if (fullRevenue <= 0.0 || periodRevenue <= 0.0) return 0.0
+            return (periodRevenue / fullRevenue).coerceIn(0.0, 1.0)
+        }
+
+        return SettlementBreakdown(
+            grossSales = facts.grossRoomBilling,
+            gstCollected = facts.gstCollected,
+            netRevenue = facts.roomRevenue,
+            commission = settlements.sumOf {
+                it.storedCommissionAmount * allocation(
+                    it.roomRevenueInReportPeriod,
+                    it.fullBookingRoomRevenueFromFinancialLines
+                )
+            },
+            commissionGst = settlements.sumOf {
+                it.storedCommissionTax * allocation(
+                    it.roomRevenueInReportPeriod,
+                    it.fullBookingRoomRevenueFromFinancialLines
+                )
+            },
+            sourceFees = settlements.sumOf {
+                it.storedSourceFee * allocation(
+                    it.roomRevenueInReportPeriod,
+                    it.fullBookingRoomRevenueFromFinancialLines
+                )
+            },
+            tcs = settlements.sumOf {
+                it.storedTcsAmount * allocation(
+                    it.roomRevenueInReportPeriod,
+                    it.fullBookingRoomRevenueFromFinancialLines
+                )
+            },
+            tds = settlements.sumOf {
+                it.storedTdsAmount * allocation(
+                    it.roomRevenueInReportPeriod,
+                    it.fullBookingRoomRevenueFromFinancialLines
+                )
+            },
+            expectedPayout = settlements.sumOf {
+                it.storedExpectedPayout * allocation(
+                    it.roomRevenueInReportPeriod,
+                    it.fullBookingRoomRevenueFromFinancialLines
+                )
             }
+        )
     }
 
     private fun BookingEntity.periodAllocation(range: DateRange, activeRoomIds: Set<String>): Double {
@@ -678,6 +1166,8 @@ class RevenueReportActivity : AppCompatActivity() {
         return String.format(Locale.getDefault(), "%,d", value)
     }
 
+    private fun moneyWithCurrency(amount: Double): String = "\u20B9${money(amount)}"
+
 
     private fun financialYearTitle(range: DateRange): String {
         val startYear = Calendar.getInstance().apply { timeInMillis = range.startMillis }.get(Calendar.YEAR)
@@ -731,8 +1221,14 @@ class RevenueReportActivity : AppCompatActivity() {
     )
 
     private enum class ReportKind {
-        REVENUE, OCCUPANCY
+        REVENUE, OCCUPANCY, BALANCE
     }
+
+    private data class ReportPropertyChoice(
+        val label: String,
+        val propertyRemoteId: String?,
+        val includeAllProperties: Boolean
+    )
 
     private data class OccupancyBlockStats(
         val percent: Int,
@@ -750,7 +1246,8 @@ class RevenueReportActivity : AppCompatActivity() {
         val commissionGst: Double = 0.0,
         val sourceFees: Double = 0.0,
         val tcs: Double = 0.0,
-        val tds: Double = 0.0
+        val tds: Double = 0.0,
+        val expectedPayout: Double = 0.0
     ) {
         val netCollection: Double
             get() = (grossSales - commission - commissionGst - sourceFees - tcs - tds).coerceAtLeast(0.0)
@@ -764,7 +1261,8 @@ class RevenueReportActivity : AppCompatActivity() {
                 commissionGst = commissionGst * factor,
                 sourceFees = sourceFees * factor,
                 tcs = tcs * factor,
-                tds = tds * factor
+                tds = tds * factor,
+                expectedPayout = expectedPayout * factor
             )
         }
 
@@ -777,7 +1275,8 @@ class RevenueReportActivity : AppCompatActivity() {
                 commissionGst = commissionGst + other.commissionGst,
                 sourceFees = sourceFees + other.sourceFees,
                 tcs = tcs + other.tcs,
-                tds = tds + other.tds
+                tds = tds + other.tds,
+                expectedPayout = expectedPayout + other.expectedPayout
             )
         }
     }

@@ -1,0 +1,264 @@
+import { FirebaseApp, deleteApp, initializeApp } from "firebase/app";
+import {
+  connectAuthEmulator,
+  createUserWithEmailAndPassword,
+  getAuth,
+} from "firebase/auth";
+import {
+  connectFunctionsEmulator,
+  getFunctions,
+  httpsCallable,
+} from "firebase/functions";
+import {
+  App,
+  deleteApp as deleteAdminApp,
+  initializeApp as initializeAdminApp,
+} from "firebase-admin/app";
+import { Timestamp, getFirestore } from "firebase-admin/firestore";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
+
+const PROJECT_ID = "demo-booking-register";
+const REGION = "asia-south1";
+let adminApp: App;
+let sequence = 0;
+const clientApps: FirebaseApp[] = [];
+
+function assertEmulatorOnly(): void {
+  if (
+    process.env.GCLOUD_PROJECT !== PROJECT_ID ||
+    !process.env.FIRESTORE_EMULATOR_HOST ||
+    !process.env.FIREBASE_AUTH_EMULATOR_HOST
+  ) {
+    throw new Error("Safety stop: OTA idempotency tests require local Firebase emulators.");
+  }
+}
+
+async function createClient() {
+  const id = ++sequence;
+  const app = initializeApp(
+    {
+      projectId: PROJECT_ID,
+      apiKey: "demo-api-key",
+      authDomain: "localhost",
+    },
+    `ota-idempotency-${id}`
+  );
+  clientApps.push(app);
+
+  const auth = getAuth(app);
+  connectAuthEmulator(auth, "http://127.0.0.1:9099", {
+    disableWarnings: true,
+  });
+  await createUserWithEmailAndPassword(
+    auth,
+    `ota-idempotency-${id}@example.test`,
+    "password123"
+  );
+
+  const functions = getFunctions(app, REGION);
+  connectFunctionsEmulator(functions, "127.0.0.1", 5001);
+
+  return {
+    auth,
+    call: async (name: string, data: unknown) =>
+      (await httpsCallable(functions, name)(data)).data,
+  };
+}
+
+async function seedHotelAccess(hotelId: string, uid: string): Promise<void> {
+  const db = getFirestore(adminApp);
+  await db.doc(`hotelAccounts/${hotelId}`).set({
+    status: "ACTIVE",
+    accessUntil: Timestamp.fromMillis(Date.now() + 86_400_000),
+  });
+  await db.doc(`hotelAccounts/${hotelId}/members/${uid}`).set({
+    uid,
+    role: "STAFF",
+    active: true,
+  });
+  await db.doc(`hotels/${hotelId}`).set({
+    hotelRemoteId: hotelId,
+    hotelName: hotelId,
+  });
+}
+
+async function seedSource(
+  hotelId: string,
+  sourceRemoteId: string,
+  propertyRemoteId: string
+): Promise<void> {
+  await getFirestore(adminApp)
+    .doc(`hotels/${hotelId}/bookingSources/${sourceRemoteId}`)
+    .set({
+      hotelRemoteId: hotelId,
+      propertyRemoteId,
+      sourceName: "Agoda",
+      sourceType: "OTA",
+      isDeleted: false,
+    });
+}
+
+async function seedBooking(
+  hotelId: string,
+  bookingRemoteId: string,
+  propertyRemoteId: string,
+  sourceRemoteId: string,
+  expectedPayout: number
+): Promise<void> {
+  await getFirestore(adminApp)
+    .doc(`hotels/${hotelId}/bookings/${bookingRemoteId}`)
+    .set({
+      hotelRemoteId: hotelId,
+      propertyRemoteId,
+      bookingUuid: bookingRemoteId,
+      guestName: bookingRemoteId,
+      sourceName: "Agoda",
+      sourceRemoteId,
+      sourceType: "OTA",
+      bookingStatus: "RESERVED",
+      expectedPayout,
+      receivable: expectedPayout,
+      rate: expectedPayout,
+      isDeleted: false,
+      revision: 1,
+    });
+}
+
+async function expectFunctionError(
+  action: Promise<unknown>,
+  code: string
+): Promise<void> {
+  await expect(action).rejects.toMatchObject({
+    code: `functions/${code}`,
+  });
+}
+
+describe.sequential("OTA settlement request fingerprint", () => {
+  beforeAll(() => {
+    assertEmulatorOnly();
+    adminApp = initializeAdminApp(
+      { projectId: PROJECT_ID },
+      `ota-idempotency-admin-${Date.now()}`
+    );
+  });
+
+  afterAll(async () => {
+    await Promise.all(clientApps.map((app) => deleteApp(app)));
+    await deleteAdminApp(adminApp);
+  });
+
+  test("same operation ID with exact same booking selection is idempotent", async () => {
+    const client = await createClient();
+    const hotelId = `hotel-ota-fingerprint-same-${sequence}`;
+    const propertyId = "property-a";
+    const sourceId = "agoda-a";
+
+    await seedHotelAccess(hotelId, client.auth.currentUser!.uid);
+    await seedSource(hotelId, sourceId, propertyId);
+    await seedBooking(hotelId, "booking-1", propertyId, sourceId, 10_000);
+    await seedBooking(hotelId, "booking-2", propertyId, sourceId, 5_000);
+
+    const request = {
+      hotelId,
+      operationId: "ota_fingerprint_same_001",
+      propertyRemoteId: propertyId,
+      sourceRemoteId: sourceId,
+      sourceName: "Agoda",
+      selections: [
+        { bookingRemoteId: "booking-1", expectedOutstanding: 10_000 },
+        { bookingRemoteId: "booking-2", expectedOutstanding: 5_000 },
+      ],
+    };
+
+    const first = await client.call("recordOtaSettlementServer", request);
+    const retry = await client.call("recordOtaSettlementServer", {
+      ...request,
+      selections: [...request.selections].reverse(),
+    });
+
+    expect(first.alreadyApplied).toBe(false);
+    expect(retry.alreadyApplied).toBe(true);
+    expect(retry.settlementRemoteId).toBe(first.settlementRemoteId);
+
+    const payments = await getFirestore(adminApp)
+      .collection(`hotels/${hotelId}/bookingPayments`)
+      .get();
+    expect(payments.size).toBe(2);
+  }, 20_000);
+
+  test("same operation ID with different booking selection is rejected", async () => {
+    const client = await createClient();
+    const hotelId = `hotel-ota-fingerprint-selection-${sequence}`;
+    const propertyId = "property-a";
+    const sourceId = "agoda-a";
+
+    await seedHotelAccess(hotelId, client.auth.currentUser!.uid);
+    await seedSource(hotelId, sourceId, propertyId);
+    await seedBooking(hotelId, "booking-1", propertyId, sourceId, 10_000);
+    await seedBooking(hotelId, "booking-2", propertyId, sourceId, 5_000);
+
+    const base = {
+      hotelId,
+      operationId: "ota_fingerprint_selection_001",
+      propertyRemoteId: propertyId,
+      sourceRemoteId: sourceId,
+      sourceName: "Agoda",
+    };
+
+    await client.call("recordOtaSettlementServer", {
+      ...base,
+      selections: [{ bookingRemoteId: "booking-1", expectedOutstanding: 10_000 }],
+    });
+
+    await expectFunctionError(
+      client.call("recordOtaSettlementServer", {
+        ...base,
+        selections: [{ bookingRemoteId: "booking-2", expectedOutstanding: 5_000 }],
+      }),
+      "aborted"
+    );
+
+    const payments = await getFirestore(adminApp)
+      .collection(`hotels/${hotelId}/bookingPayments`)
+      .get();
+    expect(payments.size).toBe(1);
+    expect(payments.docs[0].get("bookingRemoteId")).toBe("booking-1");
+  }, 20_000);
+
+  test("same operation ID with different expected amount is rejected", async () => {
+    const client = await createClient();
+    const hotelId = `hotel-ota-fingerprint-amount-${sequence}`;
+    const propertyId = "property-a";
+    const sourceId = "agoda-a";
+
+    await seedHotelAccess(hotelId, client.auth.currentUser!.uid);
+    await seedSource(hotelId, sourceId, propertyId);
+    await seedBooking(hotelId, "booking-1", propertyId, sourceId, 10_000);
+
+    const base = {
+      hotelId,
+      operationId: "ota_fingerprint_amount_001",
+      propertyRemoteId: propertyId,
+      sourceRemoteId: sourceId,
+      sourceName: "Agoda",
+    };
+
+    await client.call("recordOtaSettlementServer", {
+      ...base,
+      selections: [{ bookingRemoteId: "booking-1", expectedOutstanding: 10_000 }],
+    });
+
+    await expectFunctionError(
+      client.call("recordOtaSettlementServer", {
+        ...base,
+        selections: [{ bookingRemoteId: "booking-1", expectedOutstanding: 9_999 }],
+      }),
+      "aborted"
+    );
+
+    const payments = await getFirestore(adminApp)
+      .collection(`hotels/${hotelId}/bookingPayments`)
+      .get();
+    expect(payments.size).toBe(1);
+  }, 20_000);
+});

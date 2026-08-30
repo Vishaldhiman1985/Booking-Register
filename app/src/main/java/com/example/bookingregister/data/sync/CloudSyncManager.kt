@@ -676,6 +676,98 @@ class CloudSyncManager(
         return response.data.toCloudWriteResult()
     }
 
+    suspend fun recordOtaSettlement(
+        operationId: String,
+        propertyRemoteId: String,
+        sourceRemoteId: String,
+        sourceName: String,
+        settlementMillis: Long,
+        settlementReference: String?,
+        note: String?,
+        selections: List<OtaSettlementRequestSelection>
+    ): OtaSettlementWriteResult {
+        val response = functions
+            .getHttpsCallable("recordOtaSettlementServer")
+            .callSafely(
+                mapOf(
+                    "hotelId" to hotelRemoteId,
+                    "operationId" to operationId,
+                    "propertyRemoteId" to propertyRemoteId,
+                    "sourceRemoteId" to sourceRemoteId,
+                    "sourceName" to sourceName,
+                    "settlementMillis" to settlementMillis,
+                    "settlementReference" to settlementReference,
+                    "note" to note,
+                    "selections" to selections.map {
+                        mapOf(
+                            "bookingRemoteId" to it.bookingRemoteId,
+                            "expectedOutstanding" to it.expectedOutstanding
+                        )
+                    }
+                )
+            )
+
+        val data = response.data as? Map<*, *>
+            ?: error("OTA settlement server returned an invalid response.")
+
+        fun number(value: Any?): Double =
+            (value as? Number)?.toDouble() ?: value?.toString()?.toDoubleOrNull() ?: 0.0
+
+        fun long(value: Any?): Long = number(value).toLong()
+
+        val rawAllocations = data["allocations"] as? List<*>
+            ?: error("OTA settlement response is missing booking allocations.")
+
+        val allocations = rawAllocations.map { raw ->
+            val item = raw as? Map<*, *>
+                ?: error("OTA settlement response contains an invalid allocation.")
+            OtaSettlementWriteAllocation(
+                bookingRemoteId = item["bookingRemoteId"]?.toString().orEmpty(),
+                paymentRemoteId = item["paymentRemoteId"]?.toString().orEmpty(),
+                amount = number(item["amount"]),
+                paymentRevision = long(item["paymentRevision"]),
+                paymentMillis = long(item["paymentMillis"]),
+                paymentUpdatedAt = long(item["paymentUpdatedAt"]),
+                paymentMethod = item["paymentMethod"]?.toString(),
+                paymentNote = item["paymentNote"]?.toString()
+            )
+        }
+
+        if (allocations.any {
+                it.bookingRemoteId.isBlank() ||
+                    it.paymentRemoteId.isBlank() ||
+                    it.amount <= 0.0 ||
+                    it.paymentRevision <= 0L
+            }
+        ) {
+            error("OTA settlement server returned incomplete payment allocation data.")
+        }
+
+        return OtaSettlementWriteResult(
+            settlementRemoteId = data["settlementRemoteId"]?.toString().orEmpty(),
+            propertyRemoteId = data["propertyRemoteId"]?.toString().orEmpty(),
+            sourceRemoteId = data["sourceRemoteId"]?.toString().orEmpty(),
+            sourceName = data["sourceName"]?.toString().orEmpty(),
+            totalAmount = number(data["totalAmount"]),
+            bookingCount = number(data["bookingCount"]).toInt(),
+            settlementMillis = long(data["settlementMillis"]),
+            updatedAt = long(data["updatedAt"]),
+            updatedByUid = data["updatedByUid"]?.toString(),
+            alreadyApplied = data["alreadyApplied"] as? Boolean ?: false,
+            allocations = allocations
+        ).also { result ->
+            require(result.settlementRemoteId.isNotBlank()) {
+                "OTA settlement server did not return a settlement ID."
+            }
+            require(result.propertyRemoteId == propertyRemoteId) {
+                "OTA settlement property changed while saving."
+            }
+            require(result.sourceRemoteId == sourceRemoteId) {
+                "OTA settlement source changed while saving."
+            }
+        }
+    }
+
     suspend fun pushAccountingCharge(charge: BookingAccountingChargeEntity): CloudWriteResult {
         val response = functions
             .getHttpsCallable("saveBookingAccountingChargeServer")

@@ -123,6 +123,20 @@ service cloud.firestore {
         allow create, update, delete: if false;
       }
 
+      match /otaSettlements/{settlementId} {
+        allow read: if canReadHotel(hotelId);
+        allow create, update, delete: if false;
+      }
+
+      match /otaSettlementAllocations/{allocationId} {
+        allow read: if canReadHotel(hotelId);
+        allow create, update, delete: if false;
+      }
+
+      match /appliedOtaSettlementMutations/{operationId} {
+        allow read, create, update, delete: if false;
+      }
+
       match /bookingFinancialLines/{lineId} {
         allow read: if canReadHotel(hotelId);
         allow create, update, delete: if false;

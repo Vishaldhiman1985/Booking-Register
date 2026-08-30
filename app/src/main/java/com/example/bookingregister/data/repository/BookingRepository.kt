@@ -49,6 +49,7 @@ import com.example.bookingregister.data.entities.HotelEntity
 import com.example.bookingregister.data.entities.ManagedPropertyEntity
 import com.example.bookingregister.data.entities.RoomEntity
 import com.example.bookingregister.data.sync.CloudWriteResult
+import com.example.bookingregister.data.sync.OtaSettlementRequestSelection
 import com.example.bookingregister.data.sync.BookingAggregateWriteResult
 import com.example.bookingregister.data.sync.CloudSyncManager
 import com.example.bookingregister.data.sync.FoodBillingSyncService
@@ -910,6 +911,115 @@ class BookingRepository(
         bookingAccountingChargeDao.upsert(charge)
         enqueueBackgroundSync()
         return SaveResult.Success(syncPending = true)
+    }
+
+    suspend fun recordOtaSettlement(
+        propertyRemoteId: String,
+        sourceRemoteId: String,
+        sourceName: String,
+        selections: List<OtaSettlementSelection>,
+        settlementReference: String? = null,
+        note: String? = null,
+        settlementMillis: Long = System.currentTimeMillis(),
+        operationId: String = "ota_${UUID.randomUUID()}"
+    ): SaveResult {
+        val cleanPropertyId = propertyRemoteId.trim()
+        val cleanSourceId = sourceRemoteId.trim()
+        val cleanSourceName = sourceName.trim()
+        if (cleanPropertyId.isEmpty()) {
+            return SaveResult.Error("Select one specific property before recording an OTA settlement.")
+        }
+        if (cleanSourceId.isEmpty()) {
+            return SaveResult.Error("This OTA source has no stable source ID. Refresh or repair the source before settling it.")
+        }
+        if (cleanSourceName.isEmpty()) return SaveResult.Error("OTA source name is missing.")
+        if (selections.isEmpty()) return SaveResult.Error("Select at least one OTA booking.")
+        if (selections.map { it.bookingRemoteId }.distinct().size != selections.size) {
+            return SaveResult.Error("The same booking cannot be selected twice.")
+        }
+        if (selections.any { it.bookingRemoteId.isBlank() || it.expectedOutstanding <= 0.001 }) {
+            return SaveResult.Error("Every selected booking must have a positive outstanding OTA receivable.")
+        }
+
+        val writeResult = try {
+            cloudSyncManager.recordOtaSettlement(
+                operationId = operationId,
+                propertyRemoteId = cleanPropertyId,
+                sourceRemoteId = cleanSourceId,
+                sourceName = cleanSourceName,
+                settlementMillis = settlementMillis,
+                settlementReference = settlementReference,
+                note = note,
+                selections = selections.map {
+                    OtaSettlementRequestSelection(
+                        bookingRemoteId = it.bookingRemoteId,
+                        expectedOutstanding = it.expectedOutstanding
+                    )
+                }
+            )
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            return SaveResult.Error(syncFailureText(error))
+        }
+
+        return try {
+            val syncedAt = System.currentTimeMillis()
+            db.withTransaction {
+                writeResult.allocations.forEach { allocation ->
+                    val existing = bookingPaymentDao.getByRemoteId(allocation.paymentRemoteId)
+                    if (existing == null || allocation.paymentRevision >= existing.revision) {
+                        bookingPaymentDao.upsert(
+                            BookingPaymentEntity(
+                                localId = existing?.localId ?: 0,
+                                remoteId = allocation.paymentRemoteId,
+                                hotelRemoteId = hotelRemoteId,
+                                bookingRemoteId = allocation.bookingRemoteId,
+                                paymentType = BookingPaymentType.PAYMENT,
+                                paymentCategory = BookingPaymentCategory.STAY,
+                                amount = allocation.amount,
+                                allocatedStayAmount = allocation.amount,
+                                allocatedFoodAmount = 0.0,
+                                allocatedServiceAmount = 0.0,
+                                allocatedDamageAmount = 0.0,
+                                unappliedAmount = 0.0,
+                                paymentMillis = allocation.paymentMillis,
+                                method = allocation.paymentMethod,
+                                note = allocation.paymentNote,
+                                updatedAt = allocation.paymentUpdatedAt,
+                                isDeleted = false,
+                                syncState = SyncState.SYNCED,
+                                lastSyncError = null,
+                                lastSyncedAt = syncedAt,
+                                revision = allocation.paymentRevision,
+                                baseRevision = allocation.paymentRevision,
+                                updatedByUid = writeResult.updatedByUid
+                            )
+                        )
+                    }
+                }
+
+                writeResult.allocations
+                    .map { it.bookingRemoteId }
+                    .distinct()
+                    .forEach { bookingRemoteId ->
+                        bookingDao.getByRemoteId(bookingRemoteId)?.let {
+                            recalculateBookingPaymentAggregateInTransaction(it)
+                        }
+                    }
+            }
+            SaveResult.Success(syncPending = false)
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            Log.e(
+                "BookingRepository",
+                "OTA settlement ${writeResult.settlementRemoteId} was accepted by cloud but local hydration failed",
+                error
+            )
+            SaveResult.Error(
+                "OTA settlement was recorded on the server, but this device could not refresh it locally. " +
+                    "Do not record it again. Reopen the report or sync this device."
+            )
+        }
     }
 
     suspend fun addSourcePayment(
