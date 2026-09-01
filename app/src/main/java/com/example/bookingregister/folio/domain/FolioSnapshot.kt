@@ -75,13 +75,52 @@ class FolioSnapshotBuilder {
             foodOrders = foodOrders,
             foodOrderItems = foodOrderItems,
             bookingFinancialLines = bookingFinancialLines
-
         )
         val lines = folio?.lines.orEmpty()
-        val paymentBuckets = payments.paymentBuckets()
-        val actualPaymentTotal = payments.actualPaymentTotal()
-        val appliedPaid = paymentBuckets.values.sum()
-        val unappliedPaid = (actualPaymentTotal - appliedPaid).coerceAtLeast(0.0)
+
+        /*
+         * Guarded payment-ledger integration:
+         *
+         * Clean / modern histories use the canonical stored-allocation projection.
+         * Ambiguous legacy histories keep the old Folio interpretation so we do not
+         * silently guess the meaning of old unlinked adjustments/refunds.
+         */
+        val projectionGate = PaymentLedgerProjectionGate.evaluate(payments)
+
+        val paymentBuckets: Map<String, Double>
+        val unappliedPaid: Double
+        val paymentIntegrityErrors: List<String>
+
+        if (projectionGate.isSafe) {
+            val projection = PaymentLedgerProjector.project(payments)
+
+            paymentBuckets = mapOf(
+                BookingPaymentCategory.STAY to projection.stayApplied,
+                BookingPaymentCategory.FOOD to projection.foodApplied,
+                BookingPaymentCategory.SERVICE to projection.serviceApplied,
+                BookingPaymentCategory.DAMAGE to projection.damageApplied
+            )
+
+            /*
+             * In the canonical projection, Guest Credit is the stored unapplied
+             * portion of received money. Do not re-run AUTO here.
+             */
+            unappliedPaid = projection.guestCredit.coerceAtLeast(0.0)
+            paymentIntegrityErrors = projection.integrityErrors
+        } else {
+            /*
+             * Legacy safety fallback. This deliberately preserves the previous
+             * Folio behaviour for histories that cannot be interpreted safely.
+             */
+            paymentBuckets = payments.paymentBuckets()
+            val actualPaymentTotal = payments.actualPaymentTotal()
+            val appliedPaid = paymentBuckets.values.sum()
+            unappliedPaid = (actualPaymentTotal - appliedPaid).coerceAtLeast(0.0)
+
+            paymentIntegrityErrors = projectionGate.issues.map { issue ->
+                issue.asFolioIntegrityError()
+            }
+        }
 
         return FolioSnapshot(
             bookingRemoteId = booking.remoteId,
@@ -93,7 +132,7 @@ class FolioSnapshotBuilder {
             generalDiscount = lines.discountFor(null),
             unappliedPaid = unappliedPaid,
             lines = lines,
-            integrityErrors = folio?.integrityErrors.orEmpty()
+            integrityErrors = folio?.integrityErrors.orEmpty() + paymentIntegrityErrors
         )
     }
 
@@ -122,6 +161,10 @@ class FolioSnapshotBuilder {
         }.sumOf { it.amount }
     }
 
+    /*
+     * Previous payment interpretation retained ONLY as a legacy fallback.
+     * Do not use this for clean modern histories.
+     */
     private fun List<BookingPaymentEntity>.paymentBuckets(): Map<String, Double> {
         val totals = mutableMapOf(
             BookingPaymentCategory.STAY to 0.0,
@@ -166,6 +209,19 @@ class FolioSnapshotBuilder {
                 else -> payment.amount
             }
         }.coerceAtLeast(0.0)
+    }
+
+    private fun PaymentLedgerIntegrityIssue.asFolioIntegrityError(): String {
+        return when (issueType) {
+            PaymentLedgerIntegrityIssueType.LEGACY_UNLINKED_ADJUSTMENT ->
+                "Legacy payment history requires review: unlinked adjustment $paymentRemoteId"
+
+            PaymentLedgerIntegrityIssueType.LEGACY_UNLINKED_REFUND ->
+                "Legacy payment history requires review: unlinked refund $paymentRemoteId"
+
+            PaymentLedgerIntegrityIssueType.BROKEN_ORIGINAL_LINK ->
+                "Legacy payment history requires review: reversal $paymentRemoteId points to missing original ${originalPaymentRemoteId.orEmpty()}"
+        }
     }
 
     private fun MutableMap<String, Double>.addTo(bucket: String, amount: Double) {
