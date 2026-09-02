@@ -174,8 +174,15 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             })
         }
         balanceSummaryButton.setOnClickListener {
-            startActivity(Intent(this, PaymentsActivity::class.java).apply {
-                putExtra(PaymentsActivity.EXTRA_HOTEL_REMOTE_ID, repository.hotelRemoteId)
+            startActivity(Intent(this, RevenueReportActivity::class.java).apply {
+                putExtra(
+                    RevenueReportActivity.EXTRA_REPORT_KIND,
+                    RevenueReportActivity.KIND_BALANCE
+                )
+                putExtra(
+                    RevenueReportActivity.EXTRA_HOTEL_REMOTE_ID,
+                    repository.hotelRemoteId
+                )
             })
         }
         observeLocalData()
