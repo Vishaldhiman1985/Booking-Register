@@ -1,4 +1,4 @@
-﻿package com.example.bookingregister.ui.booking
+package com.example.bookingregister.ui.booking
 
 import android.content.Intent
 import android.content.Context
@@ -156,7 +156,16 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         occupancySummaryButton = findViewById(R.id.btnOccupancySummary)
         balanceSummaryButton = findViewById(R.id.btnBalanceSummary)
         revenueSummaryButton.setOnClickListener {
-            Toast.makeText(this, "Revenue reporting is being verified and is not included in this release", Toast.LENGTH_LONG).show()
+            startActivity(Intent(this, RevenueReportActivity::class.java).apply {
+                putExtra(
+                    RevenueReportActivity.EXTRA_REPORT_KIND,
+                    RevenueReportActivity.KIND_REVENUE
+                )
+                putExtra(
+                    RevenueReportActivity.EXTRA_HOTEL_REMOTE_ID,
+                    repository.hotelRemoteId
+                )
+            })
         }
         occupancySummaryButton.setOnClickListener {
             startActivity(Intent(this, RevenueReportActivity::class.java).apply {

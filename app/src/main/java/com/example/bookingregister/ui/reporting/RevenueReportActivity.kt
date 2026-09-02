@@ -8,8 +8,11 @@ import android.graphics.Typeface
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
@@ -22,6 +25,11 @@ import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.RoomEntity
 import com.example.bookingregister.room.domain.RoomLifecyclePolicy
 import com.example.bookingregister.reporting.domain.OccupancyCalculator
+import com.example.bookingregister.reporting.property.PropertyReportBuilder
+import com.example.bookingregister.reporting.property.PropertyReportRawData
+import com.example.bookingregister.reporting.property.PropertyReportScope
+import com.example.bookingregister.reporting.property.PropertyReportingDataSource
+import com.example.bookingregister.reporting.property.PropertyRevenueReportEngine
 import com.example.bookingregister.revenue.domain.RevenueCalculator
 import com.example.bookingregister.revenue.domain.RevenueLedgerBuilder
 import com.example.bookingregister.booking.domain.BookingStatus
@@ -29,6 +37,7 @@ import com.example.bookingregister.revenue.domain.RevenueLedgerEntry
 import com.example.bookingregister.revenue.domain.RevenueLedgerEntryType
 import com.example.bookingregister.revenue.domain.RevenuePeriod
 import com.google.android.material.button.MaterialButton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -44,10 +53,23 @@ class RevenueReportActivity : AppCompatActivity() {
         const val EXTRA_HOTEL_REMOTE_ID = "hotel_remote_id"
         const val KIND_REVENUE = "revenue"
         const val KIND_OCCUPANCY = "occupancy"
+
+        private const val ALL_PROPERTIES_KEY = "__all_properties__"
+        private const val LEGACY_PROPERTY_KEY = "__legacy_property__"
     }
 
     private lateinit var repository: BookingRepository
     private lateinit var content: LinearLayout
+    private lateinit var propertySpinner: Spinner
+
+    private var hotelRemoteId: String = ""
+    private var revenueRawData: PropertyReportRawData? = null
+    private var revenueLoadJob: Job? = null
+    private var propertyChoices: List<PropertyChoice> = emptyList()
+    private var selectedPropertyKey: String = ALL_PROPERTIES_KEY
+
+    private val propertyReportBuilder = PropertyReportBuilder()
+    private val propertyRevenueEngine = PropertyRevenueReportEngine()
 
     private val rooms = mutableListOf<RoomEntity>()
     private val bookings = mutableListOf<BookingEntity>()
@@ -72,20 +94,32 @@ class RevenueReportActivity : AppCompatActivity() {
             KIND_OCCUPANCY -> ReportKind.OCCUPANCY
             else -> ReportKind.REVENUE
         }
-        val hotelRemoteId = intent.getStringExtra(EXTRA_HOTEL_REMOTE_ID)
-        if (hotelRemoteId.isNullOrBlank()) {
+        val requestedHotelRemoteId = intent.getStringExtra(EXTRA_HOTEL_REMOTE_ID)
+        if (requestedHotelRemoteId.isNullOrBlank()) {
             finish()
             return
         }
-        repository = BookingRepository(applicationContext, lifecycleScope, hotelRemoteId)
+
+        hotelRemoteId = requestedHotelRemoteId
         setContentView(buildRoot())
 
-        repository.observeRooms().observe(this) { updated ->
-            rooms.clear()
-            rooms.addAll(updated)
+        if (reportKind == ReportKind.OCCUPANCY) {
+            repository = BookingRepository(
+                applicationContext,
+                lifecycleScope,
+                hotelRemoteId
+            )
+
+            repository.observeRooms().observe(this) { updated ->
+                rooms.clear()
+                rooms.addAll(updated)
+                refreshReportData()
+            }
+
             refreshReportData()
+        } else {
+            loadRevenueSnapshot()
         }
-        refreshReportData()
     }
 
     private fun buildRoot(): View {
@@ -94,6 +128,10 @@ class RevenueReportActivity : AppCompatActivity() {
             setBackgroundColor(Color.WHITE)
         }
         root.addView(toolbar())
+
+        if (reportKind == ReportKind.REVENUE) {
+            root.addView(revenuePropertySelector())
+        }
 
         val scroll = ScrollView(this)
         content = LinearLayout(this).apply {
@@ -146,12 +184,230 @@ class RevenueReportActivity : AppCompatActivity() {
         }
     }
 
+    private fun revenuePropertySelector(): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(10), dp(14), dp(8))
+            setBackgroundColor(Color.WHITE)
+
+            addView(TextView(this@RevenueReportActivity).apply {
+                text = "Property"
+                textSize = 12f
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                setTextColor(Color.rgb(80, 80, 80))
+            })
+
+            propertySpinner = Spinner(this@RevenueReportActivity)
+            propertySpinner.adapter = ArrayAdapter(
+                this@RevenueReportActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                listOf("Loading properties...")
+            )
+
+            addView(
+                propertySpinner,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(48)
+                )
+            )
+
+            propertySpinner.onItemSelectedListener =
+                object : AdapterView.OnItemSelectedListener {
+                    override fun onItemSelected(
+                        parent: AdapterView<*>?,
+                        view: View?,
+                        position: Int,
+                        id: Long
+                    ) {
+                        val choice =
+                            propertyChoices.getOrNull(position) ?: return
+
+                        if (selectedPropertyKey != choice.key) {
+                            selectedPropertyKey = choice.key
+                            applyRevenuePropertyScope()
+                            render()
+                        }
+                    }
+
+                    override fun onNothingSelected(
+                        parent: AdapterView<*>?
+                    ) = Unit
+                }
+        }
+    }
+
+    private fun loadRevenueSnapshot() {
+        revenueLoadJob?.cancel()
+
+        revenueLoadJob = lifecycleScope.launch {
+            try {
+                val raw = PropertyReportingDataSource(
+                    context = applicationContext,
+                    hotelRemoteId = hotelRemoteId
+                ).loadRawData()
+
+                revenueRawData = raw
+                rebuildRevenuePropertyChoices(raw)
+                applyRevenuePropertyScope()
+                render()
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                if (!::content.isInitialized) return@launch
+
+                content.removeAllViews()
+
+                content.addView(
+                    TextView(this@RevenueReportActivity).apply {
+                        text =
+                            "Revenue report could not be loaded: " +
+                                (error.message
+                                    ?: error.javaClass.simpleName)
+                        textSize = 15f
+                        setTextColor(Color.rgb(150, 45, 45))
+                        setPadding(0, dp(16), 0, dp(16))
+                    }
+                )
+            }
+        }
+    }
+
+    private fun rebuildRevenuePropertyChoices(
+        raw: PropertyReportRawData
+    ) {
+        if (!::propertySpinner.isInitialized) return
+
+        val previousKey = selectedPropertyKey
+
+        val choices = mutableListOf(
+            PropertyChoice(
+                key = ALL_PROPERTIES_KEY,
+                label = "All Properties - Consolidated",
+                propertyRemoteId = null,
+                includeAllProperties = true
+            )
+        )
+
+        raw.properties
+            .filter { !it.isDeleted }
+            .sortedWith(
+                compareBy<com.example.bookingregister.data.entities.ManagedPropertyEntity> {
+                    it.sortOrder
+                }.thenBy {
+                    it.propertyName.lowercase(Locale.getDefault())
+                }
+            )
+            .forEach { property ->
+                choices += PropertyChoice(
+                    key = property.remoteId,
+                    label = property.propertyName,
+                    propertyRemoteId = property.remoteId,
+                    includeAllProperties = false
+                )
+            }
+
+        val hasLegacyRecords =
+            raw.rooms.any {
+                !it.isDeleted &&
+                    it.propertyRemoteId.isNullOrBlank()
+            } ||
+                raw.bookings.any {
+                    !it.isDeleted &&
+                        it.propertyRemoteId.isNullOrBlank()
+                } ||
+                raw.financialLines.any {
+                    !it.isDeleted &&
+                        it.propertyRemoteId.isNullOrBlank()
+                }
+
+        if (hasLegacyRecords) {
+            choices += PropertyChoice(
+                key = LEGACY_PROPERTY_KEY,
+                label = "Legacy / Unassigned",
+                propertyRemoteId = null,
+                includeAllProperties = false
+            )
+        }
+
+        propertyChoices = choices
+
+        val selectedIndex =
+            choices.indexOfFirst {
+                it.key == previousKey
+            }.takeIf {
+                it >= 0
+            } ?: 0
+
+        propertySpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
+            choices.map { it.label }
+        )
+
+        propertySpinner.setSelection(selectedIndex, false)
+        selectedPropertyKey = choices[selectedIndex].key
+    }
+
+    private fun currentRevenueScope(
+        range: DateRange
+    ): PropertyReportScope {
+        val choice =
+            propertyChoices.firstOrNull {
+                it.key == selectedPropertyKey
+            } ?: PropertyChoice(
+                key = ALL_PROPERTIES_KEY,
+                label = "All Properties - Consolidated",
+                propertyRemoteId = null,
+                includeAllProperties = true
+            )
+
+        return PropertyReportScope(
+            hotelRemoteId = hotelRemoteId,
+            propertyRemoteId = choice.propertyRemoteId,
+            includeAllProperties = choice.includeAllProperties,
+            startMillis = range.startMillis,
+            endMillis = range.endMillis
+        )
+    }
+
+    private fun applyRevenuePropertyScope() {
+        val raw = revenueRawData ?: return
+
+        val dataset = propertyReportBuilder.scope(
+            raw,
+            currentRevenueScope(visibleReportRange())
+        )
+
+        rooms.clear()
+        rooms.addAll(dataset.rooms)
+
+        bookings.clear()
+        bookings.addAll(dataset.bookings)
+    }
+
     private fun refreshReportData() {
         if (!::content.isInitialized) return
+
+        if (reportKind == ReportKind.REVENUE) {
+            if (revenueRawData == null) {
+                loadRevenueSnapshot()
+            } else {
+                applyRevenuePropertyScope()
+                render()
+            }
+            return
+        }
+
         bookingsLoadJob?.cancel()
         val range = visibleReportRange()
+
         bookingsLoadJob = lifecycleScope.launch {
-            val scopedBookings = repository.getBookingsForWindow(range.startMillis, range.endMillis)
+            val scopedBookings =
+                repository.getBookingsForWindow(
+                    range.startMillis,
+                    range.endMillis
+                )
+
             bookings.clear()
             bookings.addAll(scopedBookings)
             render()
@@ -495,12 +751,61 @@ class RevenueReportActivity : AppCompatActivity() {
         range: DateRange,
         buckets: List<PeriodBucket>
     ): RevenueBlockStats {
+        val raw = revenueRawData
+
+        if (reportKind == ReportKind.REVENUE && raw != null) {
+            val summary = propertyRevenueEngine.build(
+                raw = raw,
+                scope = currentRevenueScope(range)
+            )
+
+            val entries = buckets.map { bucket ->
+                bucket.label to propertyRevenueEngine.build(
+                    raw = raw,
+                    scope = currentRevenueScope(bucket.range)
+                ).roomRevenueExGst
+            }
+
+            val occupiedNights = occupiedRoomNights(range)
+            val availableNights = availableRoomNights(range)
+            val arrDivider = occupiedNights.coerceAtLeast(1)
+
+            val occupancyPercent =
+                if (availableNights <= 0) {
+                    0
+                } else {
+                    (
+                        occupiedNights.toDouble() /
+                            availableNights * 100
+                        ).roundToInt()
+                }
+
+            return RevenueBlockStats(
+                total = summary.roomRevenueExGst,
+                occupancyPercent = occupancyPercent,
+                arr = summary.roomRevenueExGst / arrDivider,
+                occupiedNights = occupiedNights,
+                availableNights = availableNights,
+                entries = entries
+            )
+        }
+
         val summary = revenueCalculator.summarize(ledger, range)
         val entries = revenuePeriodValues(ledger, buckets)
         val occupiedNights = occupiedRoomNights(range)
         val availableNights = availableRoomNights(range)
         val arrDivider = occupiedNights.coerceAtLeast(1)
-        val occupancyPercent = if (availableNights <= 0) 0 else ((occupiedNights.toDouble() / availableNights) * 100).roundToInt()
+
+        val occupancyPercent =
+            if (availableNights <= 0) {
+                0
+            } else {
+                (
+                    occupiedNights.toDouble() /
+                        availableNights * 100
+                    ).roundToInt()
+            }
+
         return RevenueBlockStats(
             total = summary.roomRevenue,
             occupancyPercent = occupancyPercent,
@@ -536,22 +841,65 @@ class RevenueReportActivity : AppCompatActivity() {
         }
     }
 
-    private fun settlementBreakdown(range: DateRange): SettlementBreakdown {
-        val activeRoomIds = rooms.filter { !it.isDeleted }.map { it.remoteId }.toSet()
-        if (activeRoomIds.isEmpty()) return SettlementBreakdown()
+    private fun settlementBreakdown(
+        range: DateRange
+    ): SettlementBreakdown {
+        val raw = revenueRawData
+
+        if (reportKind == ReportKind.REVENUE && raw != null) {
+            val summary = propertyRevenueEngine.build(
+                raw = raw,
+                scope = currentRevenueScope(range)
+            )
+
+            return SettlementBreakdown(
+                grossSales = summary.grossRoomBilling,
+                gstCollected = summary.gstCollected,
+                netRevenue = summary.roomRevenueExGst,
+                commission = summary.commissionAttributed,
+                commissionGst = summary.commissionGstAttributed,
+                sourceFees = summary.sourceFeesAttributed,
+                tcs = summary.tcsAttributed,
+                tds = summary.tdsAttributed,
+                expectedNetCollection = summary.expectedPayoutAttributed
+            )
+        }
+
+        val activeRoomIds =
+            rooms.filter { !it.isDeleted }
+                .map { it.remoteId }
+                .toSet()
+
+        if (activeRoomIds.isEmpty()) {
+            return SettlementBreakdown()
+        }
 
         return bookings
-            .filter { !it.isDeleted && it.bookingStatus != BookingStatus.CANCELLED }
+            .filter {
+                !it.isDeleted &&
+                    it.bookingStatus != BookingStatus.CANCELLED
+            }
             .fold(SettlementBreakdown()) { total, booking ->
-                val allocation = booking.periodAllocation(range, activeRoomIds)
+                val allocation =
+                    booking.periodAllocation(
+                        range,
+                        activeRoomIds
+                    )
+
                 if (allocation <= 0.0) {
                     total
                 } else {
                     total + SettlementBreakdown(
-                        grossSales = booking.grossCharges.takeIf { it > 0.0 }
-                            ?: booking.receivable + booking.propertyTax,
+                        grossSales =
+                            booking.grossCharges
+                                .takeIf { it > 0.0 }
+                                ?: booking.receivable +
+                                    booking.propertyTax,
                         gstCollected = booking.propertyTax,
-                        netRevenue = booking.roomRevenue.takeIf { it > 0.0 } ?: booking.receivable,
+                        netRevenue =
+                            booking.roomRevenue
+                                .takeIf { it > 0.0 }
+                                ?: booking.receivable,
                         commission = booking.commissionAmount,
                         commissionGst = booking.commissionTax,
                         sourceFees = booking.sourceFee,
@@ -721,6 +1069,13 @@ class RevenueReportActivity : AppCompatActivity() {
 
     private data class PeriodBucket(val label: String, val range: DateRange)
 
+    private data class PropertyChoice(
+        val key: String,
+        val label: String,
+        val propertyRemoteId: String?,
+        val includeAllProperties: Boolean
+    )
+
     private data class RevenueBlockStats(
         val total: Double,
         val occupancyPercent: Int,
@@ -750,10 +1105,13 @@ class RevenueReportActivity : AppCompatActivity() {
         val commissionGst: Double = 0.0,
         val sourceFees: Double = 0.0,
         val tcs: Double = 0.0,
-        val tds: Double = 0.0
+        val tds: Double = 0.0,
+        val expectedNetCollection: Double? = null
     ) {
         val netCollection: Double
-            get() = (grossSales - commission - commissionGst - sourceFees - tcs - tds).coerceAtLeast(0.0)
+            get() = expectedNetCollection
+                ?: (grossSales - commission - commissionGst - sourceFees - tcs - tds)
+                    .coerceAtLeast(0.0)
 
         fun scaled(factor: Double): SettlementBreakdown {
             return copy(
@@ -764,7 +1122,8 @@ class RevenueReportActivity : AppCompatActivity() {
                 commissionGst = commissionGst * factor,
                 sourceFees = sourceFees * factor,
                 tcs = tcs * factor,
-                tds = tds * factor
+                tds = tds * factor,
+                expectedNetCollection = expectedNetCollection?.times(factor)
             )
         }
 
@@ -777,7 +1136,16 @@ class RevenueReportActivity : AppCompatActivity() {
                 commissionGst = commissionGst + other.commissionGst,
                 sourceFees = sourceFees + other.sourceFees,
                 tcs = tcs + other.tcs,
-                tds = tds + other.tds
+                tds = tds + other.tds,
+                expectedNetCollection =
+                    if (
+                        expectedNetCollection != null &&
+                        other.expectedNetCollection != null
+                    ) {
+                        expectedNetCollection + other.expectedNetCollection
+                    } else {
+                        null
+                    }
             )
         }
     }
