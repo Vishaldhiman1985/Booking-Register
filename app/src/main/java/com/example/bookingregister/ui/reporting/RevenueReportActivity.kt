@@ -21,11 +21,12 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.example.bookingregister.common.domain.BusinessDates
 import com.example.bookingregister.common.domain.DateRange
-import com.example.bookingregister.data.repository.BookingRepository
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.RoomEntity
 import com.example.bookingregister.room.domain.RoomLifecyclePolicy
-import com.example.bookingregister.reporting.domain.OccupancyCalculator
+import com.example.bookingregister.reporting.property.PropertyOccupancyBucket
+import com.example.bookingregister.reporting.property.PropertyOccupancyPeriodRequest
+import com.example.bookingregister.reporting.property.PropertyOccupancyReportEngine
 import com.example.bookingregister.reporting.property.PropertyBalanceReportEngine
 import com.example.bookingregister.reporting.property.PropertyReportBuilder
 import com.example.bookingregister.reporting.property.PropertyReportRawData
@@ -61,7 +62,6 @@ class RevenueReportActivity : AppCompatActivity() {
         private const val LEGACY_PROPERTY_KEY = "__legacy_property__"
     }
 
-    private lateinit var repository: BookingRepository
     private lateinit var content: LinearLayout
     private lateinit var propertySpinner: Spinner
 
@@ -74,19 +74,18 @@ class RevenueReportActivity : AppCompatActivity() {
     private val propertyReportBuilder = PropertyReportBuilder()
     private val propertyRevenueEngine = PropertyRevenueReportEngine()
     private val propertyBalanceEngine = PropertyBalanceReportEngine()
+    private val propertyOccupancyEngine = PropertyOccupancyReportEngine()
 
     private val rooms = mutableListOf<RoomEntity>()
     private val bookings = mutableListOf<BookingEntity>()
     private val ledgerBuilder = RevenueLedgerBuilder()
     private val revenueCalculator = RevenueCalculator()
-    private val occupancyCalculator = OccupancyCalculator()
 
     private var annualRange: DateRange = RevenuePeriod.financialYearFor()
     private var monthRange: DateRange = currentMonthRange()
     private var weekRange: DateRange = RevenuePeriod.weekContaining(System.currentTimeMillis())
     private var customRange: DateRange? = null
     private var reportKind: ReportKind = ReportKind.REVENUE
-    private var bookingsLoadJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -108,23 +107,7 @@ class RevenueReportActivity : AppCompatActivity() {
         hotelRemoteId = requestedHotelRemoteId
         setContentView(buildRoot())
 
-        if (reportKind == ReportKind.OCCUPANCY) {
-            repository = BookingRepository(
-                applicationContext,
-                lifecycleScope,
-                hotelRemoteId
-            )
-
-            repository.observeRooms().observe(this) { updated ->
-                rooms.clear()
-                rooms.addAll(updated)
-                refreshReportData()
-            }
-
-            refreshReportData()
-        } else {
-            loadReportingSnapshot()
-        }
+        loadReportingSnapshot()
     }
 
     private fun buildRoot(): View {
@@ -404,7 +387,7 @@ class RevenueReportActivity : AppCompatActivity() {
             ?: "All Properties - Consolidated"
     }
 
-    private fun showBalancePropertyPicker() {
+    private fun showPropertyPicker() {
         if (propertyChoices.isEmpty()) return
 
         val labels =
@@ -467,7 +450,7 @@ class RevenueReportActivity : AppCompatActivity() {
                     propertyLabel =
                         currentPropertyLabel(),
                     onChangeProperty =
-                        ::showBalancePropertyPicker
+                        ::showPropertyPicker
                 )
             }
         )
@@ -476,32 +459,13 @@ class RevenueReportActivity : AppCompatActivity() {
     private fun refreshReportData() {
         if (!::content.isInitialized) return
 
-        if (reportKind != ReportKind.OCCUPANCY) {
-            if (reportingRawData == null) {
-                loadReportingSnapshot()
-            } else {
-                applyPropertyScope()
-                render()
-            }
-            return
-        }
-
-        bookingsLoadJob?.cancel()
-        val range = visibleReportRange()
-
-        bookingsLoadJob = lifecycleScope.launch {
-            val scopedBookings =
-                repository.getBookingsForWindow(
-                    range.startMillis,
-                    range.endMillis
-                )
-
-            bookings.clear()
-            bookings.addAll(scopedBookings)
+        if (reportingRawData == null) {
+            loadReportingSnapshot()
+        } else {
+            applyPropertyScope()
             render()
         }
     }
-
     private fun visibleReportRange(): DateRange {
         val ranges = mutableListOf(annualRange, monthRange, weekRange)
         customRange?.let { ranges.add(it) }
@@ -520,12 +484,12 @@ class RevenueReportActivity : AppCompatActivity() {
             return
         }
 
-        val ledger = ledgerBuilder.build(rooms, bookings)
         if (reportKind == ReportKind.OCCUPANCY) {
             renderOccupancyDashboard()
             return
         }
 
+        val ledger = ledgerBuilder.build(rooms, bookings)
         val annualStats = revenueStats(ledger, annualRange, fiscalMonthBuckets(annualRange))
         val monthStats = revenueStats(ledger, monthRange, dayBuckets(monthRange))
         val weekStats = revenueStats(ledger, weekRange, dayBuckets(weekRange))
@@ -579,28 +543,6 @@ class RevenueReportActivity : AppCompatActivity() {
             rangeText = formatMonth(monthRange.startMillis),
             breakdown = settlementBreakdown(monthRange)
         ))
-    }
-
-    private fun summaryCard(label: String, value: String, fill: String): View {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(6), dp(9), dp(6), dp(9))
-            background = roundedDrawable(Color.parseColor(fill), Color.parseColor("#E6E1EA"), 10)
-            addView(TextView(this@RevenueReportActivity).apply {
-                text = label
-                textSize = 11f
-                setTextColor(Color.rgb(70, 70, 70))
-                gravity = Gravity.CENTER
-            })
-            addView(TextView(this@RevenueReportActivity).apply {
-                text = value
-                textSize = 17f
-                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-                setTextColor(Color.rgb(20, 20, 20))
-                gravity = Gravity.CENTER
-            })
-        }
     }
 
     private fun revenueSection(
@@ -706,69 +648,100 @@ class RevenueReportActivity : AppCompatActivity() {
     }
 
     private fun renderOccupancyDashboard() {
-        val annual = occupancyStats(annualRange, fiscalMonthBuckets(annualRange))
-        val month = occupancyStats(monthRange, dayBuckets(monthRange))
-        val week = occupancyStats(weekRange, dayBuckets(weekRange))
+        val raw = reportingRawData ?: return
 
-        content.addView(occupancySummaryRow(annual, month, week))
-        content.addView(spacer(12))
-        content.addView(occupancyReportSection(
-            title = "Annual Occupancy",
-            rangeText = financialYearTitle(annualRange),
-            previous = { annualRange = shiftRange(annualRange, Calendar.YEAR, -1); refreshReportData() },
-            next = { annualRange = shiftRange(annualRange, Calendar.YEAR, 1); refreshReportData() },
-            stats = annual,
-            xLabelsVertical = true
-        ))
-        content.addView(occupancyReportSection(
-            title = "Monthly Occupancy",
-            rangeText = formatMonth(monthRange.startMillis),
-            previous = { monthRange = shiftRange(monthRange, Calendar.MONTH, -1); refreshReportData() },
-            next = { monthRange = shiftRange(monthRange, Calendar.MONTH, 1); refreshReportData() },
-            stats = month,
-            xLabelsVertical = false
-        ))
-        content.addView(occupancyReportSection(
-            title = "Weekly Occupancy",
-            rangeText = weekTitle(weekRange),
-            previous = { weekRange = shiftRange(weekRange, Calendar.DAY_OF_MONTH, -7); refreshReportData() },
-            next = { weekRange = shiftRange(weekRange, Calendar.DAY_OF_MONTH, 7); refreshReportData() },
-            stats = week,
-            xLabelsVertical = false
-        ))
+        val report = propertyOccupancyEngine.build(
+            raw = raw,
+            scope = currentPropertyScope(visibleReportRange()),
+            annual = occupancyPeriodRequest(
+                range = annualRange,
+                buckets = fiscalMonthBuckets(annualRange)
+            ),
+            monthly = occupancyPeriodRequest(
+                range = monthRange,
+                buckets = dayBuckets(monthRange)
+            ),
+            weekly = occupancyPeriodRequest(
+                range = weekRange,
+                buckets = dayBuckets(weekRange)
+            )
+        )
+
+        content.addView(
+            PropertyOccupancyReportView(this).apply {
+                bind(
+                    report = report,
+                    propertyLabel = currentPropertyLabel(),
+                    annualRangeText = financialYearTitle(annualRange),
+                    monthRangeText = formatMonth(monthRange.startMillis),
+                    weekRangeText = weekTitle(weekRange),
+                    onChangeProperty = ::showPropertyPicker,
+                    onAnnualPrevious = {
+                        annualRange = shiftRange(
+                            annualRange,
+                            Calendar.YEAR,
+                            -1
+                        )
+                        refreshReportData()
+                    },
+                    onAnnualNext = {
+                        annualRange = shiftRange(
+                            annualRange,
+                            Calendar.YEAR,
+                            1
+                        )
+                        refreshReportData()
+                    },
+                    onMonthPrevious = {
+                        monthRange = shiftRange(
+                            monthRange,
+                            Calendar.MONTH,
+                            -1
+                        )
+                        refreshReportData()
+                    },
+                    onMonthNext = {
+                        monthRange = shiftRange(
+                            monthRange,
+                            Calendar.MONTH,
+                            1
+                        )
+                        refreshReportData()
+                    },
+                    onWeekPrevious = {
+                        weekRange = shiftRange(
+                            weekRange,
+                            Calendar.DAY_OF_MONTH,
+                            -7
+                        )
+                        refreshReportData()
+                    },
+                    onWeekNext = {
+                        weekRange = shiftRange(
+                            weekRange,
+                            Calendar.DAY_OF_MONTH,
+                            7
+                        )
+                        refreshReportData()
+                    }
+                )
+            }
+        )
     }
 
-    private fun occupancySummaryRow(annual: OccupancyBlockStats, month: OccupancyBlockStats, week: OccupancyBlockStats): View {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            isBaselineAligned = false
-            addView(summaryCard("Annual", "${annual.percent}%", "#EAF7EE"), weightParams())
-            addView(summaryCard("Month", "${month.percent}%", "#FFF5DB"), weightParams())
-            addView(summaryCard("Week", "${week.percent}%", "#EEF4FF"), weightParams())
-            addView(summaryCard("Rooms", rooms.count { !it.isDeleted }.toString(), "#FFF0F0"), weightParams())
-        }
-    }
-
-    private fun occupancyReportSection(
-        title: String,
-        rangeText: String,
-        previous: (() -> Unit)?,
-        next: (() -> Unit)?,
-        stats: OccupancyBlockStats,
-        xLabelsVertical: Boolean
-    ): View {
-        return sectionCard().apply {
-            addView(sectionHeader(title, rangeText, previous, next))
-            addView(metricStrip(listOf(
-                "Occupancy" to "${stats.percent}%",
-                "Nights" to "${stats.occupied}/${stats.available}",
-                "Rooms/Day" to formatDecimal(stats.averageOccupiedRooms),
-                "Rooms" to rooms.count { !it.isDeleted }.toString()
-            )))
-            addView(LineTrendChartView(this@RevenueReportActivity).apply {
-                setEntries(stats.entries, ChartValueMode.PERCENT, xLabelsVertical)
-            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(if (xLabelsVertical) 275 else 220)))
-        }
+    private fun occupancyPeriodRequest(
+        range: DateRange,
+        buckets: List<PeriodBucket>
+    ): PropertyOccupancyPeriodRequest {
+        return PropertyOccupancyPeriodRequest(
+            range = range,
+            buckets = buckets.map { bucket ->
+                PropertyOccupancyBucket(
+                    label = bucket.label,
+                    range = bucket.range
+                )
+            }
+        )
     }
     private fun sectionCard(): LinearLayout {
         return LinearLayout(this).apply {
@@ -905,21 +878,6 @@ class RevenueReportActivity : AppCompatActivity() {
             arr = summary.roomRevenue / arrDivider,
             occupiedNights = occupiedNights,
             availableNights = availableNights,
-            entries = entries
-        )
-    }
-
-    private fun occupancyStats(range: DateRange, buckets: List<PeriodBucket>): OccupancyBlockStats {
-        val occupied = occupiedRoomNights(range)
-        val available = availableRoomNights(range)
-        val percent = if (available <= 0) 0 else ((occupied.toDouble() / available) * 100).roundToInt()
-        val entries = buckets.map { it.label to occupancyCalculator.occupancyPercent(rooms, bookings, it.range).toDouble() }
-        val averageOccupiedRooms = occupied.toDouble() / BusinessDates.rangeDays(range).coerceAtLeast(1)
-        return OccupancyBlockStats(
-            percent = percent,
-            occupied = occupied,
-            available = available,
-            averageOccupiedRooms = averageOccupiedRooms,
             entries = entries
         )
     }
@@ -1109,11 +1067,6 @@ class RevenueReportActivity : AppCompatActivity() {
         return if (rounded % 1.0 == 0.0) "${rounded.toInt()}$suffix" else String.format(Locale.getDefault(), "%.1f%s", rounded, suffix)
     }
 
-    private fun formatDecimal(value: Double): String {
-        val rounded = (value * 10).roundToInt() / 10.0
-        return if (rounded % 1.0 == 0.0) rounded.toInt().toString() else String.format(Locale.getDefault(), "%.1f", rounded)
-    }
-
     private fun money(amount: Double): String {
         val value = amount.roundToInt()
         return String.format(Locale.getDefault(), "%,d", value)
@@ -1181,14 +1134,6 @@ class RevenueReportActivity : AppCompatActivity() {
     private enum class ReportKind {
         REVENUE, OCCUPANCY, BALANCE
     }
-
-    private data class OccupancyBlockStats(
-        val percent: Int,
-        val occupied: Int,
-        val available: Int,
-        val averageOccupiedRooms: Double,
-        val entries: List<Pair<String, Double>>
-    )
 
     private data class SettlementBreakdown(
         val grossSales: Double = 0.0,
