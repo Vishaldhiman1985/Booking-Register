@@ -57,6 +57,7 @@ import com.example.bookingregister.ui.login.LoginActivity
 import com.example.bookingregister.ui.views.BookingChartView
 import com.example.bookingregister.ui.views.BookingDaysProvider
 import com.example.bookingregister.room.domain.RoomLifecycleStatus
+import com.example.bookingregister.source.domain.DefaultBookingSourceCatalog
 import com.google.android.material.button.MaterialButton
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.delay
@@ -194,7 +195,6 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             val isFirstTime = !repository.hasHotel()
 
             repository.ensureDefaultHotelExists()
-            repository.ensureDefaultSourceExists()
             gstRepository.ensureDefaultRoomGstSlabs()
             if (isFirstTime) {
                 showHotelDialog()
@@ -429,7 +429,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                     "Properties" -> showPropertiesDialog()
                     "Manage Orders" -> openFoodBilling(FoodBillingActivity.MODE_ACTIVE_ORDERS)
                     "Bills" -> openFoodBilling(FoodBillingActivity.MODE_BILLS_ARCHIVE)
-                    "Users" -> showAddUserDialog()
+                    "Users" -> showUsersDialog()
                     "Share Staff Sheet" -> shareStaffSheetImage()
                     "Export Bookings" -> showExportOptionsDialog()
                     "Booking Records" -> openBookingRecords()
@@ -621,6 +621,95 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         return if (value % 1.0 == 0.0) value.toLong().toString() else value.toString()
     }
 
+    private fun showUsersDialog() {
+        if (AccountPermission.MANAGE_STAFF !in currentPermissions) {
+            Toast.makeText(
+                this,
+                "Only owner or manager can view hotel users.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        lifecycleScope.launch {
+            runCatching {
+                accessManager.listHotelUsers()
+            }.onSuccess { result ->
+                if (isFinishing || isDestroyed) return@onSuccess
+
+                val content = LinearLayout(this@BookingChartActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(32, 12, 32, 12)
+                }
+
+                if (result.users.isEmpty()) {
+                    content.addView(TextView(this@BookingChartActivity).apply {
+                        text = "No users found for this hotel."
+                        textSize = 15f
+                        setPadding(0, 24, 0, 24)
+                    })
+                } else {
+                    result.users.forEachIndexed { index, user ->
+                        val displayName = user.displayName.ifBlank {
+                            user.email.ifBlank { "Unnamed user" }
+                        }
+                        val emailLine = user.email.takeIf { it.isNotBlank() }
+                        val status = if (user.active) "Active" else "Inactive"
+
+                        content.addView(TextView(this@BookingChartActivity).apply {
+                            text = buildString {
+                                append(displayName)
+                                if (emailLine != null && emailLine != displayName) {
+                                    append("\n")
+                                    append(emailLine)
+                                }
+                                append("\nRole: ")
+                                append(user.role)
+                                append("   •   ")
+                                append(status)
+                            }
+                            textSize = 15f
+                            setTextColor(
+                                if (user.active) Color.parseColor("#222222")
+                                else Color.parseColor("#777777")
+                            )
+                            setPadding(0, 18, 0, 18)
+                        })
+
+                        if (index < result.users.lastIndex) {
+                            content.addView(View(this@BookingChartActivity).apply {
+                                setBackgroundColor(Color.parseColor("#E0E0E0"))
+                            }, LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT,
+                                1
+                            ))
+                        }
+                    }
+                }
+
+                val scrollView = ScrollView(this@BookingChartActivity).apply {
+                    addView(content)
+                }
+
+                AlertDialog.Builder(this@BookingChartActivity)
+                    .setTitle("Users (${result.users.size})")
+                    .setView(scrollView)
+                    .setPositiveButton("Add User") { _, _ ->
+                        showAddUserDialog()
+                    }
+                    .setNegativeButton("Close", null)
+                    .show()
+            }.onFailure { error ->
+                if (isFinishing || isDestroyed) return@onFailure
+
+                Toast.makeText(
+                    this@BookingChartActivity,
+                    readableBackendError(error),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
     private fun showAddUserDialog() {
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -749,16 +838,35 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
     }
 
     private fun showSourcesDialog(property: ManagedPropertyEntity? = null) {
-        val names = mutableListOf("Add Source")
+        val canManageSources = AccountPermission.MANAGE_SOURCES in currentPermissions
         val visibleSources = sources
             .filter { source -> property == null || source.propertyRemoteId == property.remoteId }
             .sortedWith(compareBy<BookingSourceEntity> { it.sourceName.lowercase() })
+
+        val names = mutableListOf<String>()
+        if (canManageSources) {
+            names.add("Add Source")
+        }
         names.addAll(visibleSources.map { "${it.sourceName} (${it.sourceType.displaySourceType()})" })
+
+        if (names.isEmpty()) {
+            names.add("No booking sources configured")
+        }
+
         AlertDialog.Builder(this)
             .setTitle(property?.let { "Booking Sources - ${it.propertyName}" } ?: "Sources")
             .setItems(names.toTypedArray()) { _, index ->
+                if (!canManageSources) {
+                    Toast.makeText(
+                        this,
+                        "Only owner or manager can manage booking sources.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return@setItems
+                }
+
                 if (index == 0) {
-                    showSourceEditorDialog(null, property)
+                    showSourceCatalogDialog(property)
                 } else {
                     showSourceEditorDialog(visibleSources[index - 1], property)
                 }
@@ -769,10 +877,64 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             .show()
     }
 
+    private fun showSourceCatalogDialog(property: ManagedPropertyEntity? = null) {
+        if (AccountPermission.MANAGE_SOURCES !in currentPermissions) {
+            Toast.makeText(
+                this,
+                "Only owner or manager can manage booking sources.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        val configuredNames = sources
+            .filter { source -> property == null || source.propertyRemoteId == property.remoteId }
+            .map { it.sourceName.trim().lowercase(Locale.ROOT) }
+            .toSet()
+
+        val availableCatalogSources = DefaultBookingSourceCatalog.sources
+            .filterNot { it.displayName.trim().lowercase(Locale.ROOT) in configuredNames }
+
+        val names = availableCatalogSources.map { it.displayName }.toMutableList()
+        names.add("Add New Source")
+
+        AlertDialog.Builder(this)
+            .setTitle("Choose Booking Source")
+            .setItems(names.toTypedArray()) { _, index ->
+                if (index < availableCatalogSources.size) {
+                    val selected = availableCatalogSources[index]
+                    showSourceEditorDialog(
+                        source = null,
+                        lockedProperty = property,
+                        suggestedName = selected.displayName,
+                        suggestedType = selected.sourceType
+                    )
+                } else {
+                    showSourceEditorDialog(
+                        source = null,
+                        lockedProperty = property
+                    )
+                }
+            }
+            .setNegativeButton("Back") { _, _ ->
+                showSourcesDialog(property)
+            }
+            .show()
+    }
     private fun showSourceEditorDialog(
         source: BookingSourceEntity?,
-        lockedProperty: ManagedPropertyEntity? = null
+        lockedProperty: ManagedPropertyEntity? = null,
+        suggestedName: String? = null,
+        suggestedType: String? = null
     ) {
+        if (AccountPermission.MANAGE_SOURCES !in currentPermissions) {
+            Toast.makeText(
+                this,
+                "Only owner or manager can manage booking sources.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(32, 12, 32, 0)
@@ -780,7 +942,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         val nameInput = EditText(this).apply {
             hint = "Source name"
             setSingleLine(true)
-            setText(source?.sourceName.orEmpty())
+            setText(source?.sourceName ?: suggestedName.orEmpty())
             setSelection(text.length)
         }
         val typeSpinner = Spinner(this).apply {
@@ -790,7 +952,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                 listOf("Direct", "Agent", "OTA")
             )
             setSelection(
-                when (source?.sourceType) {
+                when (source?.sourceType ?: suggestedType) {
                     BookingSourceType.AGENT -> 1
                     BookingSourceType.OTA -> 2
                     else -> 0

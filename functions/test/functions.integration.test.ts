@@ -1038,4 +1038,128 @@ describe("Firebase callable Functions integration", () => {
     expect(room.get("lifecycleReason")).toBe("Permanent renovation");
     expect((await db.doc("hotels/hotel-a/bookings/past-booking").get()).exists).toBe(true);
   });
+
+  test("listHotelUsers lets OWNER see only its hotel users including inactive users", async () => {
+    const owner = await createClient();
+    await seedMembership(owner.auth.currentUser!.uid, { role: "OWNER" });
+
+    const db = getFirestore(adminApp);
+    await db.doc(`hotelAccounts/hotel-a/members/${owner.auth.currentUser!.uid}`).set({
+      displayName: "Hotel Owner",
+      email: "owner@example.test",
+    }, { merge: true });
+
+    await db.doc("hotelAccounts/hotel-a/members/manager-a").set({
+      uid: "manager-a",
+      displayName: "Manager A",
+      email: "manager@example.test",
+      role: "MANAGER",
+      active: true,
+    });
+
+    await db.doc("hotelAccounts/hotel-a/members/staff-a").set({
+      uid: "staff-a",
+      displayName: "Staff A",
+      email: "staff@example.test",
+      role: "STAFF",
+      active: true,
+    });
+
+    await db.doc("hotelAccounts/hotel-a/members/former-staff").set({
+      uid: "former-staff",
+      displayName: "Former Staff",
+      email: "former@example.test",
+      role: "STAFF",
+      active: false,
+    });
+
+    await db.doc("hotelAccounts/hotel-b/members/foreign-owner").set({
+      uid: "foreign-owner",
+      displayName: "Other Hotel Owner",
+      email: "other@example.test",
+      role: "OWNER",
+      active: true,
+    });
+
+    const result = await owner.call("listHotelUsers", {
+      hotelId: "hotel-a",
+    }) as {
+      hotelId: string;
+      users: Array<{
+        uid: string;
+        email: string;
+        displayName: string;
+        role: string;
+        active: boolean;
+      }>;
+    };
+
+    expect(result.hotelId).toBe("hotel-a");
+    expect(result.users).toHaveLength(4);
+    expect(result.users.map((user) => user.role)).toEqual([
+      "OWNER",
+      "MANAGER",
+      "STAFF",
+      "STAFF",
+    ]);
+    expect(result.users.some((user) => user.email === "other@example.test")).toBe(false);
+    expect(result.users.find((user) => user.uid === "manager-a")).toMatchObject({
+      displayName: "Manager A",
+      email: "manager@example.test",
+      role: "MANAGER",
+      active: true,
+    });
+    expect(result.users.find((user) => user.uid === "former-staff")).toMatchObject({
+      role: "STAFF",
+      active: false,
+    });
+  });
+
+  test("listHotelUsers lets MANAGER view hotel users", async () => {
+    const manager = await createClient();
+    await seedMembership(manager.auth.currentUser!.uid, { role: "MANAGER" });
+
+    await getFirestore(adminApp).doc("hotelAccounts/hotel-a/members/staff-a").set({
+      uid: "staff-a",
+      displayName: "Staff A",
+      email: "staff@example.test",
+      role: "STAFF",
+      active: true,
+    });
+
+    const result = await manager.call("listHotelUsers", {
+      hotelId: "hotel-a",
+    }) as { users: Array<{ role: string }> };
+
+    expect(result.users).toHaveLength(2);
+    expect(result.users.map((user) => user.role)).toEqual(["MANAGER", "STAFF"]);
+  });
+
+  test("listHotelUsers denies STAFF", async () => {
+    const staff = await createClient();
+    await seedMembership(staff.auth.currentUser!.uid, { role: "STAFF" });
+
+    await expectFunctionError(
+      staff.call("listHotelUsers", { hotelId: "hotel-a" }),
+      "permission-denied"
+    );
+  });
+
+  test("listHotelUsers does not allow an OWNER to inspect another hotel", async () => {
+    const owner = await createClient();
+    await seedMembership(owner.auth.currentUser!.uid, { role: "OWNER" });
+
+    await getFirestore(adminApp).doc("hotelAccounts/hotel-b/members/hotel-b-owner").set({
+      uid: "hotel-b-owner",
+      displayName: "Hotel B Owner",
+      email: "owner-b@example.test",
+      role: "OWNER",
+      active: true,
+    });
+
+    await expectFunctionError(
+      owner.call("listHotelUsers", { hotelId: "hotel-b" }),
+      "permission-denied"
+    );
+  });
 });

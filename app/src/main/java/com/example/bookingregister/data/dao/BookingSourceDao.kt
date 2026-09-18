@@ -62,6 +62,17 @@ interface BookingSourceDao {
     """)
     suspend fun getUnsyncedSources(hotelRemoteId: String): List<BookingSourceEntity>
 
+    @Query("""
+        DELETE FROM booking_sources
+        WHERE hotelRemoteId = :hotelRemoteId
+        AND remoteId = :remoteId
+        AND revision <= 0
+        AND lastSyncedAt IS NULL
+    """)
+    suspend fun deleteNeverSyncedSource(
+        hotelRemoteId: String,
+        remoteId: String
+    ): Int
     @Query("SELECT COUNT(*) FROM booking_sources WHERE hotelRemoteId = :hotelRemoteId")
     suspend fun countAllSources(hotelRemoteId: String): Int
 

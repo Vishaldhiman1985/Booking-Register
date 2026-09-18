@@ -74,6 +74,8 @@ import com.example.bookingregister.room.domain.RoomHistoryFacts
 import com.example.bookingregister.room.domain.RoomLifecyclePolicy
 import com.example.bookingregister.room.domain.RoomLifecycleStatus
 import com.example.bookingregister.source.domain.SourceSettlementCalculator
+import com.example.bookingregister.source.domain.SourceSyncFailureDisposition
+import com.example.bookingregister.source.domain.SourceSyncFailurePolicy
 
 
 
@@ -257,15 +259,19 @@ class BookingRepository(
                 onSyncError = { markRealtimeSyncError("Property", it) }
             )
 
-            val sourceSince = syncBoundary(
-                localCount = bookingSourceDao.countAllSources(hotelRemoteId),
-                maxUpdatedAt = bookingSourceDao.maxUpdatedAt(hotelRemoteId)
-            )
+            // Booking-source master data is server-authoritative. Always begin with
+            // a complete snapshot so bad local timestamps cannot hide cloud sources.
             cloudSyncManager.startSourceListener(
-                sinceUpdatedAt = sourceSince,
+                sinceUpdatedAt = null,
                 onSourcesChanged = { sources ->
                     scope.launch {
                         sources.forEach { upsertRemoteSourceIfNewer(it.markSynced()) }
+                        clearRealtimeSyncErrorIfClean()
+                    }
+                },
+                onAuthoritativeSourcesChanged = { sources ->
+                    scope.launch {
+                        reconcileAuthoritativeSources(sources)
                         clearRealtimeSyncErrorIfClean()
                     }
                 },
@@ -1515,19 +1521,6 @@ class BookingRepository(
     suspend fun ensureDefaultCategoryExists() {
         // Category is optional. Do not create a fake default category for small properties.
     }
-    suspend fun ensureDefaultSourceExists() {
-        if (bookingSourceDao.getSources(hotelRemoteId).isNotEmpty()) return
-        val source = BookingSourceEntity(
-            remoteId = stableSourceRemoteId("Walk-in"),
-            hotelRemoteId = hotelRemoteId,
-            propertyRemoteId = null,
-            sourceName = "Walk-in",
-            sourceType = BookingSourceType.DIRECT,
-            syncState = SyncState.PENDING
-        )
-        bookingSourceDao.upsert(source)
-        pushSourceAndMark(source)
-    }
 
     fun saveSource(
         existing: BookingSourceEntity?,
@@ -1621,7 +1614,27 @@ class BookingRepository(
         try {
             hotelDao.getUnsyncedHotels().forEach { pushHotelAndMark(it) }
             managedPropertyDao.getUnsyncedProperties(hotelRemoteId).forEach { pushManagedPropertyAndMark(it) }
-            bookingSourceDao.getUnsyncedSources(hotelRemoteId).forEach { pushSourceAndMark(it) }
+            bookingSourceDao.getUnsyncedSources(hotelRemoteId).forEach { source ->
+                when (source.syncState) {
+                    SyncState.PENDING -> pushSourceAndMark(source)
+
+                    SyncState.FAILED -> {
+                        val failureCode =
+                            SourceSyncFailurePolicy.storedFailureCode(source.lastSyncError)
+
+                        when {
+                            failureCode == null ||
+                                SourceSyncFailurePolicy.disposition(failureCode) ==
+                                SourceSyncFailureDisposition.RETRYABLE ->
+                                pushSourceAndMark(source)
+
+                            else -> Unit
+                        }
+                    }
+
+                    else -> Unit
+                }
+            }
             roomDao.getUnsyncedRooms(hotelRemoteId).forEach { pushRoomAndMark(it) }
 
             val executableBookingIds = bookingSyncOutboxDao.getPending(hotelRemoteId)
@@ -1795,14 +1808,31 @@ class BookingRepository(
 
 
     private suspend fun pushSourceAndMark(source: BookingSourceEntity) {
-        runCatching { cloudSyncManager.pushSource(source) }
-            .onSuccess { result ->
-                bookingSourceDao.upsert(source.markSynced(result))
-            }
-            .onFailure {
-                bookingSourceDao.upsert(source.markFailed(it))
-                logSyncFailure("pushSource", it)
-            }
+        try {
+            val result = cloudSyncManager.pushSource(source)
+            bookingSourceDao.upsert(source.markSynced(result))
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            val failureCode =
+                (error as? CodedSyncFailure)?.syncFailureCode ?: SyncFailureCode.UNKNOWN
+
+            val failedSource =
+                when (SourceSyncFailurePolicy.disposition(failureCode)) {
+                    SourceSyncFailureDisposition.RETRYABLE ->
+                        source.copy(
+                            syncState = SyncState.PENDING,
+                            lastSyncError = syncFailureText(error)
+                        )
+
+                    SourceSyncFailureDisposition.TERMINAL ->
+                        source.markFailed(error)
+                }
+
+            bookingSourceDao.upsert(failedSource)
+
+            logSyncFailure("pushSource", error)
+        }
     }
 
     private suspend fun pushManagedPropertyAndMark(property: ManagedPropertyEntity) {
@@ -2054,8 +2084,79 @@ class BookingRepository(
 
     private suspend fun upsertRemoteSourceIfNewer(remote: BookingSourceEntity) {
         val local = bookingSourceDao.getByRemoteId(remote.remoteId)
-        if (local == null || shouldAcceptRemote(local, remote.revision, remote.updatedAt)) {
-            bookingSourceDao.upsert(remote.copy(localId = local?.localId ?: 0).markSynced())
+        val localFailureCode =
+            local
+                ?.takeIf { it.syncState == SyncState.FAILED }
+                ?.let { SourceSyncFailurePolicy.storedFailureCode(it.lastSyncError) }
+
+        val terminalLocalFailure =
+            localFailureCode != null &&
+                SourceSyncFailurePolicy.disposition(localFailureCode) ==
+                SourceSyncFailureDisposition.TERMINAL
+
+        if (
+            local == null ||
+            terminalLocalFailure ||
+            shouldAcceptRemote(local, remote.revision, remote.updatedAt)
+        ) {
+            bookingSourceDao.upsert(
+                remote.copy(localId = local?.localId ?: 0).markSynced()
+            )
+        }
+    }
+
+    private suspend fun reconcileAuthoritativeSources(
+        authoritativeSources: List<BookingSourceEntity>
+    ) {
+        // First let genuine server records repair any terminal local copy with
+        // the same stable source ID.
+        authoritativeSources.forEach {
+            upsertRemoteSourceIfNewer(it.markSynced())
+        }
+
+        val authoritativeSourceIds =
+            authoritativeSources.mapTo(mutableSetOf()) { it.remoteId }
+
+        db.withTransaction {
+            // Historical and soft-deleted bookings also protect their source
+            // identity. A source referenced by any retained booking is never
+            // removed by reconciliation.
+            val referencedSourceIds =
+                bookingDao.getAllBookingsIncludingDeleted(hotelRemoteId)
+                    .mapNotNull { booking ->
+                        booking.sourceRemoteId
+                            ?.trim()
+                            ?.takeIf { it.isNotEmpty() }
+                    }
+                    .toSet()
+
+            bookingSourceDao.getUnsyncedSources(hotelRemoteId)
+                .filter { it.syncState == SyncState.FAILED }
+                .forEach { localSource ->
+                    val failureCode =
+                        SourceSyncFailurePolicy.storedFailureCode(
+                            localSource.lastSyncError
+                        )
+
+                    val safeNeverSyncedPermissionFailure =
+                        failureCode != null &&
+                            SourceSyncFailurePolicy.shouldDiscardNeverSyncedLocalSource(
+                                code = failureCode,
+                                revision = localSource.revision,
+                                lastSyncedAt = localSource.lastSyncedAt
+                            )
+
+                    if (
+                        safeNeverSyncedPermissionFailure &&
+                        localSource.remoteId !in authoritativeSourceIds &&
+                        localSource.remoteId !in referencedSourceIds
+                    ) {
+                        bookingSourceDao.deleteNeverSyncedSource(
+                            hotelRemoteId = localSource.hotelRemoteId,
+                            remoteId = localSource.remoteId
+                        )
+                    }
+                }
         }
     }
 
@@ -2708,7 +2809,7 @@ private fun BookingSourceEntity.markSynced(result: CloudWriteResult? = null): Bo
 
 private fun BookingSourceEntity.markFailed(throwable: Throwable): BookingSourceEntity = copy(
     syncState = SyncState.FAILED,
-    lastSyncError = throwable.message ?: throwable::class.java.simpleName
+    lastSyncError = syncFailureText(throwable)
 )
 
 private fun BookingPaymentEntity.markSynced(result: CloudWriteResult? = null): BookingPaymentEntity = copy(

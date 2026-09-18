@@ -51,6 +51,15 @@ class BackendAccessManager(
         return CreatedHotelUser.from(result.data)
     }
 
+    suspend fun listHotelUsers(): HotelUserList {
+        val idToken = freshAuthToken()
+        val result = functions
+            .getHttpsCallable("listHotelUsers")
+            .call(mapOf("idToken" to idToken))
+            .await()
+
+        return HotelUserList.from(result.data)
+    }
     private suspend fun freshAuthToken(): String {
         return authToken(forceRefresh = true)
     }
@@ -61,6 +70,51 @@ class BackendAccessManager(
     }
 }
 
+data class HotelUserList(
+    val hotelId: String,
+    val users: List<HotelUserSummary>
+) {
+    companion object {
+        fun from(data: Any?): HotelUserList {
+            val map = data as? Map<*, *> ?: emptyMap<String, Any?>()
+            val users = (map["users"] as? List<*>)
+                .orEmpty()
+                .mapNotNull { HotelUserSummary.from(it) }
+
+            return HotelUserList(
+                hotelId = map["hotelId"] as? String ?: "",
+                users = users
+            )
+        }
+    }
+}
+
+data class HotelUserSummary(
+    val uid: String,
+    val email: String,
+    val displayName: String,
+    val role: String,
+    val active: Boolean,
+    val createdAtMillis: Long,
+    val updatedAtMillis: Long
+) {
+    companion object {
+        fun from(data: Any?): HotelUserSummary? {
+            val map = data as? Map<*, *> ?: return null
+            val uid = map["uid"] as? String ?: return null
+
+            return HotelUserSummary(
+                uid = uid,
+                email = map["email"] as? String ?: "",
+                displayName = map["displayName"] as? String ?: "",
+                role = (map["role"] as? String ?: "UNKNOWN").trim().uppercase(),
+                active = map["active"] as? Boolean ?: false,
+                createdAtMillis = (map["createdAtMillis"] as? Number)?.toLong() ?: 0L,
+                updatedAtMillis = (map["updatedAtMillis"] as? Number)?.toLong() ?: 0L
+            )
+        }
+    }
+}
 data class CreatedHotelUser(
     val uid: String,
     val email: String,

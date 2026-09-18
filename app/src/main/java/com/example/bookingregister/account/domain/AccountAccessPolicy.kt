@@ -7,6 +7,7 @@ object AccountPermission {
     const val ADD_SERVICES = "ADD_SERVICES"
     const val MANAGE_ROOMS = "MANAGE_ROOMS"
     const val MANAGE_CATEGORIES = "MANAGE_CATEGORIES"
+    const val MANAGE_SOURCES = "MANAGE_SOURCES"
     const val VIEW_REPORTS = "VIEW_REPORTS"
     const val TAKE_PAYMENTS = "TAKE_PAYMENTS"
     const val MANAGE_STAFF = "MANAGE_STAFF"
@@ -29,6 +30,7 @@ class AccountAccessPolicy {
                 AccountPermission.ADD_SERVICES,
                 AccountPermission.MANAGE_ROOMS,
                 AccountPermission.MANAGE_CATEGORIES,
+                AccountPermission.MANAGE_SOURCES,
                 AccountPermission.VIEW_REPORTS,
                 AccountPermission.TAKE_PAYMENTS,
                 AccountPermission.MANAGE_STAFF,
@@ -41,6 +43,7 @@ class AccountAccessPolicy {
                 AccountPermission.ADD_SERVICES,
                 AccountPermission.MANAGE_ROOMS,
                 AccountPermission.MANAGE_CATEGORIES,
+                AccountPermission.MANAGE_SOURCES,
                 AccountPermission.VIEW_REPORTS,
                 AccountPermission.TAKE_PAYMENTS
             )

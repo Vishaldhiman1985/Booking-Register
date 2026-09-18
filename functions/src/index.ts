@@ -275,6 +275,51 @@ export const createHotelUser = onCall({ invoker: "public" }, async (request) => 
   return { uid: user.uid, email, role, created };
 });
 
+export const listHotelUsers = onCall({ invoker: "public" }, async (request) => {
+  const requestAuth = await requireAuth(request);
+  const hotelId = requireString(request.data?.hotelId || requestAuth.token.hotelId, "hotelId");
+  await requireOwnerOrManager(requestAuth, hotelId);
+
+  const members = await accountRef(hotelId).collection("members").get();
+
+  const roleRank: Record<string, number> = {
+    [ROLE_OWNER]: 0,
+    [ROLE_MANAGER]: 1,
+    [ROLE_STAFF]: 2,
+  };
+
+  const users = members.docs
+    .map((member) => {
+      const rawRole = String(member.get("role") || "").toUpperCase();
+      const role = [ROLE_OWNER, ROLE_MANAGER, ROLE_STAFF].includes(rawRole) ?
+        rawRole :
+        "UNKNOWN";
+
+      return {
+        uid: String(member.get("uid") || member.id),
+        email: String(member.get("email") || ""),
+        displayName: String(member.get("displayName") || ""),
+        role,
+        active: member.get("active") === true,
+        createdAtMillis: timestampMillis(member.get("createdAt")),
+        updatedAtMillis: timestampMillis(member.get("updatedAt")),
+      };
+    })
+    .sort((a, b) => {
+      const roleDifference =
+        (roleRank[a.role] ?? Number.MAX_SAFE_INTEGER) -
+        (roleRank[b.role] ?? Number.MAX_SAFE_INTEGER);
+
+      if (roleDifference !== 0) return roleDifference;
+
+      const aLabel = (a.displayName || a.email).toLowerCase();
+      const bLabel = (b.displayName || b.email).toLowerCase();
+      return aLabel.localeCompare(bLabel);
+    });
+
+  return { hotelId, users };
+});
+
 export const setHotelUserActive = onCall({ invoker: "public" }, async (request) => {
   const requestAuth = await requireAuth(request);
   const hotelId = requireString(request.data?.hotelId || requestAuth.token.hotelId, "hotelId");

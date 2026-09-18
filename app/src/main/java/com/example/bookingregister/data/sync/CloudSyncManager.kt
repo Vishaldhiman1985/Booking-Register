@@ -199,11 +199,14 @@ class CloudSyncManager(
     fun startSourceListener(
         sinceUpdatedAt: Long?,
         onSourcesChanged: (List<BookingSourceEntity>) -> Unit,
+        onAuthoritativeSourcesChanged: (List<BookingSourceEntity>) -> Unit = {},
         onSyncError: (Throwable) -> Unit = {}
     ) {
         sourcesListener?.remove()
         sourcesListener = scopedCollectionListener("bookingSources", sinceUpdatedAt)
-            .addSnapshotListener { snapshot, error ->
+            .addSnapshotListener(
+                com.google.firebase.firestore.MetadataChanges.INCLUDE
+            ) { snapshot, error ->
                 if (error != null) {
                     onSyncError(error)
                     return@addSnapshotListener
@@ -234,6 +237,10 @@ class CloudSyncManager(
                     }
                     ?: return@addSnapshotListener
                 onSourcesChanged(sources)
+
+                if (snapshot?.metadata?.isFromCache == false) {
+                    onAuthoritativeSourcesChanged(sources)
+                }
             }
     }
     fun startBookingListener(
@@ -610,30 +617,36 @@ class CloudSyncManager(
 
 
     suspend fun pushSource(source: BookingSourceEntity): CloudWriteResult {
-        val nextRevision = nextRevisionFor(source.revision, source.baseRevision)
-        hotelDoc.collection("bookingSources")
-            .document(source.remoteId)
-            .set(
-                mapOf(
-                    "hotelRemoteId" to source.hotelRemoteId,
-                    "propertyRemoteId" to source.propertyRemoteId,
-                    "sourceName" to source.sourceName,
-                    "sourceType" to source.sourceType,
-                    "commissionPercent" to source.commissionPercent,
-                    "commissionGstPercent" to source.commissionGstPercent,
-                    "tcsPercent" to source.tcsPercent,
-                    "tdsPercent" to source.tdsPercent,
-                    "fixedFee" to source.fixedFee,
-                    "isActive" to source.isActive,
-                    "updatedAt" to source.updatedAt,
-                    "isDeleted" to source.isDeleted,
-                    "revision" to nextRevision,
-                    "updatedByUid" to currentUid(),
-                    "serverUpdatedAt" to FieldValue.serverTimestamp()
+        return try {
+            val nextRevision = nextRevisionFor(source.revision, source.baseRevision)
+            hotelDoc.collection("bookingSources")
+                .document(source.remoteId)
+                .set(
+                    mapOf(
+                        "hotelRemoteId" to source.hotelRemoteId,
+                        "propertyRemoteId" to source.propertyRemoteId,
+                        "sourceName" to source.sourceName,
+                        "sourceType" to source.sourceType,
+                        "commissionPercent" to source.commissionPercent,
+                        "commissionGstPercent" to source.commissionGstPercent,
+                        "tcsPercent" to source.tcsPercent,
+                        "tdsPercent" to source.tdsPercent,
+                        "fixedFee" to source.fixedFee,
+                        "isActive" to source.isActive,
+                        "updatedAt" to source.updatedAt,
+                        "isDeleted" to source.isDeleted,
+                        "revision" to nextRevision,
+                        "updatedByUid" to currentUid(),
+                        "serverUpdatedAt" to FieldValue.serverTimestamp()
+                    )
                 )
-            )
-            .await()
-        return CloudWriteResult(nextRevision, currentUid())
+                .await()
+            CloudWriteResult(nextRevision, currentUid())
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            throw error.toStructuredFirestoreSyncException()
+        }
     }
 
     suspend fun pushManagedProperty(property: ManagedPropertyEntity): CloudWriteResult {
