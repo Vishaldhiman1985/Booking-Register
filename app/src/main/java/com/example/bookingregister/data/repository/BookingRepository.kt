@@ -86,6 +86,9 @@ class BookingRepository(
 ) {
     companion object {
         private const val RETRY_THROTTLE_MILLIS = 30_000L
+        private const val ROOM_CONFLICT_OUTCOME = "REJECTED_ROOM_CONFLICT"
+        private const val ROOM_CONFLICT_REQUIRES_ACTION =
+            "Room is already occupied for these dates. Please select another room or delete this booking."
     }
     private val appContext = context.applicationContext
     init {
@@ -1657,9 +1660,27 @@ class BookingRepository(
             aggregateOperations.forEach { pushBookingChangeSetAndMark(it) }
 
             // Booking aggregates must reach the server before payments and charges that
-            // reference them. This is especially important for a booking first saved offline.
-            bookingPaymentDao.getUnsyncedPayments(hotelRemoteId).forEach { pushPaymentAndMark(it) }
+            // reference them. If a room conflict is waiting for the user, preserve the
+            // dependent money records locally and do not upload them until the booking
+            // is moved to another room or deleted by the user.
+            val roomConflictBookingIds = bookingDao.getUnsyncedBookings(hotelRemoteId)
+                .asSequence()
+                .filter { booking ->
+                    booking.syncState == SyncState.FAILED &&
+                        booking.lastSyncError == ROOM_CONFLICT_REQUIRES_ACTION
+                }
+                .mapTo(mutableSetOf()) { it.remoteId }
+
+            bookingPaymentDao.getUnsyncedPayments(hotelRemoteId).forEach { payment ->
+                if (payment.bookingRemoteId !in roomConflictBookingIds) {
+                    pushPaymentAndMark(payment)
+                }
+            }
+
             bookingAccountingChargeDao.getUnsyncedCharges(hotelRemoteId).forEach { charge ->
+                if (charge.bookingRemoteId in roomConflictBookingIds) {
+                    return@forEach
+                }
                 val linkedBillId = charge.linkedFinalBillId?.takeIf { it.isNotBlank() }
                 if (linkedBillId != null && foodBillDao.getByRemoteId(linkedBillId) != null) {
                     return@forEach
@@ -1875,6 +1896,12 @@ class BookingRepository(
     }
 
     private suspend fun pushBookingChangeSetAndMark(operation: BookingSyncOutboxEntity) {
+        val operationStillPending = bookingSyncOutboxDao.getPending(
+            operation.hotelRemoteId
+        ).any { pending ->
+            pending.operationId == operation.operationId
+        }
+        if (!operationStillPending) return
         val booking = bookingDao.getByRemoteId(operation.bookingRemoteId) ?: run {
             bookingSyncOutboxDao.delete(operation.operationId)
             return
@@ -1939,7 +1966,14 @@ class BookingRepository(
                 }
             }
             .onSuccess { result ->
-                acknowledgeBookingAggregate(operation, sentBooking, lines, result)
+                if (result.outcome == ROOM_CONFLICT_OUTCOME) {
+                    handleRejectedRoomConflict(
+                        operation = operation,
+                        sentBooking = sentBooking
+                    )
+                } else {
+                    acknowledgeBookingAggregate(operation, sentBooking, lines, result)
+                }
             }
             .onFailure { error ->
                 val message = syncFailureText(error)
@@ -1955,6 +1989,40 @@ class BookingRepository(
 
                 logSyncFailure("pushBookingChangeSet", error)
             }
+    }
+
+    private suspend fun handleRejectedRoomConflict(
+        operation: BookingSyncOutboxEntity,
+        sentBooking: BookingEntity
+    ) {
+        db.withTransaction {
+            // This exact room assignment has been rejected permanently.
+            // Retire only this operation; a newer user edit must remain eligible to sync.
+            bookingSyncOutboxDao.delete(operation.operationId)
+
+            val currentBooking = bookingDao.getByRemoteId(operation.bookingRemoteId)
+                ?: return@withTransaction
+
+            val unchangedSinceSend = SyncAcknowledgementPolicy.isSameVersion(
+                sentBooking.updatedAt,
+                sentBooking.revision,
+                sentBooking.baseRevision,
+                currentBooking.updatedAt,
+                currentBooking.revision,
+                currentBooking.baseRevision
+            )
+
+            // If the user already moved/edited the booking, do not overwrite that newer decision.
+            if (!unchangedSinceSend) return@withTransaction
+
+            bookingDao.upsert(
+                currentBooking.copy(
+                    syncState = SyncState.FAILED,
+                    lastSyncError = ROOM_CONFLICT_REQUIRES_ACTION,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+        }
     }
 
     private suspend fun acknowledgeBookingAggregate(

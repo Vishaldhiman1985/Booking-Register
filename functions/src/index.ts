@@ -1676,6 +1676,7 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
   const changeSet = (request.data?.changeSet || {}) as Record<string, unknown>;
   const bookingRemoteId = requireString(changeSet.bookingRemoteId, "bookingRemoteId");
   const create = booleanValue(changeSet.create);
+  const conflictResolutionVersion = numberValue(request.data?.conflictResolutionVersion);
   const setFields = (changeSet.setFields || {}) as Record<string, unknown>;
   const addRoomIds = new Set(stringList(changeSet.addRoomRemoteIds));
   const removeRoomIds = new Set(stringList(changeSet.removeRoomRemoteIds));
@@ -1730,6 +1731,10 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
       if (String(applied.get("bookingRemoteId") || "") !== bookingRemoteId) {
         throw new HttpsError("aborted", "This operation ID was already used for another booking.");
       }
+      const outcome = String(applied.get("outcome") || "APPLIED");
+      if (outcome === "REJECTED_ROOM_CONFLICT" && conflictResolutionVersion < 1) {
+        throw new HttpsError("already-exists", "A selected room is already booked for these dates.");
+      }
       return {
         operationId,
         bookingRemoteId,
@@ -1737,6 +1742,8 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
         financialLineRevisions: applied.get("financialLineRevisions") || {},
         updatedByUid: String(applied.get("updatedByUid") || requestAuth.uid),
         alreadyApplied: true,
+        outcome,
+        blockingBookingRemoteIds: stringList(applied.get("blockingBookingRemoteIds")),
       };
     }
 
@@ -1924,12 +1931,50 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
     }
     const blockingBookings = new Map<string, DocumentSnapshot>();
     for (const id of blockingIds) blockingBookings.set(id, await tx.get(hotelRef.collection("bookings").doc(id)));
+    const activeBlockingBookingIds = new Set<string>();
     for (const lock of lockSnapshots.values()) {
       const lockedBy = String(lock.get("bookingRemoteId") || "");
       const blocker = blockingBookings.get(lockedBy);
       if (blocker?.exists && !booleanValue(blocker.get("isDeleted")) && String(blocker.get("bookingStatus") || "") !== "CANCELLED") {
-        throw new HttpsError("already-exists", "A selected room is already booked for these dates.");
+        activeBlockingBookingIds.add(lockedBy);
       }
+    }
+    if (activeBlockingBookingIds.size > 0) {
+      const blockingBookingRemoteIds = Array.from(activeBlockingBookingIds).sort();
+
+      if (create && conflictResolutionVersion >= 1) {
+        const result = {
+          operationId,
+          bookingRemoteId,
+          bookingRevision: 0,
+          financialLineRevisions: {},
+          updatedByUid: requestAuth.uid,
+          alreadyApplied: false,
+          outcome: "REJECTED_ROOM_CONFLICT",
+          blockingBookingRemoteIds,
+        };
+
+        tx.set(auditDoc, {
+          hotelRemoteId: hotelId,
+          bookingRemoteId,
+          operationId,
+          userUid: requestAuth.uid,
+          deviceId,
+          action: "CREATE_REJECTED_ROOM_CONFLICT",
+          blockingBookingRemoteIds,
+          serverTime: FieldValue.serverTimestamp(),
+        });
+
+        tx.set(mutationDoc, {
+          ...result,
+          hotelRemoteId: hotelId,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+
+        return result;
+      }
+
+      throw new HttpsError("already-exists", "A selected room is already booked for these dates.");
     }
 
     const financialSnapshot = await tx.get(
@@ -2039,6 +2084,8 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
       financialLineRevisions,
       updatedByUid: requestAuth.uid,
       alreadyApplied: false,
+      outcome: "APPLIED",
+      blockingBookingRemoteIds: [],
     };
     tx.set(auditDoc, {
       hotelRemoteId: hotelId, bookingRemoteId, operationId, userUid: requestAuth.uid, deviceId,

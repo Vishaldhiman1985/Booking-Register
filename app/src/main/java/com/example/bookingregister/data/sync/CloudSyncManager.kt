@@ -867,6 +867,7 @@ class CloudSyncManager(
                     "hotelId" to hotelRemoteId,
                     "operationId" to operationId,
                     "deviceId" to deviceId,
+                    "conflictResolutionVersion" to 1,
                     "changeSet" to changeSet.toMap()
                 )
             )
@@ -1679,10 +1680,15 @@ class CloudSyncManager(
     private fun Any?.toBookingAggregateWriteResult(): BookingAggregateWriteResult {
         val data = this as? Map<*, *>
             ?: return BookingAggregateWriteResult(0, emptyMap(), currentUid())
+        val outcome = (data["outcome"] as? String)
+            ?.takeIf(String::isNotBlank)
+            ?: "APPLIED"
         return BookingAggregateWriteResult(
             bookingRevision = data.longValue("bookingRevision"),
             financialLineRevisions = data.revisionMap("financialLineRevisions"),
-            updatedByUid = data["updatedByUid"]?.toString()
+            updatedByUid = data["updatedByUid"]?.toString(),
+            outcome = outcome,
+            blockingBookingRemoteIds = data.stringList("blockingBookingRemoteIds")
         )
     }
 
@@ -1715,6 +1721,13 @@ class CloudSyncManager(
         else -> 0L
     }
 
+    private fun Map<*, *>.stringList(key: String): List<String> {
+        val values = this[key] as? List<*> ?: return emptyList()
+        return values.mapNotNull { value ->
+            (value as? String)?.takeIf(String::isNotBlank)
+        }
+    }
+
     private fun Map<*, *>.revisionMap(key: String): Map<String, Long> =
         ((this[key] as? Map<*, *>).orEmpty()).mapNotNull { (rawKey, rawValue) ->
             val id = rawKey?.toString()?.takeIf(String::isNotBlank) ?: return@mapNotNull null
@@ -1743,7 +1756,9 @@ data class CloudWriteResult(
 data class BookingAggregateWriteResult(
     val bookingRevision: Long,
     val financialLineRevisions: Map<String, Long>,
-    val updatedByUid: String?
+    val updatedByUid: String?,
+    val outcome: String = "APPLIED",
+    val blockingBookingRemoteIds: List<String> = emptyList()
 )
 
 data class FoodBillAggregateWriteResult(

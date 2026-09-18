@@ -260,6 +260,127 @@ describe("Firebase callable Functions integration", () => {
     expect((await getFirestore(adminApp).doc("hotels/hotel-a/bookings/booking-blocked").get()).exists).toBe(false);
   }, 10_000);
 
+  test("protocol v1 records a room-conflict create as a durable terminal result", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+    await seedRoom("H101", "property-a");
+
+    const baseChange = {
+      create: true,
+      setFields: { guestName: "Guest", checkInMillis: START, checkOutMillis: END, grossCharges: 3000 },
+      addRoomRemoteIds: ["H101"], removeRoomRemoteIds: [], rebuildFinancialLines: true,
+      financialLineTemplate: { gstRatePercent: 5 }, financialLineRemoteIdsByKey: {},
+    };
+
+    await client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a", operationId: "first-room-v1", deviceId: "device-a",
+      changeSet: { ...baseChange, bookingRemoteId: "booking-first-v1" },
+    });
+
+    const conflictPayload = {
+      hotelId: "hotel-a",
+      operationId: "blocked-room-v1",
+      deviceId: "device-b",
+      conflictResolutionVersion: 1,
+      changeSet: { ...baseChange, bookingRemoteId: "booking-blocked-v1" },
+    };
+
+    const rejected = await client.call("applyBookingChangeSetServer", conflictPayload) as Record<string, unknown>;
+    expect(rejected.outcome).toBe("REJECTED_ROOM_CONFLICT");
+    expect(rejected.alreadyApplied).toBe(false);
+    expect(rejected.bookingRevision).toBe(0);
+    expect(rejected.blockingBookingRemoteIds).toEqual(["booking-first-v1"]);
+
+    const replay = await client.call("applyBookingChangeSetServer", conflictPayload) as Record<string, unknown>;
+    expect(replay.outcome).toBe("REJECTED_ROOM_CONFLICT");
+    expect(replay.alreadyApplied).toBe(true);
+    expect(replay.blockingBookingRemoteIds).toEqual(["booking-first-v1"]);
+
+    await expectFunctionError(client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "blocked-room-v1",
+      deviceId: "legacy-device",
+      changeSet: { ...baseChange, bookingRemoteId: "booking-blocked-v1" },
+    }), "already-exists");
+
+    const db = getFirestore(adminApp);
+    expect((await db.doc("hotels/hotel-a/bookings/booking-blocked-v1").get()).exists).toBe(false);
+
+    const blockedLines = await db.collection("hotels/hotel-a/bookingFinancialLines")
+      .where("bookingRemoteId", "==", "booking-blocked-v1").get();
+    expect(blockedLines.empty).toBe(true);
+
+    const mutation = await db.doc("hotels/hotel-a/appliedBookingChangeSets/blocked-room-v1").get();
+    expect(mutation.exists).toBe(true);
+    expect(mutation.get("outcome")).toBe("REJECTED_ROOM_CONFLICT");
+    expect(mutation.get("blockingBookingRemoteIds")).toEqual(["booking-first-v1"]);
+
+    const audit = await db.doc("hotels/hotel-a/bookingAuditEvents/blocked-room-v1").get();
+    expect(audit.exists).toBe(true);
+    expect(audit.get("action")).toBe("CREATE_REJECTED_ROOM_CONFLICT");
+  }, 10_000);
+  test("protocol v1 preserves an existing booking when its edit conflicts with another booking", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+    await seedRoom("H101", "property-a");
+    await seedRoom("H102", "property-a");
+
+    const baseChange = {
+      create: true,
+      setFields: { guestName: "Guest", checkInMillis: START, checkOutMillis: END, grossCharges: 3000 },
+      removeRoomRemoteIds: [],
+      rebuildFinancialLines: true,
+      financialLineTemplate: { gstRatePercent: 5 },
+      financialLineRemoteIdsByKey: {},
+    };
+
+    await client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "existing-edit-owner-create",
+      deviceId: "device-a",
+      changeSet: {
+        ...baseChange,
+        bookingRemoteId: "booking-existing-edit-owner",
+        addRoomRemoteIds: ["H101"],
+      },
+    });
+
+    await client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "existing-edit-target-create",
+      deviceId: "device-b",
+      changeSet: {
+        ...baseChange,
+        bookingRemoteId: "booking-existing-edit-target",
+        addRoomRemoteIds: ["H102"],
+      },
+    });
+
+    await expectFunctionError(client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "existing-edit-conflict-v1",
+      deviceId: "device-b",
+      conflictResolutionVersion: 1,
+      changeSet: {
+        bookingRemoteId: "booking-existing-edit-target",
+        create: false,
+        setFields: {},
+        addRoomRemoteIds: ["H101"],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: false,
+        financialLineTemplate: { gstRatePercent: 5 },
+        financialLineRemoteIdsByKey: {},
+      },
+    }), "already-exists");
+
+    const db = getFirestore(adminApp);
+    const existingBooking = await db.doc("hotels/hotel-a/bookings/booking-existing-edit-target").get();
+
+    expect(existingBooking.exists).toBe(true);
+    expect(new Set(existingBooking.get("roomRemoteIds"))).toEqual(new Set(["H102"]));
+    expect((await db.doc("hotels/hotel-a/appliedBookingChangeSets/existing-edit-conflict-v1").get()).exists).toBe(false);
+    expect((await db.doc("hotels/hotel-a/bookingAuditEvents/existing-edit-conflict-v1").get()).exists).toBe(false);
+  }, 10_000);
   test("a missing cloud booking can be recovered with the same operation ID without partial writes", async () => {
     const client = await createClient();
     await seedMembership(client.auth.currentUser!.uid);
