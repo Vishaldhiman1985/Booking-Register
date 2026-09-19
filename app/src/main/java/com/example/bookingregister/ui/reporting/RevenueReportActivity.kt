@@ -14,6 +14,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AlertDialog
@@ -23,7 +24,11 @@ import com.example.bookingregister.common.domain.BusinessDates
 import com.example.bookingregister.common.domain.DateRange
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.RoomEntity
+import com.example.bookingregister.data.repository.BookingRepository
+import com.example.bookingregister.data.repository.OtaSettlementSelection
+import com.example.bookingregister.data.repository.SaveResult
 import com.example.bookingregister.room.domain.RoomLifecyclePolicy
+import com.example.bookingregister.reporting.property.OtaReceivableGroup
 import com.example.bookingregister.reporting.property.PropertyOccupancyBucket
 import com.example.bookingregister.reporting.property.PropertyOccupancyPeriodRequest
 import com.example.bookingregister.reporting.property.PropertyOccupancyReportEngine
@@ -70,6 +75,8 @@ class RevenueReportActivity : AppCompatActivity() {
     private var reportingLoadJob: Job? = null
     private var propertyChoices: List<PropertyChoice> = emptyList()
     private var selectedPropertyKey: String = ALL_PROPERTIES_KEY
+    private lateinit var settlementRepository: BookingRepository
+    private var otaSettlementInProgress: Boolean = false
 
     private val propertyReportBuilder = PropertyReportBuilder()
     private val propertyRevenueEngine = PropertyRevenueReportEngine()
@@ -105,6 +112,11 @@ class RevenueReportActivity : AppCompatActivity() {
         }
 
         hotelRemoteId = requestedHotelRemoteId
+        settlementRepository = BookingRepository(
+            context = applicationContext,
+            scope = lifecycleScope,
+            hotelRemoteId = hotelRemoteId
+        )
         setContentView(buildRoot())
 
         loadReportingSnapshot()
@@ -450,10 +462,131 @@ class RevenueReportActivity : AppCompatActivity() {
                     propertyLabel =
                         currentPropertyLabel(),
                     onChangeProperty =
-                        ::showPropertyPicker
+                        ::showPropertyPicker,
+                    onSettleOta =
+                        ::showOtaSettlementSelection
                 )
             }
         )
+    }
+
+    private fun showOtaSettlementSelection(
+        group: OtaReceivableGroup
+    ) {
+        if (otaSettlementInProgress) {
+            Toast.makeText(
+                this,
+                "Another OTA settlement is being recorded.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        val propertyChoice =
+            propertyChoices.firstOrNull {
+                it.key == selectedPropertyKey
+            }
+
+        val propertyRemoteId =
+            propertyChoice
+                ?.propertyRemoteId
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+
+        if (
+            propertyChoice == null ||
+            propertyChoice.includeAllProperties ||
+            propertyRemoteId == null
+        ) {
+            Toast.makeText(
+                this,
+                "Select one specific property before recording an OTA settlement.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        val sourceRemoteId =
+            group.sourceRemoteId
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+
+        if (sourceRemoteId == null) {
+            Toast.makeText(
+                this,
+                "This OTA source cannot be settled until it has one stable source ID.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        OtaSettlementSelectionDialog.show(
+            activity = this,
+            propertyName = propertyChoice.label,
+            sourceName = group.sourceName,
+            bookings = group.bookings,
+            moneyFormatter = { amount ->
+                "\u20B9" + money(amount)
+            }
+        ) { selectedRows, settlementReference, note ->
+
+            val selectedTotal =
+                selectedRows.sumOf { it.outstanding }
+
+            otaSettlementInProgress = true
+
+            lifecycleScope.launch {
+                val result =
+                    settlementRepository.recordOtaSettlement(
+                        propertyRemoteId = propertyRemoteId,
+                        sourceRemoteId = sourceRemoteId,
+                        sourceName = group.sourceName,
+                        selections = selectedRows.map {
+                            OtaSettlementSelection(
+                                bookingRemoteId = it.bookingRemoteId,
+                                expectedOutstanding = it.outstanding
+                            )
+                        },
+                        settlementReference = settlementReference,
+                        note = note
+                    )
+
+                otaSettlementInProgress = false
+
+                when (result) {
+                    is SaveResult.Success -> {
+                        Toast.makeText(
+                            this@RevenueReportActivity,
+                            group.sourceName +
+                                " payment \u20B9" +
+                                money(selectedTotal) +
+                                " recorded.",
+                            Toast.LENGTH_LONG
+                        ).show()
+
+                        loadReportingSnapshot()
+                    }
+
+                    is SaveResult.Conflict -> {
+                        Toast.makeText(
+                            this@RevenueReportActivity,
+                            result.message,
+                            Toast.LENGTH_LONG
+                        ).show()
+                        render()
+                    }
+
+                    is SaveResult.Error -> {
+                        Toast.makeText(
+                            this@RevenueReportActivity,
+                            result.message,
+                            Toast.LENGTH_LONG
+                        ).show()
+                        render()
+                    }
+                }
+            }
+        }
     }
 
     private fun refreshReportData() {

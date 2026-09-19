@@ -7,7 +7,7 @@
     "build": "tsc",
     "serve": "npm run build && firebase emulators:start --only functions,firestore,auth",
     "test": "npm run test:emulators",
-    "test:emulators": "npm run build && npx firebase-tools@latest emulators:exec --project demo-booking-register --config ../firebase.json --only auth,firestore,functions \"npx vitest run --reporter=verbose\"",
+    "test:emulators": "npm run build && npx firebase-tools@latest emulators:exec --project demo-booking-register --config ../firebase.json --only auth,firestore,functions \"npx vitest run --reporter=verbose --fileParallelism=false\"",
     "test:rules": "npm run build && npx firebase-tools@latest emulators:exec --project demo-booking-register --config ../firebase.json --only auth,firestore,functions \"npx vitest run test/firestore.rules.test.ts --reporter=verbose\"",
     "test:functions": "npm run build && npx firebase-tools@latest emulators:exec --project demo-booking-register --config ../firebase.json --only auth,firestore,functions \"npx vitest run test/functions.integration.test.ts --reporter=verbose\"",
     "deploy": "npm run build && firebase deploy --only functions,firestore:rules",

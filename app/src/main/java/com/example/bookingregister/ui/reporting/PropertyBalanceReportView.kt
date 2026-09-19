@@ -22,8 +22,8 @@ import kotlin.math.roundToInt
  * This view receives an immutable PropertyBalanceReport.
  * It has no repository, DAO, Firebase, payment or sync dependency.
  *
- * The only interaction exposed outside this view is changing
- * the selected reporting property.
+ * Interactions are exposed as callbacks for changing the reporting
+ * property and requesting settlement of a specific OTA group.
  */
 class PropertyBalanceReportView(
     context: Context
@@ -36,7 +36,8 @@ class PropertyBalanceReportView(
     fun bind(
         report: PropertyBalanceReport,
         propertyLabel: String,
-        onChangeProperty: () -> Unit
+        onChangeProperty: () -> Unit,
+        onSettleOta: ((OtaReceivableGroup) -> Unit)? = null
     ) {
         removeAllViews()
 
@@ -56,7 +57,8 @@ class PropertyBalanceReportView(
 
         addView(
             otaReceivablesSection(
-                report = report
+                report = report,
+                onSettleOta = onSettleOta
             )
         )
 
@@ -165,7 +167,8 @@ class PropertyBalanceReportView(
     }
 
     private fun otaReceivablesSection(
-        report: PropertyBalanceReport
+        report: PropertyBalanceReport,
+        onSettleOta: ((OtaReceivableGroup) -> Unit)?
     ): View {
         val groups = report.otaReceivables
         val pendingCount =
@@ -195,9 +198,20 @@ class PropertyBalanceReportView(
                     )
                 })
             } else {
+                val propertyCanSettle =
+                    !report.scope.includeAllProperties &&
+                        !report.scope.propertyRemoteId.isNullOrBlank()
+
                 groups.forEach { group ->
                     addView(
-                        otaCompanyRow(group)
+                        otaCompanyRow(
+                            group = group,
+                            canSettle =
+                                propertyCanSettle &&
+                                    !group.sourceRemoteId.isNullOrBlank() &&
+                                    onSettleOta != null,
+                            onSettleOta = onSettleOta
+                        )
                     )
                 }
             }
@@ -205,7 +219,9 @@ class PropertyBalanceReportView(
     }
 
     private fun otaCompanyRow(
-        group: OtaReceivableGroup
+        group: OtaReceivableGroup,
+        canSettle: Boolean,
+        onSettleOta: ((OtaReceivableGroup) -> Unit)?
     ): View {
         return LinearLayout(context).apply {
 
@@ -259,12 +275,20 @@ class PropertyBalanceReportView(
 
             addView(MaterialButton(context).apply {
                 text =
-                    "Open " + group.sourceName
+                    if (canSettle) {
+                        "Select paid " + group.sourceName
+                    } else {
+                        "Open " + group.sourceName
+                    }
                 textSize = 12f
                 isAllCaps = false
 
                 setOnClickListener {
-                    showOtaBookings(group)
+                    if (canSettle && onSettleOta != null) {
+                        onSettleOta(group)
+                    } else {
+                        showOtaBookings(group)
+                    }
                 }
             }, LayoutParams(
                 LayoutParams.MATCH_PARENT,
