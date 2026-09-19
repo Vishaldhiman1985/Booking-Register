@@ -1942,7 +1942,7 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
     if (activeBlockingBookingIds.size > 0) {
       const blockingBookingRemoteIds = Array.from(activeBlockingBookingIds).sort();
 
-      if (create && conflictResolutionVersion >= 1) {
+      if (conflictResolutionVersion >= 1) {
         const result = {
           operationId,
           bookingRemoteId,
@@ -1960,7 +1960,7 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
           operationId,
           userUid: requestAuth.uid,
           deviceId,
-          action: "CREATE_REJECTED_ROOM_CONFLICT",
+          action: create ? "CREATE_REJECTED_ROOM_CONFLICT" : "UPDATE_REJECTED_ROOM_CONFLICT",
           blockingBookingRemoteIds,
           serverTime: FieldValue.serverTimestamp(),
         });

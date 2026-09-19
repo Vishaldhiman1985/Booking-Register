@@ -506,15 +506,7 @@ class BookingRepository(
             bookingDao.upsert(normalized)
             changedFinancialLines.forEach { line -> bookingFinancialLineDao.upsert(line) }
             seedInitialPaymentIfNeeded(normalized)
-            bookingSyncOutboxDao.upsert(
-                BookingSyncOutboxEntity(
-                    operationId = UUID.randomUUID().toString(),
-                    hotelRemoteId = hotelRemoteId,
-                    bookingRemoteId = normalized.remoteId,
-                    changeSetJson = changeSet.toJson(),
-                    createdAt = normalized.updatedAt
-                )
-            )
+            enqueueBookingChangeSet(normalized, changeSet)
         }
         enqueueBackgroundSync()
         return SaveResult.Success(syncPending = true)
@@ -1640,10 +1632,23 @@ class BookingRepository(
             }
             roomDao.getUnsyncedRooms(hotelRemoteId).forEach { pushRoomAndMark(it) }
 
-            val executableBookingIds = bookingSyncOutboxDao.getPending(hotelRemoteId)
+            val bookingOperations = bookingSyncOutboxDao.getPending(hotelRemoteId)
+            val blockedRoomConflictOperations = bookingOperations
+                .filter { it.lastError == ROOM_CONFLICT_REQUIRES_ACTION }
+                .groupBy { it.bookingRemoteId }
+                .mapValues { (_, operations) ->
+                    operations.minWithOrNull(
+                        compareBy<BookingSyncOutboxEntity> { it.createdAt }
+                            .thenBy { it.operationId }
+                    )!!
+                }
+            val blockedRoomConflictBookingIds =
+                blockedRoomConflictOperations.keys.toMutableSet()
+
+            val bookingIntentIds = bookingOperations
                 .mapTo(mutableSetOf()) { it.bookingRemoteId }
             bookingDao.getUnsyncedBookings(hotelRemoteId)
-                .filter { it.syncState == SyncState.PENDING && it.remoteId !in executableBookingIds }
+                .filter { it.syncState == SyncState.PENDING && it.remoteId !in bookingIntentIds }
                 .forEach { orphaned ->
                     bookingDao.upsert(
                         orphaned.markFailed(
@@ -1655,30 +1660,47 @@ class BookingRepository(
                     )
                 }
 
-            val aggregateOperations = bookingSyncOutboxDao.getPending(hotelRemoteId)
+            val aggregateOperations = bookingOperations
+                .filter { pending ->
+                    val blocked = blockedRoomConflictOperations[pending.bookingRemoteId]
+                        ?: return@filter true
+                    pending.createdAt < blocked.createdAt ||
+                        (
+                            pending.createdAt == blocked.createdAt &&
+                                pending.operationId < blocked.operationId
+                        )
+                }
 
             aggregateOperations.forEach { pushBookingChangeSetAndMark(it) }
 
             // Booking aggregates must reach the server before payments and charges that
-            // reference them. If a room conflict is waiting for the user, preserve the
-            // dependent money records locally and do not upload them until the booking
-            // is moved to another room or deleted by the user.
-            val roomConflictBookingIds = bookingDao.getUnsyncedBookings(hotelRemoteId)
+            // reference them. Re-read the outbox after the aggregate pass because a
+            // rejected in-flight room move may have been replaced with a recovery command.
+            // Preserve dependent money records locally while any booking command is still
+            // pending, including a room conflict waiting for the receptionist.
+            val pendingAggregateBookingIds = bookingSyncOutboxDao.getPending(hotelRemoteId)
+                .mapTo(mutableSetOf()) { it.bookingRemoteId }
+
+            val bookingIdsBlockingDependentMoney = bookingDao.getUnsyncedBookings(hotelRemoteId)
                 .asSequence()
                 .filter { booking ->
                     booking.syncState == SyncState.FAILED &&
                         booking.lastSyncError == ROOM_CONFLICT_REQUIRES_ACTION
                 }
                 .mapTo(mutableSetOf()) { it.remoteId }
+                .apply {
+                    addAll(blockedRoomConflictBookingIds)
+                    addAll(pendingAggregateBookingIds)
+                }
 
             bookingPaymentDao.getUnsyncedPayments(hotelRemoteId).forEach { payment ->
-                if (payment.bookingRemoteId !in roomConflictBookingIds) {
+                if (payment.bookingRemoteId !in bookingIdsBlockingDependentMoney) {
                     pushPaymentAndMark(payment)
                 }
             }
 
             bookingAccountingChargeDao.getUnsyncedCharges(hotelRemoteId).forEach { charge ->
-                if (charge.bookingRemoteId in roomConflictBookingIds) {
+                if (charge.bookingRemoteId in bookingIdsBlockingDependentMoney) {
                     return@forEach
                 }
                 val linkedBillId = charge.linkedFinalBillId?.takeIf { it.isNotBlank() }
@@ -1969,7 +1991,8 @@ class BookingRepository(
                 if (result.outcome == ROOM_CONFLICT_OUTCOME) {
                     handleRejectedRoomConflict(
                         operation = operation,
-                        sentBooking = sentBooking
+                        sentBooking = sentBooking,
+                        rejectedChangeSet = changeSet
                     )
                 } else {
                     acknowledgeBookingAggregate(operation, sentBooking, lines, result)
@@ -1993,12 +2016,24 @@ class BookingRepository(
 
     private suspend fun handleRejectedRoomConflict(
         operation: BookingSyncOutboxEntity,
-        sentBooking: BookingEntity
+        sentBooking: BookingEntity,
+        rejectedChangeSet: BookingChangeSet
     ) {
         db.withTransaction {
-            // This exact room assignment has been rejected permanently.
-            // Retire only this operation; a newer user edit must remain eligible to sync.
-            bookingSyncOutboxDao.delete(operation.operationId)
+            if (rejectedChangeSet.create) {
+                // A rejected new booking does not exist on the server. Retire this exact
+                // create command; a later local room change can recover through NOT_FOUND
+                // fallback as a fresh full create.
+                bookingSyncOutboxDao.delete(operation.operationId)
+            } else {
+                // An existing booking still exists on the server in its prior state.
+                // Keep the rejected delta as the authoritative baseline for the user's
+                // next manual decision, but mark it so automatic retry will pause it.
+                bookingSyncOutboxDao.markFailed(
+                    operation.operationId,
+                    ROOM_CONFLICT_REQUIRES_ACTION
+                )
+            }
 
             val currentBooking = bookingDao.getByRemoteId(operation.bookingRemoteId)
                 ?: return@withTransaction
@@ -2011,6 +2046,72 @@ class BookingRepository(
                 currentBooking.revision,
                 currentBooking.baseRevision
             )
+
+            if (!rejectedChangeSet.create && !unchangedSinceSend) {
+                // The receptionist acted while this request was in flight. The server has
+                // now confirmed the rejected delta was not applied, so combine it with any
+                // newer local commands immediately rather than leaving the booking stuck.
+                val bookingOperations = bookingSyncOutboxDao.getPending(hotelRemoteId)
+                    .filter { it.bookingRemoteId == operation.bookingRemoteId }
+                    .sortedWith(
+                        compareBy<BookingSyncOutboxEntity> { it.createdAt }
+                            .thenBy { it.operationId }
+                    )
+                val rejectedOperationIndex = bookingOperations.indexOfFirst {
+                    it.operationId == operation.operationId
+                }
+                val laterOperations = if (rejectedOperationIndex >= 0) {
+                    bookingOperations.drop(rejectedOperationIndex + 1)
+                } else {
+                    emptyList()
+                }
+
+                if (laterOperations.isNotEmpty()) {
+                    val laterChangeSets = laterOperations.map { pending ->
+                        BookingChangeSet.fromJson(pending.changeSetJson)
+                    }
+
+                    val recoveryChangeSet =
+                        if (currentBooking.bookingStatus == BookingStatus.CANCELLED) {
+                            val cancellationIndex = laterChangeSets.indexOfFirst { pending ->
+                                pending.setFields["bookingStatus"] == BookingStatus.CANCELLED
+                            }
+
+                            if (cancellationIndex >= 0) {
+                                val cancellationChanges = laterChangeSets.drop(cancellationIndex)
+                                cancellationChanges
+                                    .drop(1)
+                                    .fold(cancellationChanges.first()) { accumulated, next ->
+                                        accumulated.followedBy(next)
+                                    }
+                            } else {
+                                laterChangeSets.fold(rejectedChangeSet) { accumulated, next ->
+                                    accumulated.followedBy(next)
+                                }
+                            }
+                        } else {
+                            laterChangeSets.fold(rejectedChangeSet) { accumulated, next ->
+                                accumulated.followedBy(next)
+                            }
+                        }
+
+                    bookingSyncOutboxDao.delete(operation.operationId)
+                    laterOperations.forEach { pending ->
+                        bookingSyncOutboxDao.delete(pending.operationId)
+                    }
+                    bookingSyncOutboxDao.upsert(
+                        BookingSyncOutboxEntity(
+                            operationId = UUID.randomUUID().toString(),
+                            hotelRemoteId = hotelRemoteId,
+                            bookingRemoteId = operation.bookingRemoteId,
+                            changeSetJson = recoveryChangeSet.toJson(),
+                            createdAt = currentBooking.updatedAt.takeIf { it > 0 }
+                                ?: System.currentTimeMillis()
+                        )
+                    )
+                    return@withTransaction
+                }
+            }
 
             // If the user already moved/edited the booking, do not overwrite that newer decision.
             if (!unchangedSinceSend) return@withTransaction
@@ -2777,12 +2878,57 @@ class BookingRepository(
         lines: List<BookingFinancialLineEntity>
     ) {
         val changeSet = BookingChangeSet.create(previous, booking, lines, lines)
+        enqueueBookingChangeSet(booking, changeSet)
+    }
+
+    private suspend fun enqueueBookingChangeSet(
+        booking: BookingEntity,
+        changeSet: BookingChangeSet
+    ) {
+        val bookingOperations = bookingSyncOutboxDao.getPending(hotelRemoteId)
+            .filter { it.bookingRemoteId == booking.remoteId }
+            .sortedWith(compareBy<BookingSyncOutboxEntity> { it.createdAt }.thenBy { it.operationId })
+
+        val blockedIndex = bookingOperations.indexOfFirst {
+            it.lastError == ROOM_CONFLICT_REQUIRES_ACTION
+        }
+
+        val effectiveChangeSet = if (blockedIndex >= 0) {
+            val blockedAndLater = bookingOperations.drop(blockedIndex)
+            val isCancellation =
+                changeSet.setFields["bookingStatus"] == BookingStatus.CANCELLED
+
+            val composed = if (isCancellation) {
+                // A rejected room move never becomes historical truth just because the
+                // receptionist later cancels. Apply the normal cancellation delta to
+                // the authoritative server booking and leave its prior room unchanged.
+                changeSet
+            } else {
+                val pendingChanges = blockedAndLater.map { pending ->
+                    BookingChangeSet.fromJson(pending.changeSetJson)
+                }
+                pendingChanges
+                    .drop(1)
+                    .fold(pendingChanges.first()) { accumulated, next ->
+                        accumulated.followedBy(next)
+                    }
+                    .followedBy(changeSet)
+            }
+
+            blockedAndLater.forEach { pending ->
+                bookingSyncOutboxDao.delete(pending.operationId)
+            }
+            composed
+        } else {
+            changeSet
+        }
+
         bookingSyncOutboxDao.upsert(
             BookingSyncOutboxEntity(
                 operationId = UUID.randomUUID().toString(),
                 hotelRemoteId = hotelRemoteId,
                 bookingRemoteId = booking.remoteId,
-                changeSetJson = changeSet.toJson(),
+                changeSetJson = effectiveChangeSet.toJson(),
                 createdAt = booking.updatedAt.takeIf { it > 0 } ?: System.currentTimeMillis()
             )
         )

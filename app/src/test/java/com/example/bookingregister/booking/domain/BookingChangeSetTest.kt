@@ -34,6 +34,33 @@ class BookingChangeSetTest {
     }
 
     @Test
+    fun `rejected room move followed by another room choice keeps original server baseline`() {
+        val serverState = booking(3_000.0, listOf("H101"))
+        val rejectedLocalState = booking(3_000.0, listOf("H102"))
+        val finalLocalState = booking(3_000.0, listOf("H103"))
+
+        val rejectedMove = BookingChangeSet.create(
+            serverState,
+            rejectedLocalState,
+            emptyList(),
+            emptyList()
+        )
+        val nextMove = BookingChangeSet.create(
+            rejectedLocalState,
+            finalLocalState,
+            emptyList(),
+            emptyList()
+        )
+
+        val combined = rejectedMove.followedBy(nextMove)
+
+        assertEquals(listOf("H103"), combined.addRoomRemoteIds)
+        assertEquals(listOf("H101"), combined.removeRoomRemoteIds)
+        assertFalse(combined.addRoomRemoteIds.contains("H102"))
+        assertFalse(combined.removeRoomRemoteIds.contains("H102"))
+        assertFalse(combined.create)
+    }
+    @Test
     fun `cancellation settlement decision is synced without rebuilding room charges`() {
         val previous = booking(3_000.0, listOf("H101"))
         val requested = previous.copy(

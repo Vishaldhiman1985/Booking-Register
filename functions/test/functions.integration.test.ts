@@ -319,7 +319,7 @@ describe("Firebase callable Functions integration", () => {
     expect(audit.exists).toBe(true);
     expect(audit.get("action")).toBe("CREATE_REJECTED_ROOM_CONFLICT");
   }, 10_000);
-  test("protocol v1 preserves an existing booking when its edit conflicts with another booking", async () => {
+  test("protocol v1 records an existing-booking room conflict without changing the booking", async () => {
     const client = await createClient();
     await seedMembership(client.auth.currentUser!.uid);
     await seedRoom("H101", "property-a");
@@ -356,7 +356,7 @@ describe("Firebase callable Functions integration", () => {
       },
     });
 
-    await expectFunctionError(client.call("applyBookingChangeSetServer", {
+    const conflictPayload = {
       hotelId: "hotel-a",
       operationId: "existing-edit-conflict-v1",
       deviceId: "device-b",
@@ -371,6 +371,31 @@ describe("Firebase callable Functions integration", () => {
         financialLineTemplate: { gstRatePercent: 5 },
         financialLineRemoteIdsByKey: {},
       },
+    };
+
+    const rejected = await client.call(
+      "applyBookingChangeSetServer",
+      conflictPayload
+    ) as Record<string, unknown>;
+
+    expect(rejected.outcome).toBe("REJECTED_ROOM_CONFLICT");
+    expect(rejected.alreadyApplied).toBe(false);
+    expect(rejected.blockingBookingRemoteIds).toEqual(["booking-existing-edit-owner"]);
+
+    const replay = await client.call(
+      "applyBookingChangeSetServer",
+      conflictPayload
+    ) as Record<string, unknown>;
+
+    expect(replay.outcome).toBe("REJECTED_ROOM_CONFLICT");
+    expect(replay.alreadyApplied).toBe(true);
+    expect(replay.blockingBookingRemoteIds).toEqual(["booking-existing-edit-owner"]);
+
+    await expectFunctionError(client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "existing-edit-conflict-v1",
+      deviceId: "legacy-device",
+      changeSet: conflictPayload.changeSet,
     }), "already-exists");
 
     const db = getFirestore(adminApp);
@@ -378,8 +403,19 @@ describe("Firebase callable Functions integration", () => {
 
     expect(existingBooking.exists).toBe(true);
     expect(new Set(existingBooking.get("roomRemoteIds"))).toEqual(new Set(["H102"]));
-    expect((await db.doc("hotels/hotel-a/appliedBookingChangeSets/existing-edit-conflict-v1").get()).exists).toBe(false);
-    expect((await db.doc("hotels/hotel-a/bookingAuditEvents/existing-edit-conflict-v1").get()).exists).toBe(false);
+
+    const mutation = await db.doc(
+      "hotels/hotel-a/appliedBookingChangeSets/existing-edit-conflict-v1"
+    ).get();
+    expect(mutation.exists).toBe(true);
+    expect(mutation.get("outcome")).toBe("REJECTED_ROOM_CONFLICT");
+    expect(mutation.get("blockingBookingRemoteIds")).toEqual(["booking-existing-edit-owner"]);
+
+    const audit = await db.doc(
+      "hotels/hotel-a/bookingAuditEvents/existing-edit-conflict-v1"
+    ).get();
+    expect(audit.exists).toBe(true);
+    expect(audit.get("action")).toBe("UPDATE_REJECTED_ROOM_CONFLICT");
   }, 10_000);
   test("a missing cloud booking can be recovered with the same operation ID without partial writes", async () => {
     const client = await createClient();

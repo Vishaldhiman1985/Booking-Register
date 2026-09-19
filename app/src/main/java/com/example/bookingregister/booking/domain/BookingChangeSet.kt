@@ -35,6 +35,47 @@ data class BookingChangeSet(
 
     fun toJson(): String = Gson().toJson(toMap())
 
+    fun followedBy(next: BookingChangeSet): BookingChangeSet {
+        require(bookingRemoteId == next.bookingRemoteId) {
+            "Cannot combine booking changes for different bookings."
+        }
+
+        val firstAdds = addRoomRemoteIds.toSet()
+        val firstRemoves = removeRoomRemoteIds.toSet()
+        val nextAdds = next.addRoomRemoteIds.toSet()
+        val nextRemoves = next.removeRoomRemoteIds.toSet()
+
+        val combinedFields = linkedMapOf<String, Any?>().apply {
+            putAll(setFields)
+            putAll(next.setFields)
+        }
+
+        val nextDefinesFinancialShape = next.rebuildFinancialLines
+
+        return copy(
+            setFields = combinedFields,
+            addRoomRemoteIds = (
+                (firstAdds - nextRemoves) +
+                    (nextAdds - firstRemoves)
+                ).sorted(),
+            removeRoomRemoteIds = (
+                (firstRemoves - nextAdds) +
+                    (nextRemoves - firstAdds)
+                ).sorted(),
+            rebuildFinancialLines = rebuildFinancialLines || next.rebuildFinancialLines,
+            financialLineTemplate = if (nextDefinesFinancialShape) {
+                next.financialLineTemplate
+            } else {
+                financialLineTemplate
+            },
+            financialLineRemoteIdsByKey = if (nextDefinesFinancialShape) {
+                next.financialLineRemoteIdsByKey
+            } else {
+                financialLineRemoteIdsByKey
+            }
+        )
+    }
+
     companion object {
         fun create(
             previous: BookingEntity?,
