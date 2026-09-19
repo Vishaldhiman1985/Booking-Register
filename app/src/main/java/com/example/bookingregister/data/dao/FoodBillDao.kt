@@ -101,6 +101,16 @@ interface FoodBillDao {
     """)
     suspend fun getFinalBillForBooking(hotelRemoteId: String, remoteIdPrefix: String): FoodBillEntity?
 
+    @Query("""
+        SELECT COUNT(*) FROM food_bills
+        WHERE hotelRemoteId = :hotelRemoteId
+        AND remoteId LIKE :remoteIdPrefix || '%'
+    """)
+    suspend fun countAnyBillsWithRemoteIdPrefix(
+        hotelRemoteId: String,
+        remoteIdPrefix: String
+    ): Int
+
     @Query("SELECT COUNT(*) FROM food_bills WHERE hotelRemoteId = :hotelRemoteId")
     suspend fun countAllBills(hotelRemoteId: String): Int
 

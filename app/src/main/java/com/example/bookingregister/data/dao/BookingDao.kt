@@ -86,6 +86,13 @@ interface BookingDao {
     suspend fun softDelete(remoteId: String, updatedAt: Long = System.currentTimeMillis())
 
     @Query("""
+        DELETE FROM bookings
+        WHERE hotelRemoteId = :hotelRemoteId
+        AND remoteId = :remoteId
+    """)
+    suspend fun hardDeleteLocalOnly(hotelRemoteId: String, remoteId: String)
+
+    @Query("""
         SELECT * FROM bookings
         WHERE hotelRemoteId = :hotelRemoteId
         AND isDeleted = 0

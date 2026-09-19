@@ -30,6 +30,16 @@ interface BookingAccountingChargeDao {
     ): List<BookingAccountingChargeEntity>
 
     @Query("""
+        SELECT COUNT(*) FROM booking_accounting_charges
+        WHERE hotelRemoteId = :hotelRemoteId
+        AND bookingRemoteId = :bookingRemoteId
+    """)
+    suspend fun countAnyChargesForBooking(
+        hotelRemoteId: String,
+        bookingRemoteId: String
+    ): Int
+
+    @Query("""
         SELECT * FROM booking_accounting_charges
         WHERE hotelRemoteId = :hotelRemoteId
         AND syncState != 'SYNCED'

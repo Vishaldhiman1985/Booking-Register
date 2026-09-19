@@ -48,6 +48,13 @@ interface BookingPaymentDao {
     """)
     suspend fun countPaymentsForBooking(hotelRemoteId: String, bookingRemoteId: String): Int
 
+    @Query("""
+        SELECT COUNT(*) FROM booking_payments
+        WHERE hotelRemoteId = :hotelRemoteId
+        AND bookingRemoteId = :bookingRemoteId
+    """)
+    suspend fun countAnyPaymentsForBooking(hotelRemoteId: String, bookingRemoteId: String): Int
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(payment: BookingPaymentEntity)
 

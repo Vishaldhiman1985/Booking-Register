@@ -120,6 +120,13 @@ interface BookingFinancialLineDao {
         businessDateMillis: Long
     ): BookingFinancialLineEntity?
 
+    @Query("""
+        DELETE FROM booking_financial_lines
+        WHERE hotelRemoteId = :hotelRemoteId
+        AND bookingRemoteId = :bookingRemoteId
+    """)
+    suspend fun hardDeleteForBooking(hotelRemoteId: String, bookingRemoteId: String)
+
     @Query("DELETE FROM booking_financial_lines WHERE localId = :localId")
     suspend fun hardDeleteByLocalId(localId: Long)
 }

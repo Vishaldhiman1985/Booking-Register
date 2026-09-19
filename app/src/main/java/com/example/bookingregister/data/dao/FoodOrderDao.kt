@@ -37,6 +37,13 @@ interface FoodOrderDao {
         ORDER BY orderMillis ASC
     """)
     suspend fun getOrdersForBooking(hotelRemoteId: String, bookingRemoteId: String): List<FoodOrderEntity>
+
+    @Query("""
+        SELECT COUNT(*) FROM food_orders
+        WHERE hotelRemoteId = :hotelRemoteId
+        AND bookingRemoteId = :bookingRemoteId
+    """)
+    suspend fun countAnyOrdersForBooking(hotelRemoteId: String, bookingRemoteId: String): Int
     @Query("SELECT * FROM food_orders WHERE remoteId = :remoteId LIMIT 1")
     suspend fun getByRemoteId(remoteId: String): FoodOrderEntity?
 

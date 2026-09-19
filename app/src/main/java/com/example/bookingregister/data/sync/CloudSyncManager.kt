@@ -27,7 +27,9 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FieldPath
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Source
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.functions.FirebaseFunctions
@@ -37,6 +39,15 @@ import com.google.firebase.functions.HttpsCallableResult
 import kotlinx.coroutines.tasks.await
 import java.util.Calendar
 import java.util.Locale
+
+data class RoomConflictServerState(
+    val bookingDocumentExists: Boolean,
+    val serverBookingRoomRemoteIds: List<String>,
+    val serverRooms: List<RoomEntity>,
+    val overlappingBookings: List<BookingEntity>,
+    val hasServerBusinessHistory: Boolean,
+    val hasRejectedCreateAudit: Boolean
+)
 
 class CloudSyncManager(
     private val hotelRemoteId: String
@@ -76,6 +87,119 @@ class CloudSyncManager(
         val data = response.data as? Map<*, *>
         return data?.get("billNumber") as? String
             ?: error("Invoice number reservation failed")
+    }
+
+    suspend fun loadRoomConflictServerState(
+        bookingRemoteId: String,
+        checkInMillis: Long,
+        checkOutMillis: Long
+    ): RoomConflictServerState {
+        require(bookingRemoteId.isNotBlank()) { "Booking ID is missing." }
+        require(checkOutMillis > checkInMillis) { "Check-out must be after check-in." }
+
+        val bookingTask = hotelDoc.collection("bookings")
+            .document(bookingRemoteId)
+            .get(Source.SERVER)
+        val roomsTask = hotelDoc.collection("rooms")
+            .get(Source.SERVER)
+        val overlappingTask = hotelDoc.collection("bookings")
+            .whereGreaterThan("checkOutMillis", checkInMillis)
+            .get(Source.SERVER)
+
+        val paymentTask = hotelDoc.collection("bookingPayments")
+            .whereEqualTo("bookingRemoteId", bookingRemoteId)
+            .limit(1)
+            .get(Source.SERVER)
+        val financialLineTask = hotelDoc.collection("bookingFinancialLines")
+            .whereEqualTo("bookingRemoteId", bookingRemoteId)
+            .limit(1)
+            .get(Source.SERVER)
+        val accountingTask = hotelDoc.collection("bookingAccountingCharges")
+            .whereEqualTo("bookingRemoteId", bookingRemoteId)
+            .limit(1)
+            .get(Source.SERVER)
+        val foodOrderTask = hotelDoc.collection("foodOrders")
+            .whereEqualTo("bookingRemoteId", bookingRemoteId)
+            .limit(1)
+            .get(Source.SERVER)
+
+        val finalBillPrefix = "${bookingRemoteId}_final_bill_"
+        val finalBillTask = hotelDoc.collection("foodBills")
+            .whereGreaterThanOrEqualTo(FieldPath.documentId(), finalBillPrefix)
+            .whereLessThan(FieldPath.documentId(), "${finalBillPrefix}\uf8ff")
+            .limit(1)
+            .get(Source.SERVER)
+        val conflictAuditTask = hotelDoc.collection("bookingAuditEvents")
+            .whereEqualTo("bookingRemoteId", bookingRemoteId)
+            .get(Source.SERVER)
+
+        val bookingSnapshot = bookingTask.await()
+        val roomSnapshot = roomsTask.await()
+        val overlappingSnapshot = overlappingTask.await()
+        val paymentSnapshot = paymentTask.await()
+        val financialLineSnapshot = financialLineTask.await()
+        val accountingSnapshot = accountingTask.await()
+        val foodOrderSnapshot = foodOrderTask.await()
+        val finalBillSnapshot = finalBillTask.await()
+        val conflictAuditSnapshot = conflictAuditTask.await()
+
+        val serverRooms = roomSnapshot.documents.mapNotNull { doc ->
+            val roomName = doc.getStringCompat("roomName") ?: return@mapNotNull null
+            RoomEntity(
+                remoteId = doc.id,
+                hotelRemoteId = doc.getStringCompat("hotelRemoteId") ?: hotelRemoteId,
+                roomName = roomName,
+                categoryName = doc.getStringCompat("categoryName").orEmpty(),
+                categoryColor = doc.getStringCompat("categoryColor") ?: "#EEF0F2",
+                categorySortOrder = doc.getLongCompat("categorySortOrder")?.toInt() ?: 0,
+                propertyRemoteId = doc.getStringCompat("propertyRemoteId"),
+                sortOrder = doc.getLongCompat("sortOrder")?.toInt() ?: 0,
+                lifecycleStatus = doc.getStringCompat("lifecycleStatus") ?: "ACTIVE",
+                lifecycleReason = doc.getStringCompat("lifecycleReason"),
+                disabledAtMillis = doc.getLongCompat("disabledAtMillis"),
+                retiredAtMillis = doc.getLongCompat("retiredAtMillis"),
+                updatedAt = doc.getLongCompat("updatedAt") ?: System.currentTimeMillis(),
+                isDeleted = doc.getBooleanCompat("isDeleted") ?: false,
+                syncState = SyncState.SYNCED,
+                lastSyncError = null,
+                lastSyncedAt = System.currentTimeMillis(),
+                revision = doc.getLongCompat("revision") ?: 0,
+                baseRevision = doc.getLongCompat("revision") ?: 0,
+                updatedByUid = doc.getStringCompat("updatedByUid")
+            )
+        }
+
+        val overlappingBookings = overlappingSnapshot.documents.mapNotNull { doc ->
+            if (doc.getBooleanCompat("isDeleted") == true) return@mapNotNull null
+            if (doc.getStringCompat("bookingStatus") == BookingStatus.CANCELLED) return@mapNotNull null
+
+            val existingCheckIn = doc.getLongCompat("checkInMillis") ?: return@mapNotNull null
+            val existingCheckOut = doc.getLongCompat("checkOutMillis") ?: return@mapNotNull null
+            if (existingCheckIn >= checkOutMillis || existingCheckOut <= checkInMillis) {
+                return@mapNotNull null
+            }
+            doc.toBookingEntity()
+        }
+
+        val serverBookingRoomRemoteIds = (bookingSnapshot.get("roomRemoteIds") as? List<*>)
+            ?.mapNotNull { it as? String }
+            .orEmpty()
+
+        return RoomConflictServerState(
+            bookingDocumentExists = bookingSnapshot.exists(),
+            serverBookingRoomRemoteIds = serverBookingRoomRemoteIds,
+            serverRooms = serverRooms,
+            overlappingBookings = overlappingBookings,
+            hasServerBusinessHistory =
+                paymentSnapshot.documents.isNotEmpty() ||
+                    financialLineSnapshot.documents.isNotEmpty() ||
+                    accountingSnapshot.documents.isNotEmpty() ||
+                    foodOrderSnapshot.documents.isNotEmpty() ||
+                    finalBillSnapshot.documents.isNotEmpty(),
+            hasRejectedCreateAudit = conflictAuditSnapshot.documents.any { audit ->
+                audit.getStringCompat("action") == "CREATE_REJECTED_ROOM_CONFLICT"
+            }
+        )
     }
 
     fun startHotelListener(

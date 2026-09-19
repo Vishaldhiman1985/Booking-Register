@@ -29,6 +29,8 @@ import com.example.bookingregister.account.domain.AccountPermission
 import com.example.bookingregister.account.domain.BackendAccessManager
 import com.example.bookingregister.data.AppDatabase
 import com.example.bookingregister.data.repository.BookingRepository
+import com.example.bookingregister.data.repository.RoomConflictPlanResult
+import com.example.bookingregister.data.repository.RoomConflictResolutionPlan
 import com.example.bookingregister.data.repository.SaveResult
 import com.example.bookingregister.data.entities.BookingAccountingChargeEntity
 import com.example.bookingregister.data.entities.BookingEntity
@@ -2168,6 +2170,8 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
     private fun showSyncStatusDialog() {
         val failedItems = mutableListOf<String>()
         var hasNetworkFailure = false
+        val roomConflictBookings = visibleAndUnsyncedBookings()
+            .filter { repository.isRoomConflictBooking(it) }
 
         fun addFailedItem(label: String, error: String?) {
             val friendlyError = friendlySyncError(error) ?: return
@@ -2196,9 +2200,11 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             addFailedItem("Source ${it.sourceName}", it.lastSyncError ?: "Sync failed")
         }
 
-        visibleAndUnsyncedBookings().filter { it.syncState == "FAILED" }.forEach {
-            addFailedItem("Booking ${it.guestName}", it.lastSyncError ?: "Sync failed")
-        }
+        visibleAndUnsyncedBookings()
+            .filter { it.syncState == "FAILED" && !repository.isRoomConflictBooking(it) }
+            .forEach {
+                addFailedItem("Booking ${it.guestName}", it.lastSyncError ?: "Sync failed")
+            }
 
         unsyncedPayments.filter { it.syncState == "FAILED" }.forEach {
             addFailedItem("Payment ${formatMoneyShort(it.amount)}", it.lastSyncError ?: "Sync failed")
@@ -2209,6 +2215,10 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         foodOrderItems.filter { it.syncState == "FAILED" }.forEach { addFailedItem("Food item ${it.itemName}", it.lastSyncError) }
         foodBills.filter { it.syncState == "FAILED" }.forEach { addFailedItem("Bill ${it.billNumber}", it.lastSyncError) }
         foodBillItems.filter { it.syncState == "FAILED" }.forEach { addFailedItem("Bill item ${it.itemName}", it.lastSyncError) }
+
+        val conflictMessages = roomConflictBookings.map { booking ->
+            "Booking ${booking.guestName}: This room is already booked for these dates. Tap Fix Booking."
+        }
 
         val pendingItems = mutableListOf<String>()
 
@@ -2243,6 +2253,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         foodBillItems.filter { it.syncState == "PENDING" }.forEach { pendingItems.add("Bill item: ${it.itemName}") }
 
         val failureMessage = buildList {
+            addAll(conflictMessages)
             if (hasNetworkFailure) {
                 add("Internet connection is unavailable. Changes are saved on this device and will retry automatically.")
             }
@@ -2259,13 +2270,296 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             .setTitle("Sync Status")
             .setMessage(message)
 
-        builder.setPositiveButton("Retry Sync") { _, _ ->
-            lifecycleScope.launch {
-                repository.retryFailedSync(force = true)
-                Toast.makeText(this@BookingChartActivity, "Retrying sync...", Toast.LENGTH_SHORT).show()
+        if (roomConflictBookings.isNotEmpty()) {
+            builder.setPositiveButton("Fix Booking") { _, _ ->
+                showRoomConflictBookingPicker(roomConflictBookings)
+            }
+            if (hasNetworkFailure || failedItems.isNotEmpty()) {
+                builder.setNeutralButton("Retry Other Sync") { _, _ ->
+                    lifecycleScope.launch {
+                        repository.retryFailedSync(force = true)
+                        Toast.makeText(
+                            this@BookingChartActivity,
+                            "Retrying other saved changes...",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            }
+        } else {
+            builder.setPositiveButton("Retry Sync") { _, _ ->
+                lifecycleScope.launch {
+                    repository.retryFailedSync(force = true)
+                    Toast.makeText(
+                        this@BookingChartActivity,
+                        "Retrying sync...",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
             }
         }
+
+        builder
             .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showRoomConflictBookingPicker(conflicts: List<BookingEntity>) {
+        if (conflicts.size == 1) {
+            openRoomConflictResolution(conflicts.first())
+            return
+        }
+
+        val labels = conflicts.map { booking ->
+            val roomNames = rooms
+                .filter { booking.roomRemoteIds.contains(it.remoteId) }
+                .joinToString(", ") { it.roomName }
+                .ifBlank { "Room needs attention" }
+            "${booking.guestName} - $roomNames"
+        }.toTypedArray()
+
+        AlertDialog.Builder(this)
+            .setTitle("Choose Booking to Fix")
+            .setItems(labels) { _, index ->
+                openRoomConflictResolution(conflicts[index])
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun openRoomConflictResolution(booking: BookingEntity) {
+        if (AccountPermission.EDIT_BOOKINGS !in currentPermissions) {
+            Toast.makeText(
+                this,
+                "You do not have permission to change bookings.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        Toast.makeText(this, "Checking free rooms...", Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            when (val result = repository.loadRoomConflictResolutionPlan(booking.remoteId)) {
+                is RoomConflictPlanResult.Ready ->
+                    showRoomConflictResolutionActions(booking, result.plan)
+                is RoomConflictPlanResult.Error ->
+                    Toast.makeText(
+                        this@BookingChartActivity,
+                        result.message,
+                        Toast.LENGTH_LONG
+                    ).show()
+            }
+        }
+    }
+
+    private fun showRoomConflictResolutionActions(
+        booking: BookingEntity,
+        plan: RoomConflictResolutionPlan
+    ) {
+        val enoughRooms = plan.availableRooms.size >= plan.requiredRoomCount
+        val roomMessage = when {
+            plan.roomMoveBlockedReason != null -> plan.roomMoveBlockedReason
+            enoughRooms && plan.serverBookingExists ->
+                "The main-system room is pre-selected if it is still free. Keep it or choose another free room."
+            enoughRooms ->
+                "Choose a free room for the same dates. Guest details and money will not be changed."
+            else ->
+                "No suitable free room is available right now. You can close this and try again later."
+        }
+
+        val message = buildString {
+            append(roomMessage)
+            if (plan.canRemoveLocalBooking) {
+                append("\n\nThis rejected copy never reached the main system. You may also remove it.")
+            } else if (!plan.removalBlockedReason.isNullOrBlank() && !plan.serverBookingExists) {
+                append("\n\n")
+                append(plan.removalBlockedReason)
+            }
+        }
+
+        val builder = AlertDialog.Builder(this)
+            .setTitle("Fix Booking - ${booking.guestName}")
+            .setMessage(message)
+            .setNegativeButton("Close", null)
+
+        if (enoughRooms && plan.roomMoveBlockedReason == null) {
+            builder.setPositiveButton("Choose Room") { _, _ ->
+                showRoomConflictRoomPicker(booking, plan)
+            }
+        }
+
+        if (plan.canRemoveLocalBooking) {
+            builder.setNeutralButton("Remove Booking") { _, _ ->
+                confirmRemoveRejectedLocalBooking(booking)
+            }
+        }
+
+        builder.show()
+    }
+
+    private fun showRoomConflictRoomPicker(
+        booking: BookingEntity,
+        plan: RoomConflictResolutionPlan
+    ) {
+        val availableRooms = plan.availableRooms
+        val requiredCount = plan.requiredRoomCount
+        if (availableRooms.size < requiredCount) {
+            Toast.makeText(
+                this,
+                "Not enough free rooms are available right now.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        val labels = availableRooms.map { it.roomName }.toTypedArray()
+        val initialIds = plan.initialSelectedRoomRemoteIds
+            .filter { selectedId -> availableRooms.any { it.remoteId == selectedId } }
+            .take(requiredCount)
+
+        if (requiredCount == 1) {
+            var selectedId: String? = initialIds.firstOrNull()
+            val initialIndex = availableRooms.indexOfFirst { it.remoteId == selectedId }
+            val dialog = AlertDialog.Builder(this)
+                .setTitle("Choose Available Room")
+                .setSingleChoiceItems(labels, initialIndex) { _, which ->
+                    selectedId = availableRooms[which].remoteId
+                }
+                .setPositiveButton("Save Room", null)
+                .setNegativeButton("Cancel", null)
+                .create()
+
+            dialog.setOnShowListener {
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                    val roomId = selectedId
+                    if (roomId == null) {
+                        Toast.makeText(this, "Please choose one room.", Toast.LENGTH_SHORT).show()
+                    } else {
+                        saveRoomConflictSelection(booking, listOf(roomId), dialog)
+                    }
+                }
+            }
+            dialog.show()
+            return
+        }
+
+        val selectedIds = linkedSetOf<String>().apply { addAll(initialIds) }
+        val checked = BooleanArray(availableRooms.size) { index ->
+            availableRooms[index].remoteId in selectedIds
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Choose $requiredCount Available Rooms")
+            .setMultiChoiceItems(labels, checked) { alert, which, isChecked ->
+                val roomId = availableRooms[which].remoteId
+                if (isChecked) {
+                    if (selectedIds.size >= requiredCount) {
+                        (alert as? AlertDialog)?.listView?.setItemChecked(which, false)
+                        Toast.makeText(
+                            this,
+                            "This booking needs exactly $requiredCount rooms.",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        selectedIds.add(roomId)
+                    }
+                } else {
+                    selectedIds.remove(roomId)
+                }
+            }
+            .setPositiveButton("Save Rooms", null)
+            .setNegativeButton("Cancel", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (selectedIds.size != requiredCount) {
+                    Toast.makeText(
+                        this,
+                        "Please select exactly $requiredCount rooms.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                } else {
+                    saveRoomConflictSelection(booking, selectedIds.toList(), dialog)
+                }
+            }
+        }
+        dialog.show()
+    }
+
+    private fun saveRoomConflictSelection(
+        booking: BookingEntity,
+        selectedRoomRemoteIds: List<String>,
+        dialog: AlertDialog
+    ) {
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
+        lifecycleScope.launch {
+            when (
+                val result = repository.resolveRoomConflictRooms(
+                    booking.remoteId,
+                    selectedRoomRemoteIds
+                )
+            ) {
+                is SaveResult.Success -> {
+                    Toast.makeText(
+                        this@BookingChartActivity,
+                        "Room choice saved. It will sync now.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    dialog.dismiss()
+                }
+                is SaveResult.Conflict -> {
+                    Toast.makeText(
+                        this@BookingChartActivity,
+                        result.message,
+                        Toast.LENGTH_LONG
+                    ).show()
+                    dialog.dismiss()
+                    openRoomConflictResolution(booking)
+                }
+                is SaveResult.Error -> {
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
+                    Toast.makeText(
+                        this@BookingChartActivity,
+                        result.message,
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    private fun confirmRemoveRejectedLocalBooking(booking: BookingEntity) {
+        AlertDialog.Builder(this)
+            .setTitle("Remove Rejected Booking?")
+            .setMessage(
+                "The app will check the main system again first. " +
+                    "Only a rejected copy that never reached the main system and has no payment, food, service, or bill history can be removed."
+            )
+            .setPositiveButton("Remove") { _, _ ->
+                lifecycleScope.launch {
+                    when (val result = repository.removeRejectedLocalBooking(booking.remoteId)) {
+                        is SaveResult.Success ->
+                            Toast.makeText(
+                                this@BookingChartActivity,
+                                "Rejected booking removed. No main-system booking was deleted.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        is SaveResult.Conflict ->
+                            Toast.makeText(
+                                this@BookingChartActivity,
+                                result.message,
+                                Toast.LENGTH_LONG
+                            ).show()
+                        is SaveResult.Error ->
+                            Toast.makeText(
+                                this@BookingChartActivity,
+                                result.message,
+                                Toast.LENGTH_LONG
+                            ).show()
+                    }
+                }
+            }
+            .setNegativeButton("Keep Booking", null)
             .show()
     }
 

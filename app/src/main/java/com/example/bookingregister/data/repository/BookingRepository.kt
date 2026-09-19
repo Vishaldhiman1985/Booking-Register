@@ -21,6 +21,7 @@ import com.example.bookingregister.booking.domain.BilledRoomRateLockPolicy
 import com.example.bookingregister.booking.domain.BookingPaymentSourcePolicy
 import com.example.bookingregister.booking.domain.BookingPricingStatus
 import com.example.bookingregister.booking.domain.BookingPropertyPolicy
+import com.example.bookingregister.booking.domain.RoomConflictResolutionPolicy
 import com.example.bookingregister.booking.domain.BookingChangeSet
 import com.example.bookingregister.booking.domain.DerivedBookingCachePolicy
 import com.example.bookingregister.booking.domain.CheckoutBalancePolicy
@@ -153,6 +154,374 @@ class BookingRepository(
 
     suspend fun getBookingsForWindow(startMillis: Long, endMillis: Long): List<BookingEntity> =
         bookingDao.getBookingsForWindow(hotelRemoteId, startMillis, endMillis)
+
+    fun isRoomConflictError(message: String?): Boolean =
+        message == ROOM_CONFLICT_REQUIRES_ACTION
+
+    fun isRoomConflictBooking(booking: BookingEntity): Boolean =
+        booking.syncState == SyncState.FAILED && isRoomConflictError(booking.lastSyncError)
+
+    suspend fun loadRoomConflictResolutionPlan(
+        bookingRemoteId: String
+    ): RoomConflictPlanResult {
+        val current = bookingDao.getByRemoteId(bookingRemoteId)
+            ?: return RoomConflictPlanResult.Error("Booking not found.")
+
+        if (!isRoomConflictBooking(current)) {
+            return RoomConflictPlanResult.Error("This booking no longer needs room fixing.")
+        }
+
+        val serverState = try {
+            cloudSyncManager.loadRoomConflictServerState(
+                bookingRemoteId = current.remoteId,
+                checkInMillis = current.checkInMillis,
+                checkOutMillis = current.checkOutMillis
+            )
+        } catch (_: Exception) {
+            return RoomConflictPlanResult.Error(
+                "Could not check the latest room status. Please check internet and try again. Nothing was changed."
+            )
+        }
+
+        val localRooms = roomDao.getRooms(hotelRemoteId)
+        val localOverlappingBookings = bookingDao.getOverlappingBookings(
+            hotelRemoteId = hotelRemoteId,
+            checkInMillis = current.checkInMillis,
+            checkOutMillis = current.checkOutMillis
+        ).filter { it.remoteId != current.remoteId }
+        val propertyRemoteId = current.propertyRemoteId?.takeIf { it.isNotBlank() }
+            ?: bookingPropertyForRooms(current.roomRemoteIds)
+
+        val availableOnServer = RoomConflictResolutionPolicy.availableRooms(
+            hotelRemoteId = hotelRemoteId,
+            propertyRemoteId = propertyRemoteId,
+            bookingRemoteId = current.remoteId,
+            checkInMillis = current.checkInMillis,
+            checkOutMillis = current.checkOutMillis,
+            serverRooms = serverState.serverRooms,
+            serverBookings = serverState.overlappingBookings + localOverlappingBookings
+        )
+        val availableServerIds = availableOnServer.map { it.remoteId }.toSet()
+        val availableRooms = localRooms
+            .filter { it.remoteId in availableServerIds }
+            .sortedWith(
+                compareBy<RoomEntity> { it.categorySortOrder }
+                    .thenBy { it.categoryName }
+                    .thenBy { it.sortOrder }
+                    .thenBy { it.roomName }
+            )
+
+        val operations = bookingSyncOutboxDao.getPending(hotelRemoteId)
+            .filter { it.bookingRemoteId == current.remoteId }
+        val localRemovalBlock = localRejectedBookingRemovalBlockReason(current)
+        val removalBlockedReason = when {
+            serverState.bookingDocumentExists ->
+                "This booking already exists on the main system, so this local copy cannot be removed."
+            !serverState.hasRejectedCreateAudit ->
+                "The main system cannot safely prove that this was a rejected new booking, so it cannot be removed."
+            serverState.hasServerBusinessHistory ->
+                "The main system has billing or service history for this booking, so it cannot be removed."
+            operations.isNotEmpty() ->
+                "This booking still has a room change waiting to sync, so it cannot be removed."
+            localRemovalBlock != null -> localRemovalBlock
+            else -> null
+        }
+
+        val preferredInitialIds = if (serverState.bookingDocumentExists) {
+            serverState.serverBookingRoomRemoteIds
+        } else {
+            current.roomRemoteIds
+        }
+        val availableIds = availableRooms.map { it.remoteId }.toSet()
+        val initialSelectedIds = preferredInitialIds
+            .filter { it in availableIds }
+            .distinct()
+
+        val financialLines = bookingFinancialLineDao.getLinesForBooking(hotelRemoteId, current.remoteId)
+        val roomMoveBlockedReason = if (
+            RoomConflictResolutionPolicy.financialLinesCanBeRebuiltWithoutChangingMoney(
+                current,
+                financialLines
+            )
+        ) {
+            null
+        } else {
+            "This booking has special room-wise pricing. To protect the amount and tax, its room cannot be changed from this screen."
+        }
+
+        return RoomConflictPlanResult.Ready(
+            RoomConflictResolutionPlan(
+                bookingRemoteId = current.remoteId,
+                guestName = current.guestName,
+                requiredRoomCount = current.roomRemoteIds.distinct().size.coerceAtLeast(1),
+                availableRooms = availableRooms,
+                initialSelectedRoomRemoteIds = initialSelectedIds,
+                serverBookingExists = serverState.bookingDocumentExists,
+                canRemoveLocalBooking = removalBlockedReason == null,
+                removalBlockedReason = removalBlockedReason,
+                roomMoveBlockedReason = roomMoveBlockedReason
+            )
+        )
+    }
+
+    suspend fun resolveRoomConflictRooms(
+        bookingRemoteId: String,
+        requestedRoomRemoteIds: List<String>
+    ): SaveResult {
+        val current = bookingDao.getByRemoteId(bookingRemoteId)
+            ?: return SaveResult.Error("Booking not found.")
+
+        if (!isRoomConflictBooking(current)) {
+            return SaveResult.Error("This booking no longer needs room fixing.")
+        }
+
+        val requestedRoomIds = requestedRoomRemoteIds
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+
+        if (!RoomConflictResolutionPolicy.preservesRoomCount(current, requestedRoomIds)) {
+            val count = current.roomRemoteIds.distinct().size.coerceAtLeast(1)
+            return SaveResult.Error(
+                if (count == 1) "Please select exactly one room."
+                else "Please select exactly $count rooms."
+            )
+        }
+
+        val serverState = try {
+            cloudSyncManager.loadRoomConflictServerState(
+                bookingRemoteId = current.remoteId,
+                checkInMillis = current.checkInMillis,
+                checkOutMillis = current.checkOutMillis
+            )
+        } catch (_: Exception) {
+            return SaveResult.Error(
+                "Could not recheck the room with the main system. Nothing was changed. Please check internet and try again."
+            )
+        }
+
+        val operations = bookingSyncOutboxDao.getPending(hotelRemoteId)
+            .filter { it.bookingRemoteId == current.remoteId }
+        val blockedOperations = operations.filter {
+            it.lastError == ROOM_CONFLICT_REQUIRES_ACTION
+        }
+
+        if (serverState.bookingDocumentExists && blockedOperations.isEmpty()) {
+            return SaveResult.Error(
+                "This booking changed on the main system. Close this screen, let it sync, and check again."
+            )
+        }
+        if (!serverState.bookingDocumentExists && operations.isNotEmpty()) {
+            return SaveResult.Error(
+                "This booking has another save waiting. Let it finish before fixing the room."
+            )
+        }
+
+        val localRooms = roomDao.getRooms(hotelRemoteId)
+        val localOverlappingBookings = bookingDao.getOverlappingBookings(
+            hotelRemoteId = hotelRemoteId,
+            checkInMillis = current.checkInMillis,
+            checkOutMillis = current.checkOutMillis
+        ).filter { it.remoteId != current.remoteId }
+        val propertyRemoteId = current.propertyRemoteId?.takeIf { it.isNotBlank() }
+            ?: bookingPropertyForRooms(current.roomRemoteIds)
+        val availableServerIds = RoomConflictResolutionPolicy.availableRooms(
+            hotelRemoteId = hotelRemoteId,
+            propertyRemoteId = propertyRemoteId,
+            bookingRemoteId = current.remoteId,
+            checkInMillis = current.checkInMillis,
+            checkOutMillis = current.checkOutMillis,
+            serverRooms = serverState.serverRooms,
+            serverBookings = serverState.overlappingBookings + localOverlappingBookings
+        ).map { it.remoteId }.toSet()
+        val availableLocalIds = localRooms
+            .filter { it.remoteId in availableServerIds }
+            .map { it.remoteId }
+            .toSet()
+
+        if (requestedRoomIds.any { it !in availableLocalIds }) {
+            return SaveResult.Conflict(
+                "One of these rooms is no longer free. Please choose again."
+            )
+        }
+
+        val localOverlap = bookingDao.getOverlappingBookings(
+            hotelRemoteId = hotelRemoteId,
+            checkInMillis = current.checkInMillis,
+            checkOutMillis = current.checkOutMillis
+        ).any { existing ->
+            existing.remoteId != current.remoteId &&
+                existing.roomRemoteIds.any { it in requestedRoomIds }
+        }
+        if (localOverlap) {
+            return SaveResult.Conflict(
+                "One of these rooms is already being used on this device. Please choose again."
+            )
+        }
+
+        val existingLines = bookingFinancialLineDao.getLinesForBooking(
+            hotelRemoteId,
+            current.remoteId
+        )
+        if (!RoomConflictResolutionPolicy.financialLinesCanBeRebuiltWithoutChangingMoney(current, existingLines)) {
+            return SaveResult.Error(
+                "This booking has special room-wise pricing. To protect the amount and tax, its room was not changed."
+            )
+        }
+
+        val selectedRooms = localRooms.filter { it.remoteId in requestedRoomIds }
+        if (selectedRooms.size != requestedRoomIds.size ||
+            !BookingPropertyPolicy.belongsToSingleProperty(selectedRooms.map { it.propertyRemoteId })
+        ) {
+            return SaveResult.Error("The selected rooms are not valid for one booking.")
+        }
+
+        val latest = bookingDao.getByRemoteId(current.remoteId)
+            ?: return SaveResult.Error("Booking not found.")
+        if (
+            latest.updatedAt != current.updatedAt ||
+            latest.revision != current.revision ||
+            latest.baseRevision != current.baseRevision ||
+            !isRoomConflictBooking(latest)
+        ) {
+            return SaveResult.Conflict(
+                "This booking changed while the room was being checked. Please open Fix Booking again."
+            )
+        }
+
+        val now = System.currentTimeMillis()
+        val selectedPropertyRemoteId = selectedRooms
+            .mapNotNull { it.propertyRemoteId?.takeIf(String::isNotBlank) }
+            .distinct()
+            .singleOrNull()
+
+        val updated = current.copy(
+            roomRemoteIds = requestedRoomIds,
+            propertyRemoteId = selectedPropertyRemoteId,
+            updatedAt = now,
+            syncState = SyncState.PENDING,
+            lastSyncError = null,
+            baseRevision = current.baseRevision.takeIf { it > 0 } ?: current.revision
+        )
+
+        val requestedLines = remapRoomConflictFinancialLines(
+            current = current,
+            requestedRoomRemoteIds = requestedRoomIds,
+            existingLines = existingLines,
+            rooms = localRooms,
+            now = now
+        )
+
+        if (requestedLines.isNotEmpty()) {
+            val integrity = RoomNightFinancialIntegrity.validate(updated, requestedLines)
+            if (!integrity.isValid) {
+                return SaveResult.Error(
+                    "Room accounting check failed, so nothing was changed."
+                )
+            }
+        }
+
+        val changedLines = prepareFinancialLineChanges(
+            booking = updated,
+            lines = requestedLines,
+            current = existingLines,
+            now = now
+        )
+
+        val changeSet = if (!serverState.bookingDocumentExists) {
+            BookingChangeSet.create(
+                previous = null,
+                requested = updated,
+                previousLines = emptyList(),
+                requestedLines = requestedLines
+            )
+        } else {
+            BookingChangeSet.create(
+                previous = current,
+                requested = updated,
+                previousLines = existingLines,
+                requestedLines = requestedLines
+            )
+        }
+
+        db.withTransaction {
+            bookingDao.upsert(updated)
+            changedLines.forEach { line -> bookingFinancialLineDao.upsert(line) }
+            enqueueBookingChangeSet(updated, changeSet)
+        }
+        enqueueBackgroundSync()
+        return SaveResult.Success(syncPending = true)
+    }
+
+    suspend fun removeRejectedLocalBooking(bookingRemoteId: String): SaveResult {
+        val current = bookingDao.getByRemoteId(bookingRemoteId)
+            ?: return SaveResult.Error("Booking not found.")
+
+        if (!isRoomConflictBooking(current)) {
+            return SaveResult.Error("This booking no longer needs room fixing.")
+        }
+
+        if (bookingSyncOutboxDao.countPendingForBooking(hotelRemoteId, current.remoteId) > 0) {
+            return SaveResult.Error(
+                "This booking has a save waiting to sync, so it cannot be removed."
+            )
+        }
+
+        localRejectedBookingRemovalBlockReason(current)?.let { reason ->
+            return SaveResult.Error(reason)
+        }
+
+        val serverState = try {
+            cloudSyncManager.loadRoomConflictServerState(
+                bookingRemoteId = current.remoteId,
+                checkInMillis = current.checkInMillis,
+                checkOutMillis = current.checkOutMillis
+            )
+        } catch (_: Exception) {
+            return SaveResult.Error(
+                "Could not check the main system. Nothing was removed. Please check internet and try again."
+            )
+        }
+
+        if (serverState.bookingDocumentExists) {
+            return SaveResult.Error(
+                "This booking exists on the main system, so it cannot be removed from here."
+            )
+        }
+        if (!serverState.hasRejectedCreateAudit) {
+            return SaveResult.Error(
+                "The main system cannot safely prove that this was a rejected new booking. Nothing was removed."
+            )
+        }
+        if (serverState.hasServerBusinessHistory) {
+            return SaveResult.Error(
+                "Billing or service history exists on the main system, so this booking cannot be removed."
+            )
+        }
+
+        return db.withTransaction {
+            val latest = bookingDao.getByRemoteId(current.remoteId)
+                ?: return@withTransaction SaveResult.Error("Booking not found.")
+
+            if (!isRoomConflictBooking(latest)) {
+                return@withTransaction SaveResult.Error(
+                    "This booking changed while it was being checked. Nothing was removed."
+                )
+            }
+            if (bookingSyncOutboxDao.countPendingForBooking(hotelRemoteId, latest.remoteId) > 0) {
+                return@withTransaction SaveResult.Error(
+                    "This booking now has a save waiting to sync. Nothing was removed."
+                )
+            }
+            localRejectedBookingRemovalBlockReason(latest)?.let { reason ->
+                return@withTransaction SaveResult.Error(reason)
+            }
+
+            bookingFinancialLineDao.hardDeleteForBooking(hotelRemoteId, latest.remoteId)
+            bookingSyncOutboxDao.deleteForBooking(hotelRemoteId, latest.remoteId)
+            bookingDao.hardDeleteLocalOnly(hotelRemoteId, latest.remoteId)
+            SaveResult.Success(syncPending = false)
+        }
+    }
 
     fun observePayments(): LiveData<List<BookingPaymentEntity>> = bookingPaymentDao.observePayments(hotelRemoteId)
 
@@ -2780,6 +3149,72 @@ class BookingRepository(
             foodOrderCount = foodOrderDao.countForRoom(hotelRemoteId, roomRemoteId)
         )
     }
+    private suspend fun localRejectedBookingRemovalBlockReason(
+        booking: BookingEntity
+    ): String? {
+        if (
+            booking.bookingStatus != BookingStatus.RESERVED ||
+            booking.actualCheckInAt != null ||
+            booking.actualCheckOutAt != null ||
+            booking.cancelledAt != null
+        ) {
+            return "This booking has stay history, so it cannot be removed from this screen."
+        }
+        if (booking.paid > 0.001 ||
+            bookingPaymentDao.countAnyPaymentsForBooking(hotelRemoteId, booking.remoteId) > 0
+        ) {
+            return "Payment history exists for this booking. To protect the accounts, it cannot be removed."
+        }
+        if (bookingAccountingChargeDao.countAnyChargesForBooking(hotelRemoteId, booking.remoteId) > 0) {
+            return "Service or adjustment history exists for this booking. To protect the accounts, it cannot be removed."
+        }
+        if (foodOrderDao.countAnyOrdersForBooking(hotelRemoteId, booking.remoteId) > 0) {
+            return "Food order history exists for this booking, so it cannot be removed."
+        }
+        if (
+            foodBillDao.countAnyBillsWithRemoteIdPrefix(
+                hotelRemoteId,
+                "${booking.remoteId}_final_bill_"
+            ) > 0
+        ) {
+            return "A bill exists for this booking, so it cannot be removed."
+        }
+        return null
+    }
+
+    private fun remapRoomConflictFinancialLines(
+        current: BookingEntity,
+        requestedRoomRemoteIds: List<String>,
+        existingLines: List<BookingFinancialLineEntity>,
+        rooms: List<RoomEntity>,
+        now: Long
+    ): List<BookingFinancialLineEntity> {
+        if (existingLines.isEmpty()) return emptyList()
+
+        val oldRoomIds = current.roomRemoteIds.distinct()
+        val newRoomIds = requestedRoomRemoteIds.distinct()
+        val removedRoomIds = oldRoomIds.filter { it !in newRoomIds }.sorted()
+        val addedRoomIds = newRoomIds.filter { it !in oldRoomIds }.sorted()
+        val replacements = removedRoomIds.zip(addedRoomIds).toMap()
+        val roomsById = rooms.associateBy { it.remoteId }
+
+        return existingLines.map { line ->
+            val replacementRoomId = replacements[line.roomRemoteId] ?: return@map line
+            line.copy(
+                localId = 0,
+                remoteId = UUID.randomUUID().toString(),
+                roomRemoteId = replacementRoomId,
+                propertyRemoteId = roomsById[replacementRoomId]?.propertyRemoteId,
+                updatedAt = now,
+                syncState = SyncState.PENDING,
+                lastSyncError = null,
+                lastSyncedAt = null,
+                revision = 0,
+                baseRevision = 0
+            )
+        }
+    }
+
     private suspend fun validateRoomsForBookingSave(
         requestedBooking: BookingEntity,
         existingBooking: BookingEntity?
@@ -2955,6 +3390,23 @@ private fun appendLifecycleNote(existingNotes: String?, label: String, note: Str
 
 private fun formatAmount(amount: Double): String =
     String.format(Locale.getDefault(), "%.0f", amount)
+
+data class RoomConflictResolutionPlan(
+    val bookingRemoteId: String,
+    val guestName: String,
+    val requiredRoomCount: Int,
+    val availableRooms: List<RoomEntity>,
+    val initialSelectedRoomRemoteIds: List<String>,
+    val serverBookingExists: Boolean,
+    val canRemoveLocalBooking: Boolean,
+    val removalBlockedReason: String?,
+    val roomMoveBlockedReason: String?
+)
+
+sealed class RoomConflictPlanResult {
+    data class Ready(val plan: RoomConflictResolutionPlan) : RoomConflictPlanResult()
+    data class Error(val message: String) : RoomConflictPlanResult()
+}
 
 sealed class SaveResult {
     data class Success(val syncPending: Boolean = false) : SaveResult()
