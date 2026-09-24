@@ -19,7 +19,7 @@ class AppDatabaseRecentMigrationTest {
     )
 
     @Test
-    fun version35MigratesTo40WithoutDataDestruction() {
+    fun version35MigratesTo41WithoutDataDestruction() {
         migrateEmptyDatabaseFrom(35)
     }
 
@@ -38,7 +38,7 @@ class AppDatabaseRecentMigrationTest {
             close()
         }
 
-        helper.runMigrationsAndValidate(name, 40, true, *AppDatabase.allMigrations()).use { db ->
+        helper.runMigrationsAndValidate(name, 41, true, *AppDatabase.allMigrations()).use { db ->
             db.query(
                 "SELECT operationId, changeSetJson, attemptCount, lastError FROM booking_sync_outbox"
             ).use { cursor ->
@@ -60,7 +60,7 @@ class AppDatabaseRecentMigrationTest {
             close()
         }
 
-        helper.runMigrationsAndValidate(name, 40, true, *AppDatabase.allMigrations()).use { db ->
+        helper.runMigrationsAndValidate(name, 41, true, *AppDatabase.allMigrations()).use { db ->
             db.query(
                 """
                 SELECT remoteId FROM booking_financial_lines
@@ -82,7 +82,7 @@ class AppDatabaseRecentMigrationTest {
     }
 
     @Test
-    fun version38MigratesTo40WithoutDataDestruction() {
+    fun version38MigratesTo41WithoutDataDestruction() {
         migrateEmptyDatabaseFrom(38)
     }
 
@@ -99,7 +99,7 @@ class AppDatabaseRecentMigrationTest {
             close()
         }
 
-        helper.runMigrationsAndValidate(name, 40, true, *AppDatabase.allMigrations()).use { db ->
+        helper.runMigrationsAndValidate(name, 41, true, *AppDatabase.allMigrations()).use { db ->
             val statuses = mutableMapOf<String, Pair<String, Double>>()
             db.query(
                 """
@@ -122,7 +122,7 @@ class AppDatabaseRecentMigrationTest {
     private fun migrateEmptyDatabaseFrom(version: Int) {
         val name = databaseName("v$version")
         helper.createDatabase(name, version).close()
-        helper.runMigrationsAndValidate(name, 40, true, *AppDatabase.allMigrations()).close()
+        helper.runMigrationsAndValidate(name, 41, true, *AppDatabase.allMigrations()).close()
     }
 
     private fun SupportSQLiteDatabase.insertFinancialLine(

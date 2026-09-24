@@ -12,6 +12,7 @@ import com.example.bookingregister.data.dao.BookingAccountingChargeDao
 import com.example.bookingregister.data.dao.BookingDao
 import com.example.bookingregister.data.dao.BookingFinancialLineDao
 import com.example.bookingregister.data.dao.BookingPaymentDao
+import com.example.bookingregister.data.dao.BookingRoomNightAssignmentDao
 import com.example.bookingregister.data.dao.BookingSourceDao
 import com.example.bookingregister.data.dao.BookingSyncOutboxDao
 import com.example.bookingregister.data.dao.FoodBillDao
@@ -29,6 +30,7 @@ import com.example.bookingregister.data.entities.BookingAccountingChargeEntity
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.BookingFinancialLineEntity
 import com.example.bookingregister.data.entities.BookingPaymentEntity
+import com.example.bookingregister.data.entities.BookingRoomNightAssignmentEntity
 import com.example.bookingregister.data.entities.BookingSourceEntity
 import com.example.bookingregister.data.entities.BookingSyncOutboxEntity
 import com.example.bookingregister.data.entities.FoodBillEntity
@@ -54,6 +56,7 @@ import com.example.bookingregister.data.entities.RoomGstSlabEntity
         BookingAccountingChargeEntity::class,
         BookingFinancialLineEntity::class,
         BookingPaymentEntity::class,
+        BookingRoomNightAssignmentEntity::class,
         BookingSourceEntity::class,
         FoodGstCategoryEntity::class,
         FoodMenuItemEntity::class,
@@ -65,7 +68,7 @@ import com.example.bookingregister.data.entities.RoomGstSlabEntity
         RoomGstSlabEntity::class,
         BookingSyncOutboxEntity::class,
     ],
-    version = 40,
+    version = 41,
     exportSchema = true
 )
 @TypeConverters(AppConverters::class)
@@ -78,6 +81,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun bookingAccountingChargeDao(): BookingAccountingChargeDao
     abstract fun bookingFinancialLineDao(): BookingFinancialLineDao
     abstract fun bookingPaymentDao(): BookingPaymentDao
+    abstract fun bookingRoomNightAssignmentDao(): BookingRoomNightAssignmentDao
     abstract fun bookingSourceDao(): BookingSourceDao
     abstract fun bookingSyncOutboxDao(): BookingSyncOutboxDao
     abstract fun foodGstCategoryDao(): FoodGstCategoryDao
@@ -505,6 +509,52 @@ abstract class AppDatabase : RoomDatabase() {
                 )
             }
         }
+        private val MIGRATION_40_41 = object : Migration(40, 41) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS booking_room_night_assignments (
+                        localId INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        remoteId TEXT NOT NULL,
+                        hotelRemoteId TEXT NOT NULL,
+                        bookingRemoteId TEXT NOT NULL,
+                        roomRemoteId TEXT NOT NULL,
+                        propertyRemoteId TEXT,
+                        businessDateMillis INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        isDeleted INTEGER NOT NULL,
+                        syncState TEXT NOT NULL,
+                        lastSyncError TEXT,
+                        lastSyncedAt INTEGER,
+                        revision INTEGER NOT NULL,
+                        baseRevision INTEGER NOT NULL,
+                        updatedByUid TEXT
+                    )
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_booking_room_night_assignments_remoteId ON booking_room_night_assignments(remoteId)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_booking_room_night_assignments_hotelRemoteId ON booking_room_night_assignments(hotelRemoteId)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_booking_room_night_assignments_bookingRemoteId ON booking_room_night_assignments(bookingRemoteId)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_booking_room_night_assignments_roomRemoteId ON booking_room_night_assignments(roomRemoteId)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_booking_room_night_assignments_propertyRemoteId ON booking_room_night_assignments(propertyRemoteId)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_booking_room_night_assignments_hotelRemoteId_businessDateMillis ON booking_room_night_assignments(hotelRemoteId, businessDateMillis)"
+                )
+                database.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_booking_room_night_assignments_hotelRemoteId_bookingRemoteId_roomRemoteId_businessDateMillis ON booking_room_night_assignments(hotelRemoteId, bookingRemoteId, roomRemoteId, businessDateMillis)"
+                )
+            }
+        }
         fun allMigrations(): Array<Migration> = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -544,7 +594,8 @@ abstract class AppDatabase : RoomDatabase() {
             MIGRATION_36_37,
             MIGRATION_37_38,
             MIGRATION_38_39,
-            MIGRATION_39_40
+            MIGRATION_39_40,
+            MIGRATION_40_41
         )
 
         /**
