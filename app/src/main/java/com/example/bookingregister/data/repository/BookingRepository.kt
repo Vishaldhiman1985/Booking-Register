@@ -214,14 +214,16 @@ class BookingRepository(
         val operations = bookingSyncOutboxDao.getPending(hotelRemoteId)
             .filter { it.bookingRemoteId == current.remoteId }
         val discardableRejectedCreateOperations =
-            !serverState.bookingDocumentExists &&
-                serverState.hasRejectedCreateAudit &&
-                !serverState.hasServerBusinessHistory &&
-                current.revision == 0L &&
-                current.baseRevision == 0L &&
-                current.lastSyncedAt == null &&
-                operations.isNotEmpty() &&
-                operations.all { it.lastError == ROOM_CONFLICT_REQUIRES_ACTION }
+            RoomConflictResolutionPolicy.canDiscardRejectedCreateOperationsForManualRecovery(
+                booking = current,
+                serverBookingExists = serverState.bookingDocumentExists,
+                hasRejectedCreateAudit = serverState.hasRejectedCreateAudit,
+                hasServerBusinessHistory = serverState.hasServerBusinessHistory,
+                hasPendingOperations = operations.isNotEmpty(),
+                allPendingOperationsAreRejectedRoomConflicts =
+                    operations.isNotEmpty() &&
+                        operations.all { it.lastError == ROOM_CONFLICT_REQUIRES_ACTION }
+            )
         val localRemovalBlock = localRejectedBookingRemovalBlockReason(current)
         val removalBlockedReason = when {
             serverState.bookingDocumentExists ->
@@ -314,14 +316,16 @@ class BookingRepository(
             it.lastError == ROOM_CONFLICT_REQUIRES_ACTION
         }
         val discardableRejectedCreateOperations =
-            !serverState.bookingDocumentExists &&
-                serverState.hasRejectedCreateAudit &&
-                !serverState.hasServerBusinessHistory &&
-                current.revision == 0L &&
-                current.baseRevision == 0L &&
-                current.lastSyncedAt == null &&
-                operations.isNotEmpty() &&
-                operations.all { it.lastError == ROOM_CONFLICT_REQUIRES_ACTION }
+            RoomConflictResolutionPolicy.canDiscardRejectedCreateOperationsForManualRecovery(
+                booking = current,
+                serverBookingExists = serverState.bookingDocumentExists,
+                hasRejectedCreateAudit = serverState.hasRejectedCreateAudit,
+                hasServerBusinessHistory = serverState.hasServerBusinessHistory,
+                hasPendingOperations = operations.isNotEmpty(),
+                allPendingOperationsAreRejectedRoomConflicts =
+                    operations.isNotEmpty() &&
+                        operations.all { it.lastError == ROOM_CONFLICT_REQUIRES_ACTION }
+            )
 
         if (serverState.bookingDocumentExists && blockedOperations.isEmpty()) {
             return SaveResult.Error(
@@ -521,11 +525,16 @@ class BookingRepository(
         }
 
         val discardableRejectedCreateOperations =
-            current.revision == 0L &&
-                current.baseRevision == 0L &&
-                current.lastSyncedAt == null &&
-                operations.isNotEmpty() &&
-                operations.all { it.lastError == ROOM_CONFLICT_REQUIRES_ACTION }
+            RoomConflictResolutionPolicy.canDiscardRejectedCreateOperationsForManualRecovery(
+                booking = current,
+                serverBookingExists = serverState.bookingDocumentExists,
+                hasRejectedCreateAudit = serverState.hasRejectedCreateAudit,
+                hasServerBusinessHistory = serverState.hasServerBusinessHistory,
+                hasPendingOperations = operations.isNotEmpty(),
+                allPendingOperationsAreRejectedRoomConflicts =
+                    operations.isNotEmpty() &&
+                        operations.all { it.lastError == ROOM_CONFLICT_REQUIRES_ACTION }
+            )
 
         if (operations.isNotEmpty() && !discardableRejectedCreateOperations) {
             return SaveResult.Error(
@@ -545,11 +554,16 @@ class BookingRepository(
             val latestOperations = bookingSyncOutboxDao.getPending(hotelRemoteId)
                 .filter { it.bookingRemoteId == latest.remoteId }
             val latestDiscardableRejectedCreateOperations =
-                latest.revision == 0L &&
-                    latest.baseRevision == 0L &&
-                    latest.lastSyncedAt == null &&
-                    latestOperations.isNotEmpty() &&
-                    latestOperations.all { it.lastError == ROOM_CONFLICT_REQUIRES_ACTION }
+                RoomConflictResolutionPolicy.canDiscardRejectedCreateOperationsForManualRecovery(
+                    booking = latest,
+                    serverBookingExists = serverState.bookingDocumentExists,
+                    hasRejectedCreateAudit = serverState.hasRejectedCreateAudit,
+                    hasServerBusinessHistory = serverState.hasServerBusinessHistory,
+                    hasPendingOperations = latestOperations.isNotEmpty(),
+                    allPendingOperationsAreRejectedRoomConflicts =
+                        latestOperations.isNotEmpty() &&
+                            latestOperations.all { it.lastError == ROOM_CONFLICT_REQUIRES_ACTION }
+                )
 
             if (
                 latestOperations.isNotEmpty() &&
