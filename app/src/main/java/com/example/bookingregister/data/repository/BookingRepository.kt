@@ -213,6 +213,15 @@ class BookingRepository(
 
         val operations = bookingSyncOutboxDao.getPending(hotelRemoteId)
             .filter { it.bookingRemoteId == current.remoteId }
+        val discardableRejectedCreateOperations =
+            !serverState.bookingDocumentExists &&
+                serverState.hasRejectedCreateAudit &&
+                !serverState.hasServerBusinessHistory &&
+                current.revision == 0L &&
+                current.baseRevision == 0L &&
+                current.lastSyncedAt == null &&
+                operations.isNotEmpty() &&
+                operations.all { it.lastError == ROOM_CONFLICT_REQUIRES_ACTION }
         val localRemovalBlock = localRejectedBookingRemovalBlockReason(current)
         val removalBlockedReason = when {
             serverState.bookingDocumentExists ->
@@ -221,7 +230,7 @@ class BookingRepository(
                 "The main system cannot safely prove that this was a rejected new booking, so it cannot be removed."
             serverState.hasServerBusinessHistory ->
                 "The main system has billing or service history for this booking, so it cannot be removed."
-            operations.isNotEmpty() ->
+            operations.isNotEmpty() && !discardableRejectedCreateOperations ->
                 "This booking still has a room change waiting to sync, so it cannot be removed."
             localRemovalBlock != null -> localRemovalBlock
             else -> null
@@ -304,13 +313,26 @@ class BookingRepository(
         val blockedOperations = operations.filter {
             it.lastError == ROOM_CONFLICT_REQUIRES_ACTION
         }
+        val discardableRejectedCreateOperations =
+            !serverState.bookingDocumentExists &&
+                serverState.hasRejectedCreateAudit &&
+                !serverState.hasServerBusinessHistory &&
+                current.revision == 0L &&
+                current.baseRevision == 0L &&
+                current.lastSyncedAt == null &&
+                operations.isNotEmpty() &&
+                operations.all { it.lastError == ROOM_CONFLICT_REQUIRES_ACTION }
 
         if (serverState.bookingDocumentExists && blockedOperations.isEmpty()) {
             return SaveResult.Error(
                 "This booking changed on the main system. Close this screen, let it sync, and check again."
             )
         }
-        if (!serverState.bookingDocumentExists && operations.isNotEmpty()) {
+        if (
+            !serverState.bookingDocumentExists &&
+            operations.isNotEmpty() &&
+            !discardableRejectedCreateOperations
+        ) {
             return SaveResult.Error(
                 "This booking has another save waiting. Let it finish before fixing the room."
             )
@@ -446,6 +468,9 @@ class BookingRepository(
         db.withTransaction {
             bookingDao.upsert(updated)
             changedLines.forEach { line -> bookingFinancialLineDao.upsert(line) }
+            if (discardableRejectedCreateOperations) {
+                bookingSyncOutboxDao.deleteForBooking(hotelRemoteId, updated.remoteId)
+            }
             enqueueBookingChangeSet(updated, changeSet)
         }
         enqueueBackgroundSync()
@@ -460,11 +485,8 @@ class BookingRepository(
             return SaveResult.Error("This booking no longer needs room fixing.")
         }
 
-        if (bookingSyncOutboxDao.countPendingForBooking(hotelRemoteId, current.remoteId) > 0) {
-            return SaveResult.Error(
-                "This booking has a save waiting to sync, so it cannot be removed."
-            )
-        }
+        val operations = bookingSyncOutboxDao.getPending(hotelRemoteId)
+            .filter { it.bookingRemoteId == current.remoteId }
 
         localRejectedBookingRemovalBlockReason(current)?.let { reason ->
             return SaveResult.Error(reason)
@@ -498,6 +520,19 @@ class BookingRepository(
             )
         }
 
+        val discardableRejectedCreateOperations =
+            current.revision == 0L &&
+                current.baseRevision == 0L &&
+                current.lastSyncedAt == null &&
+                operations.isNotEmpty() &&
+                operations.all { it.lastError == ROOM_CONFLICT_REQUIRES_ACTION }
+
+        if (operations.isNotEmpty() && !discardableRejectedCreateOperations) {
+            return SaveResult.Error(
+                "This booking has another save waiting to sync, so it cannot be removed."
+            )
+        }
+
         return db.withTransaction {
             val latest = bookingDao.getByRemoteId(current.remoteId)
                 ?: return@withTransaction SaveResult.Error("Booking not found.")
@@ -507,9 +542,21 @@ class BookingRepository(
                     "This booking changed while it was being checked. Nothing was removed."
                 )
             }
-            if (bookingSyncOutboxDao.countPendingForBooking(hotelRemoteId, latest.remoteId) > 0) {
+            val latestOperations = bookingSyncOutboxDao.getPending(hotelRemoteId)
+                .filter { it.bookingRemoteId == latest.remoteId }
+            val latestDiscardableRejectedCreateOperations =
+                latest.revision == 0L &&
+                    latest.baseRevision == 0L &&
+                    latest.lastSyncedAt == null &&
+                    latestOperations.isNotEmpty() &&
+                    latestOperations.all { it.lastError == ROOM_CONFLICT_REQUIRES_ACTION }
+
+            if (
+                latestOperations.isNotEmpty() &&
+                !latestDiscardableRejectedCreateOperations
+            ) {
                 return@withTransaction SaveResult.Error(
-                    "This booking now has a save waiting to sync. Nothing was removed."
+                    "This booking now has another save waiting to sync. Nothing was removed."
                 )
             }
             localRejectedBookingRemovalBlockReason(latest)?.let { reason ->
@@ -2430,7 +2477,7 @@ class BookingRepository(
             ?.takeIf { it.isNotBlank() } ?: "unknown-android-device"
 
         runCatching {
-            cloudSyncManager.pushBookingChangeSet(
+            changeSet to cloudSyncManager.pushBookingChangeSet(
                 operationId = operation.operationId,
                 deviceId = deviceId,
                 changeSet = changeSet
@@ -2441,36 +2488,39 @@ class BookingRepository(
                 if (!changeSet.create && failureCode == SyncFailureCode.NOT_FOUND) {
                     // The device still owns the complete local aggregate but the cloud
                     // booking is absent. Re-create that aggregate with the same operation ID.
-                    // Server-side room locks still reject a logical duplicate or overlap.
-                    cloudSyncManager.pushBookingChangeSet(
+                    // Remember that CREATE was the command actually submitted so a room
+                    // conflict is handled as a rejected new booking, not as a rejected edit.
+                    val fallbackChangeSet = BookingChangeSet.create(
+                        previous = null,
+                        requested = booking,
+                        previousLines = emptyList(),
+                        requestedLines = lines
+                    )
+                    fallbackChangeSet to cloudSyncManager.pushBookingChangeSet(
                         operationId = operation.operationId,
                         deviceId = deviceId,
-                        changeSet = BookingChangeSet.create(
-                            previous = null,
-                            requested = booking,
-                            previousLines = emptyList(),
-                            requestedLines = lines
-                        )
+                        changeSet = fallbackChangeSet
                     )
                 } else if (isLegacySnapshotOperation && failureCode == SyncFailureCode.ALREADY_EXISTS) {
                     // The legacy operation may represent either the booking's first upload or a
                     // later edit. If the booking already exists, apply the same full state as an
-                    // update. The unchanged operationId keeps the retry idempotent.
-                    cloudSyncManager.pushBookingChangeSet(
+                    // update and remember that UPDATE was the command actually submitted.
+                    val fallbackChangeSet = changeSet.copy(create = false)
+                    fallbackChangeSet to cloudSyncManager.pushBookingChangeSet(
                         operationId = operation.operationId,
                         deviceId = deviceId,
-                        changeSet = changeSet.copy(create = false)
+                        changeSet = fallbackChangeSet
                     )
                 } else {
                     throw error
                 }
             }
-            .onSuccess { result ->
+            .onSuccess { (submittedChangeSet, result) ->
                 if (result.outcome == ROOM_CONFLICT_OUTCOME) {
                     handleRejectedRoomConflict(
                         operation = operation,
                         sentBooking = sentBooking,
-                        rejectedChangeSet = changeSet
+                        rejectedChangeSet = submittedChangeSet
                     )
                 } else {
                     acknowledgeBookingAggregate(operation, sentBooking, lines, result)

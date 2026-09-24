@@ -55,6 +55,23 @@ object RoomConflictResolutionPolicy {
             cleanRequested.size == current.roomRemoteIds.distinct().size
     }
 
+    fun canDiscardRejectedCreateOperationsForManualRecovery(
+        booking: BookingEntity,
+        serverBookingExists: Boolean,
+        hasRejectedCreateAudit: Boolean,
+        hasServerBusinessHistory: Boolean,
+        hasPendingOperations: Boolean,
+        allPendingOperationsAreRejectedRoomConflicts: Boolean
+    ): Boolean =
+        !serverBookingExists &&
+            hasRejectedCreateAudit &&
+            !hasServerBusinessHistory &&
+            booking.revision == 0L &&
+            booking.baseRevision == 0L &&
+            booking.lastSyncedAt == null &&
+            hasPendingOperations &&
+            allPendingOperationsAreRejectedRoomConflicts
+
     fun financialLinesCanBeRebuiltWithoutChangingMoney(
         booking: BookingEntity,
         lines: List<BookingFinancialLineEntity>
