@@ -103,6 +103,7 @@ class BookingRepository(
     private val bookingAccountingChargeDao = db.bookingAccountingChargeDao()
     private val bookingFinancialLineDao = db.bookingFinancialLineDao()
     private val bookingPaymentDao = db.bookingPaymentDao()
+    private val bookingRoomNightAssignmentDao = db.bookingRoomNightAssignmentDao()
     private val bookingSourceDao = db.bookingSourceDao()
     private val bookingSyncOutboxDao = db.bookingSyncOutboxDao()
     private val foodOrderDao = db.foodOrderDao()
@@ -131,6 +132,15 @@ class BookingRepository(
 
     fun observeChartBookingsForWindow(startMillis: Long, endMillis: Long): LiveData<List<BookingEntity>> =
         bookingDao.observeChartBookingsForWindow(hotelRemoteId, startMillis, endMillis)
+
+    fun observeRoomPlanForWindow(
+        startMillis: Long,
+        endMillis: Long
+    ) = bookingRoomNightAssignmentDao.observeForWindow(
+        hotelRemoteId = hotelRemoteId,
+        startMillis = startMillis,
+        endMillis = endMillis
+    )
 
     fun observeOutstandingBalance(): LiveData<Double> =
         bookingDao.observeOutstandingBalance(hotelRemoteId)
