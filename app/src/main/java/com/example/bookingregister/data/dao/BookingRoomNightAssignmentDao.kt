@@ -40,6 +40,20 @@ interface BookingRoomNightAssignmentDao {
         AND isDeleted = 0
         AND businessDateMillis >= :startMillis
         AND businessDateMillis < :endMillis
+        ORDER BY businessDateMillis ASC, bookingRemoteId ASC, roomRemoteId ASC
+    """)
+    fun observeForWindow(
+        hotelRemoteId: String,
+        startMillis: Long,
+        endMillis: Long
+    ): LiveData<List<BookingRoomNightAssignmentEntity>>
+
+    @Query("""
+        SELECT * FROM booking_room_night_assignments
+        WHERE hotelRemoteId = :hotelRemoteId
+        AND isDeleted = 0
+        AND businessDateMillis >= :startMillis
+        AND businessDateMillis < :endMillis
         ORDER BY businessDateMillis ASC, roomRemoteId ASC
     """)
     suspend fun getForWindow(
