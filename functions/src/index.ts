@@ -1,6 +1,6 @@
 import { initializeApp } from "firebase-admin/app";
 import { DecodedIdToken, getAuth, UserRecord } from "firebase-admin/auth";
-import { DocumentReference, DocumentSnapshot, FieldPath, FieldValue, Timestamp, Transaction, getFirestore } from "firebase-admin/firestore";
+import { DocumentReference, DocumentSnapshot, FieldPath, FieldValue, QuerySnapshot, Timestamp, Transaction, getFirestore } from "firebase-admin/firestore";
 import { CallableRequest, HttpsError, onCall } from "firebase-functions/v2/https";
 import { logger, setGlobalOptions } from "firebase-functions/v2";
 
@@ -731,6 +731,13 @@ function validateBookingRoomPlan(
       Array.from(errors).join(" ")
     );
   }
+}
+
+function bookingRoomPlanDocumentId(
+  bookingRemoteId: string,
+  assignment: BookingRoomPlanCommandAssignment
+): string {
+  return `room_plan_${encodeURIComponent(bookingRemoteId)}_${assignment.businessDateMillis}_${encodeURIComponent(assignment.roomRemoteId)}`;
 }
 
 function startOfDay(millis: number): number {
@@ -2184,7 +2191,7 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
     throw new HttpsError("invalid-argument", "The same room cannot be added and removed in one save.");
   }
   if (addRoomIds.size === 0 && removeRoomIds.size === 0 && Object.keys(setFields).length === 0 &&
-      !requestedFinancialLineRebuild) {
+      !requestedFinancialLineRebuild && roomPlanAssignments === null) {
     throw new HttpsError("invalid-argument", "This save contains no booking changes.");
   }
   const financialImpactFields = new Set([
@@ -2223,6 +2230,7 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
         bookingRemoteId,
         bookingRevision: numberValue(applied.get("bookingRevision")),
         financialLineRevisions: applied.get("financialLineRevisions") || {},
+        roomPlanAssignmentRevisions: applied.get("roomPlanAssignmentRevisions") || {},
         updatedByUid: String(applied.get("updatedByUid") || requestAuth.uid),
         alreadyApplied: true,
         outcome,
@@ -2257,12 +2265,54 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
     if (checkInMillis <= 0 || checkOutMillis <= checkInMillis) {
       throw new HttpsError("invalid-argument", "Check-out must be after check-in.");
     }
+    let roomPlanSnapshot: QuerySnapshot | null = null;
     if (roomPlanAssignments !== null) {
       validateBookingRoomPlan(
         checkInMillis,
         checkOutMillis,
         roomPlanAssignments
       );
+
+      roomPlanSnapshot = await tx.get(
+        hotelRef.collection("bookingRoomNightAssignments")
+          .where("bookingRemoteId", "==", bookingRemoteId)
+      );
+
+      const plannedRoomIds = Array.from(
+        new Set(roomPlanAssignments.map((assignment) => assignment.roomRemoteId))
+      );
+      const plannedRoomSnapshots = new Map<string, DocumentSnapshot>();
+      for (const roomId of plannedRoomIds) {
+        plannedRoomSnapshots.set(
+          roomId,
+          await tx.get(hotelRef.collection("rooms").doc(roomId))
+        );
+      }
+
+      for (const assignment of roomPlanAssignments) {
+        const room = plannedRoomSnapshots.get(assignment.roomRemoteId);
+        if (!room?.exists || booleanValue(room.get("isDeleted"))) {
+          throw new HttpsError(
+            "failed-precondition",
+            "A room in this room plan no longer exists."
+          );
+        }
+        if (String(room.get("lifecycleStatus") || "ACTIVE") !== "ACTIVE") {
+          throw new HttpsError(
+            "failed-precondition",
+            `${String(room.get("roomName") || "Room")} is disabled or retired.`
+          );
+        }
+
+        const actualPropertyRemoteId =
+          String(room.get("propertyRemoteId") || "").trim() || null;
+        if (actualPropertyRemoteId !== assignment.propertyRemoteId) {
+          throw new HttpsError(
+            "failed-precondition",
+            "A room plan assignment no longer matches the room property."
+          );
+        }
+      }
     }
     if (!String(next.guestName || "").trim()) throw new HttpsError("invalid-argument", "Guest name is required.");
     const cancelled = String(next.bookingStatus || "RESERVED") === "CANCELLED";
@@ -2438,6 +2488,7 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
           bookingRemoteId,
           bookingRevision: 0,
           financialLineRevisions: {},
+          roomPlanAssignmentRevisions: {},
           updatedByUid: requestAuth.uid,
           alreadyApplied: false,
           outcome: "REJECTED_ROOM_CONFLICT",
@@ -2488,8 +2539,25 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
       );
     }
 
+    const expectedRoomPlanIds = new Set<string>();
+    if (roomPlanAssignments !== null) {
+      roomPlanAssignments.forEach((assignment) =>
+        expectedRoomPlanIds.add(
+          bookingRoomPlanDocumentId(bookingRemoteId, assignment)
+        )
+      );
+    }
+    const roomPlanDeletes = roomPlanAssignments === null || roomPlanSnapshot === null
+      ? 0
+      : roomPlanSnapshot.docs.filter((doc) =>
+          !expectedRoomPlanIds.has(doc.id) && !booleanValue(doc.get("isDeleted"))
+        ).length;
+    const roomPlanWrites = roomPlanAssignments === null
+      ? 0
+      : roomPlanAssignments.length + roomPlanDeletes;
+
     const estimatedFinancialWrites = rebuildFinancialLines ? newLockIds.size + financialSnapshot.size : 0;
-    const estimatedWrites = 4 + newLockIds.size + Array.from(oldLockIds).filter((id) => !newLockIds.has(id)).length + estimatedFinancialWrites;
+    const estimatedWrites = 4 + newLockIds.size + Array.from(oldLockIds).filter((id) => !newLockIds.has(id)).length + estimatedFinancialWrites + roomPlanWrites;
     if (estimatedWrites > 450) {
       throw new HttpsError("invalid-argument", "This booking is too large to save safely in one atomic operation.");
     }
@@ -2503,6 +2571,60 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
     });
     previousValues.roomRemoteIds = Array.from(previousRooms);
     acceptedValues.roomRemoteIds = Array.from(nextRooms);
+
+    const roomPlanAssignmentRevisions: Record<string, number> = {};
+    if (roomPlanAssignments !== null && roomPlanSnapshot !== null) {
+      const existingRoomPlanById = new Map<string, DocumentSnapshot>(
+        roomPlanSnapshot.docs.map((doc) => [doc.id, doc])
+      );
+
+      for (const assignment of roomPlanAssignments) {
+        const remoteId = bookingRoomPlanDocumentId(
+          bookingRemoteId,
+          assignment
+        );
+        const existing = existingRoomPlanById.get(remoteId);
+        const assignmentRevision = numberValue(existing?.get("revision")) + 1;
+        roomPlanAssignmentRevisions[remoteId] = assignmentRevision;
+
+        tx.set(
+          hotelRef.collection("bookingRoomNightAssignments").doc(remoteId),
+          {
+            remoteId,
+            hotelRemoteId: hotelId,
+            bookingRemoteId,
+            roomRemoteId: assignment.roomRemoteId,
+            propertyRemoteId: assignment.propertyRemoteId,
+            businessDateMillis: assignment.businessDateMillis,
+            updatedAt: numberValue(next.updatedAt),
+            isDeleted: false,
+            revision: assignmentRevision,
+            updatedByUid: requestAuth.uid,
+            serverUpdatedAt: FieldValue.serverTimestamp(),
+          }
+        );
+      }
+
+      for (const existing of roomPlanSnapshot.docs) {
+        if (expectedRoomPlanIds.has(existing.id) || booleanValue(existing.get("isDeleted"))) {
+          continue;
+        }
+
+        const assignmentRevision = numberValue(existing.get("revision")) + 1;
+        roomPlanAssignmentRevisions[existing.id] = assignmentRevision;
+        tx.set(
+          existing.ref,
+          {
+            isDeleted: true,
+            updatedAt: numberValue(next.updatedAt),
+            revision: assignmentRevision,
+            updatedByUid: requestAuth.uid,
+            serverUpdatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+    }
 
     for (const lockId of oldLockIds) if (!newLockIds.has(lockId)) tx.delete(hotelRef.collection("bookingLocks").doc(lockId));
     tx.set(bookingDoc, { ...next, revision, serverUpdatedAt: FieldValue.serverTimestamp() });
@@ -2572,6 +2694,7 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
       bookingRemoteId,
       bookingRevision: revision,
       financialLineRevisions,
+      roomPlanAssignmentRevisions,
       updatedByUid: requestAuth.uid,
       alreadyApplied: false,
       outcome: "APPLIED",
@@ -2581,6 +2704,19 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
       hotelRemoteId: hotelId, bookingRemoteId, operationId, userUid: requestAuth.uid, deviceId,
       setFields: Object.keys(setFields), previousValues, newValues: acceptedValues,
       addRoomRemoteIds: Array.from(addRoomIds), removeRoomRemoteIds: Array.from(removeRoomIds),
+      roomPlanAssignmentsChanged: roomPlanAssignments !== null,
+      previousRoomPlanAssignments: roomPlanSnapshot === null
+        ? null
+        : roomPlanSnapshot.docs
+            .filter((doc) => !booleanValue(doc.get("isDeleted")))
+            .map((doc) => ({
+              businessDateMillis: numberValue(doc.get("businessDateMillis")),
+              roomRemoteId: String(doc.get("roomRemoteId") || ""),
+              propertyRemoteId: doc.get("propertyRemoteId") == null
+                ? null
+                : String(doc.get("propertyRemoteId")),
+            })),
+      newRoomPlanAssignments: roomPlanAssignments,
       serverTime: FieldValue.serverTimestamp(),
     });
     tx.set(mutationDoc, { ...result, hotelRemoteId: hotelId, createdAt: FieldValue.serverTimestamp() });

@@ -283,10 +283,11 @@ describe("Firebase callable Functions integration", () => {
     ).get()).exists).toBe(false);
   }, 10_000);
 
-  test("room-plan-only command is not acknowledged before assignment persistence exists", async () => {
+  test("room-plan-only command persists operational assignments without rebuilding finance", async () => {
     const client = await createClient();
     await seedMembership(client.auth.currentUser!.uid);
     await seedRoom("H101", "property-a");
+    await seedRoom("H102", "property-a");
 
     await client.call("applyBookingChangeSetServer", {
       hotelId: "hotel-a",
@@ -312,9 +313,20 @@ describe("Firebase callable Functions integration", () => {
       },
     });
 
-    await expectFunctionError(client.call("applyBookingChangeSetServer", {
+    const db = getFirestore(adminApp);
+    const financialBefore = await db.collection("hotels/hotel-a/bookingFinancialLines")
+      .where("bookingRemoteId", "==", "booking-room-plan-only")
+      .get();
+    const activeFinancialBefore = financialBefore.docs.filter(
+      (doc) => !doc.get("isDeleted")
+    );
+    expect(activeFinancialBefore).toHaveLength(1);
+    const financialLineBefore = activeFinancialBefore[0];
+    const financialRevisionBefore = financialLineBefore.get("revision");
+
+    const roomPlanPayload = {
       hotelId: "hotel-a",
-      operationId: "room-plan-only-before-persistence",
+      operationId: "room-plan-only-persist",
       deviceId: "device-a",
       changeSet: {
         bookingRemoteId: "booking-room-plan-only",
@@ -328,19 +340,118 @@ describe("Firebase callable Functions integration", () => {
         roomPlanAssignments: [
           {
             businessDateMillis: START,
-            roomRemoteId: "H101",
+            roomRemoteId: "H102",
             propertyRemoteId: "property-a",
           },
         ],
       },
-    }), "invalid-argument");
+    };
 
-    const db = getFirestore(adminApp);
-    expect((await db.doc(
-      "hotels/hotel-a/appliedBookingChangeSets/room-plan-only-before-persistence"
-    ).get()).exists).toBe(false);
+    const applied = await client.call(
+      "applyBookingChangeSetServer",
+      roomPlanPayload
+    ) as Record<string, unknown>;
+
+    expect(applied.outcome).toBe("APPLIED");
+    expect(applied.alreadyApplied).toBe(false);
+
+    const assignmentId =
+      `room_plan_${encodeURIComponent("booking-room-plan-only")}_${START}_${encodeURIComponent("H102")}`;
+
+    const assignment = await db.doc(
+      `hotels/hotel-a/bookingRoomNightAssignments/${assignmentId}`
+    ).get();
+
+    expect(assignment.exists).toBe(true);
+    expect(assignment.get("remoteId")).toBe(assignmentId);
+    expect(assignment.get("bookingRemoteId")).toBe("booking-room-plan-only");
+    expect(assignment.get("roomRemoteId")).toBe("H102");
+    expect(assignment.get("propertyRemoteId")).toBe("property-a");
+    expect(assignment.get("businessDateMillis")).toBe(START);
+    expect(assignment.get("isDeleted")).toBe(false);
+    expect(assignment.get("revision")).toBe(1);
+
+    const bookingAfter = await db.doc(
+      "hotels/hotel-a/bookings/booking-room-plan-only"
+    ).get();
+
+    expect(bookingAfter.get("roomRemoteIds")).toEqual(["H101"]);
+
+    const financialAfter = await db.collection("hotels/hotel-a/bookingFinancialLines")
+      .where("bookingRemoteId", "==", "booking-room-plan-only")
+      .get();
+    const activeFinancialAfter = financialAfter.docs.filter(
+      (doc) => !doc.get("isDeleted")
+    );
+
+    expect(activeFinancialAfter).toHaveLength(1);
+    expect(activeFinancialAfter[0].id).toBe(financialLineBefore.id);
+    expect(activeFinancialAfter[0].get("roomRemoteId")).toBe("H101");
+    expect(activeFinancialAfter[0].get("revision")).toBe(financialRevisionBefore);
+
+    const replay = await client.call(
+      "applyBookingChangeSetServer",
+      roomPlanPayload
+    ) as Record<string, unknown>;
+
+    expect(replay.outcome).toBe("APPLIED");
+    expect(replay.alreadyApplied).toBe(true);
+
+    const assignmentAfterReplay = await db.doc(
+      `hotels/hotel-a/bookingRoomNightAssignments/${assignmentId}`
+    ).get();
+    expect(assignmentAfterReplay.get("revision")).toBe(1);
+
+    const mutation = await db.doc(
+      "hotels/hotel-a/appliedBookingChangeSets/room-plan-only-persist"
+    ).get();
+    expect(mutation.exists).toBe(true);
+    expect(mutation.get("roomPlanAssignmentRevisions")).toEqual({
+      [assignmentId]: 1,
+    });
+
+    const clearResult = await client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "room-plan-clear",
+      deviceId: "device-a",
+      changeSet: {
+        bookingRemoteId: "booking-room-plan-only",
+        create: false,
+        setFields: {},
+        addRoomRemoteIds: [],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: false,
+        financialLineTemplate: null,
+        financialLineRemoteIdsByKey: {},
+        roomPlanAssignments: [],
+      },
+    }) as Record<string, unknown>;
+
+    expect(clearResult.outcome).toBe("APPLIED");
+    expect(clearResult.alreadyApplied).toBe(false);
+
+    const clearedAssignment = await db.doc(
+      `hotels/hotel-a/bookingRoomNightAssignments/${assignmentId}`
+    ).get();
+    expect(clearedAssignment.get("isDeleted")).toBe(true);
+    expect(clearedAssignment.get("revision")).toBe(2);
+
+    const bookingAfterClear = await db.doc(
+      "hotels/hotel-a/bookings/booking-room-plan-only"
+    ).get();
+    expect(bookingAfterClear.get("roomRemoteIds")).toEqual(["H101"]);
+
+    const financialAfterClear = await db.collection("hotels/hotel-a/bookingFinancialLines")
+      .where("bookingRemoteId", "==", "booking-room-plan-only")
+      .get();
+    const activeFinancialAfterClear = financialAfterClear.docs.filter(
+      (doc) => !doc.get("isDeleted")
+    );
+    expect(activeFinancialAfterClear).toHaveLength(1);
+    expect(activeFinancialAfterClear[0].id).toBe(financialLineBefore.id);
+    expect(activeFinancialAfterClear[0].get("roomRemoteId")).toBe("H101");
+    expect(activeFinancialAfterClear[0].get("revision")).toBe(financialRevisionBefore);
   }, 10_000);
-
   test("booking change set rejects a real room-lock conflict without partial writes", async () => {
     const client = await createClient();
     await seedMembership(client.auth.currentUser!.uid);
