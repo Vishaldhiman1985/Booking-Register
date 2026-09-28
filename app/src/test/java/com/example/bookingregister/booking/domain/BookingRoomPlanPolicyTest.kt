@@ -160,6 +160,27 @@ class BookingRoomPlanPolicyTest {
     }
 
     @Test
+    fun `one room identity cannot belong to different properties across the stay`() {
+        val assignments = listOf(
+            BookingRoomNightAssignment(day1, "room-123", "hotel-a"),
+            BookingRoomNightAssignment(day2, "room-123", "hotel-b")
+        )
+
+        val result = BookingRoomPlanPolicy.validate(
+            checkInMillis = day1,
+            checkOutMillis = day3,
+            assignments = assignments
+        )
+
+        assertFalse(result.isValid)
+        assertTrue(
+            result.errors.contains(
+                "The same room cannot belong to different properties within one booking plan."
+            )
+        )
+    }
+
+    @Test
     fun `valid planned stay passes validation`() {
         val original = BookingRoomPlanPolicy.legacyAssignments(
             checkInMillis = day1,

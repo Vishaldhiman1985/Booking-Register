@@ -137,6 +137,20 @@ object BookingRoomPlanPolicy {
             errors += "The same room cannot be assigned twice for the same night."
         }
 
+        val roomPropertyConflicts = assignments
+            .filter { it.roomRemoteId.trim().isNotBlank() }
+            .groupBy { it.roomRemoteId.trim() }
+            .filterValues { roomAssignments ->
+                roomAssignments
+                    .map { propertyKey(it.propertyRemoteId) }
+                    .toSet()
+                    .size > 1
+            }
+
+        if (roomPropertyConflicts.isNotEmpty()) {
+            errors += "The same room cannot belong to different properties within one booking plan."
+        }
+
         val assignmentsByDate = assignments
             .filter { it.businessDateMillis in expectedDateSet }
             .groupBy { it.businessDateMillis }
