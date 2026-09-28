@@ -82,6 +82,79 @@ class BookingChangeSetTest {
     }
 
     @Test
+    fun `room plan survives a later command that does not change the plan`() {
+        val firstPlan = listOf(
+            BookingRoomPlanCommandAssignment(1_000, "H101", "property-a"),
+            BookingRoomPlanCommandAssignment(2_000, "H201", "property-a")
+        )
+
+        val first = BookingChangeSet(
+            bookingRemoteId = "booking-a",
+            create = false,
+            setFields = emptyMap(),
+            addRoomRemoteIds = emptyList(),
+            removeRoomRemoteIds = emptyList(),
+            rebuildFinancialLines = false,
+            financialLineTemplate = null,
+            financialLineRemoteIdsByKey = emptyMap(),
+            roomPlanAssignments = firstPlan
+        )
+        val laterUnrelatedChange = BookingChangeSet(
+            bookingRemoteId = "booking-a",
+            create = false,
+            setFields = mapOf("notes" to "Late arrival"),
+            addRoomRemoteIds = emptyList(),
+            removeRoomRemoteIds = emptyList(),
+            rebuildFinancialLines = false,
+            financialLineTemplate = null,
+            financialLineRemoteIdsByKey = emptyMap()
+        )
+
+        val combined = first.followedBy(laterUnrelatedChange)
+
+        assertEquals(firstPlan, combined.roomPlanAssignments)
+        assertEquals("Late arrival", combined.setFields["notes"])
+    }
+
+    @Test
+    fun `later explicit room plan replaces earlier explicit room plan`() {
+        val firstPlan = listOf(
+            BookingRoomPlanCommandAssignment(1_000, "H101", "property-a")
+        )
+        val laterPlan = listOf(
+            BookingRoomPlanCommandAssignment(1_000, "H301", "property-a"),
+            BookingRoomPlanCommandAssignment(2_000, "H301", "property-a")
+        )
+
+        val first = BookingChangeSet(
+            bookingRemoteId = "booking-a",
+            create = false,
+            setFields = emptyMap(),
+            addRoomRemoteIds = emptyList(),
+            removeRoomRemoteIds = emptyList(),
+            rebuildFinancialLines = false,
+            financialLineTemplate = null,
+            financialLineRemoteIdsByKey = emptyMap(),
+            roomPlanAssignments = firstPlan
+        )
+        val later = BookingChangeSet(
+            bookingRemoteId = "booking-a",
+            create = false,
+            setFields = emptyMap(),
+            addRoomRemoteIds = emptyList(),
+            removeRoomRemoteIds = emptyList(),
+            rebuildFinancialLines = false,
+            financialLineTemplate = null,
+            financialLineRemoteIdsByKey = emptyMap(),
+            roomPlanAssignments = laterPlan
+        )
+
+        val combined = first.followedBy(later)
+
+        assertEquals(laterPlan, combined.roomPlanAssignments)
+    }
+
+    @Test
     fun `rejected room move followed by another room choice keeps original server baseline`() {
         val serverState = booking(3_000.0, listOf("H101"))
         val rejectedLocalState = booking(3_000.0, listOf("H102"))

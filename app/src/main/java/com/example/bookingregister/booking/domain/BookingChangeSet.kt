@@ -90,7 +90,8 @@ data class BookingChangeSet(
                 next.financialLineRemoteIdsByKey
             } else {
                 financialLineRemoteIdsByKey
-            }
+            },
+            roomPlanAssignments = next.roomPlanAssignments ?: roomPlanAssignments
         )
     }
 
