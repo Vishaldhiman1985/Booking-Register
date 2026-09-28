@@ -82,6 +82,38 @@ class BookingChangeSetTest {
     }
 
     @Test
+    fun `attaching a room plan does not change financial rebuild intent`() {
+        val financialIds = mapOf("H101|1000" to "line-1")
+        val financialTemplate = mapOf<String, Any?>(
+            "gstRatePercent" to 5.0,
+            "source" to "ROOM"
+        )
+        val base = BookingChangeSet(
+            bookingRemoteId = "booking-a",
+            create = false,
+            setFields = mapOf("notes" to "Keep late arrival note"),
+            addRoomRemoteIds = emptyList(),
+            removeRoomRemoteIds = emptyList(),
+            rebuildFinancialLines = false,
+            financialLineTemplate = financialTemplate,
+            financialLineRemoteIdsByKey = financialIds
+        )
+        val roomPlan = listOf(
+            BookingRoomPlanCommandAssignment(1_000, "H101", "property-a"),
+            BookingRoomPlanCommandAssignment(2_000, "H201", "property-a")
+        )
+
+        val result = base.withRoomPlanAssignments(roomPlan)
+
+        assertEquals(roomPlan, result.roomPlanAssignments)
+        assertFalse(result.rebuildFinancialLines)
+        assertEquals(financialTemplate, result.financialLineTemplate)
+        assertEquals(financialIds, result.financialLineRemoteIdsByKey)
+        assertEquals(base.setFields, result.setFields)
+        assertTrue(result.hasChanges)
+    }
+
+    @Test
     fun `room plan survives a later command that does not change the plan`() {
         val firstPlan = listOf(
             BookingRoomPlanCommandAssignment(1_000, "H101", "property-a"),

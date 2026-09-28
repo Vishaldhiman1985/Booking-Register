@@ -53,6 +53,12 @@ data class BookingChangeSet(
 
     fun toJson(): String = Gson().toJson(toMap())
 
+    fun withRoomPlanAssignments(
+        assignments: List<BookingRoomPlanCommandAssignment>
+    ): BookingChangeSet = copy(
+        roomPlanAssignments = assignments
+    )
+
     fun followedBy(next: BookingChangeSet): BookingChangeSet {
         require(bookingRemoteId == next.bookingRemoteId) {
             "Cannot combine booking changes for different bookings."
