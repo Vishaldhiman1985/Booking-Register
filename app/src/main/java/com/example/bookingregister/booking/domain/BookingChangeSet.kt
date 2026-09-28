@@ -5,6 +5,18 @@ import com.example.bookingregister.data.entities.BookingFinancialLineEntity
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 
+data class BookingRoomPlanCommandAssignment(
+    val businessDateMillis: Long,
+    val roomRemoteId: String,
+    val propertyRemoteId: String?
+) {
+    fun toMap(): Map<String, Any?> = mapOf(
+        "businessDateMillis" to businessDateMillis,
+        "roomRemoteId" to roomRemoteId,
+        "propertyRemoteId" to propertyRemoteId
+    )
+}
+
 data class BookingChangeSet(
     val bookingRemoteId: String,
     val create: Boolean,
@@ -13,16 +25,18 @@ data class BookingChangeSet(
     val removeRoomRemoteIds: List<String>,
     val rebuildFinancialLines: Boolean,
     val financialLineTemplate: Map<String, Any?>?,
-    val financialLineRemoteIdsByKey: Map<String, String>
+    val financialLineRemoteIdsByKey: Map<String, String>,
+    val roomPlanAssignments: List<BookingRoomPlanCommandAssignment>? = null
 ) {
     val hasChanges: Boolean
         get() = create ||
             setFields.isNotEmpty() ||
             addRoomRemoteIds.isNotEmpty() ||
             removeRoomRemoteIds.isNotEmpty() ||
-            rebuildFinancialLines
+            rebuildFinancialLines ||
+            roomPlanAssignments != null
 
-    fun toMap(): Map<String, Any?> = mapOf(
+    fun toMap(): Map<String, Any?> = linkedMapOf<String, Any?>(
         "bookingRemoteId" to bookingRemoteId,
         "create" to create,
         "setFields" to setFields,
@@ -31,7 +45,11 @@ data class BookingChangeSet(
         "rebuildFinancialLines" to rebuildFinancialLines,
         "financialLineTemplate" to financialLineTemplate,
         "financialLineRemoteIdsByKey" to financialLineRemoteIdsByKey
-    )
+    ).apply {
+        roomPlanAssignments?.let { assignments ->
+            put("roomPlanAssignments", assignments.map { it.toMap() })
+        }
+    }
 
     fun toJson(): String = Gson().toJson(toMap())
 
@@ -168,8 +186,46 @@ data class BookingChangeSet(
                         val cleanKey = key?.toString() ?: return@mapNotNull null
                         val cleanValue = value?.toString() ?: return@mapNotNull null
                         cleanKey to cleanValue
-                    }?.toMap().orEmpty()
+                    }?.toMap().orEmpty(),
+                roomPlanAssignments = parseRoomPlanAssignments(map)
             )
+        }
+
+        private fun parseRoomPlanAssignments(
+            map: Map<String, Any?>
+        ): List<BookingRoomPlanCommandAssignment>? {
+            if (!map.containsKey("roomPlanAssignments")) return null
+
+            val rawAssignments = map["roomPlanAssignments"]
+                as? List<*>
+                ?: error("roomPlanAssignments must be a list.")
+
+            return rawAssignments.map { rawAssignment ->
+                val assignment = rawAssignment as? Map<*, *>
+                    ?: error("Each room plan assignment must be an object.")
+
+                val businessDateMillis =
+                    (assignment["businessDateMillis"] as? Number)?.toLong()
+                        ?: error("Room plan assignment is missing businessDateMillis.")
+
+                val roomRemoteId = assignment["roomRemoteId"]
+                    ?.toString()
+                    ?.trim()
+                    .orEmpty()
+
+                require(roomRemoteId.isNotBlank()) {
+                    "Room plan assignment is missing roomRemoteId."
+                }
+
+                BookingRoomPlanCommandAssignment(
+                    businessDateMillis = businessDateMillis,
+                    roomRemoteId = roomRemoteId,
+                    propertyRemoteId = assignment["propertyRemoteId"]
+                        ?.toString()
+                        ?.trim()
+                        ?.takeIf { it.isNotBlank() }
+                )
+            }
         }
     }
 }

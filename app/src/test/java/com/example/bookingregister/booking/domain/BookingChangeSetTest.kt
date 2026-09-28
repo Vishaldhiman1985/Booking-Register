@@ -3,6 +3,7 @@ package com.example.bookingregister.booking.domain
 import com.example.bookingregister.data.entities.BookingEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -31,6 +32,53 @@ class BookingChangeSetTest {
         assertEquals(changeSet.addRoomRemoteIds, decoded.addRoomRemoteIds)
         assertEquals(3_200.0, (decoded.setFields["grossCharges"] as Number).toDouble(), 0.001)
         assertFalse(decoded.create)
+    }
+
+    @Test
+    fun `legacy command keeps exact backward compatible room plan absence`() {
+        val changeSet = BookingChangeSet.create(
+            booking(3_000.0, listOf("H101")),
+            booking(3_200.0, listOf("H101", "H102")),
+            emptyList(),
+            emptyList()
+        )
+
+        val json = changeSet.toJson()
+        val decoded = BookingChangeSet.fromJson(json)
+
+        assertFalse(json.contains("roomPlanAssignments"))
+        assertNull(decoded.roomPlanAssignments)
+    }
+
+    @Test
+    fun `explicit room plan survives durable command json round trip`() {
+        val changeSet = BookingChangeSet(
+            bookingRemoteId = "booking-a",
+            create = false,
+            setFields = emptyMap(),
+            addRoomRemoteIds = emptyList(),
+            removeRoomRemoteIds = emptyList(),
+            rebuildFinancialLines = false,
+            financialLineTemplate = null,
+            financialLineRemoteIdsByKey = emptyMap(),
+            roomPlanAssignments = listOf(
+                BookingRoomPlanCommandAssignment(
+                    businessDateMillis = 1_000,
+                    roomRemoteId = "H101",
+                    propertyRemoteId = "property-a"
+                ),
+                BookingRoomPlanCommandAssignment(
+                    businessDateMillis = 2_000,
+                    roomRemoteId = "H201",
+                    propertyRemoteId = "property-b"
+                )
+            )
+        )
+
+        val decoded = BookingChangeSet.fromJson(changeSet.toJson())
+
+        assertTrue(changeSet.hasChanges)
+        assertEquals(changeSet.roomPlanAssignments, decoded.roomPlanAssignments)
     }
 
     @Test
