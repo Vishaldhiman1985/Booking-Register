@@ -239,6 +239,108 @@ describe("Firebase callable Functions integration", () => {
     expect((await db.collection("hotels/hotel-a/bookingAuditEvents").get()).size).toBe(3);
   }, 15_000);
 
+  test("booking command rejects a malformed explicit room plan instead of silently ignoring it", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+    await seedRoom("H101", "property-a");
+
+    await expectFunctionError(client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "malformed-room-plan",
+      deviceId: "device-a",
+      changeSet: {
+        bookingRemoteId: "booking-malformed-room-plan",
+        create: true,
+        setFields: {
+          bookingUuid: "booking-malformed-room-plan",
+          guestName: "Plan Guest",
+          checkInMillis: START,
+          checkOutMillis: END,
+          bookingStatus: "RESERVED",
+          pricingStatus: "CONFIRMED",
+          grossCharges: 3000,
+        },
+        addRoomRemoteIds: ["H101"],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: true,
+        financialLineTemplate: { gstRatePercent: 5 },
+        financialLineRemoteIdsByKey: {},
+        roomPlanAssignments: [
+          {
+            businessDateMillis: START,
+            roomRemoteId: "   ",
+            propertyRemoteId: "property-a",
+          },
+        ],
+      },
+    }), "invalid-argument");
+
+    const db = getFirestore(adminApp);
+    expect((await db.doc("hotels/hotel-a/bookings/booking-malformed-room-plan").get()).exists)
+      .toBe(false);
+    expect((await db.doc(
+      "hotels/hotel-a/appliedBookingChangeSets/malformed-room-plan"
+    ).get()).exists).toBe(false);
+  }, 10_000);
+
+  test("room-plan-only command is not acknowledged before assignment persistence exists", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+    await seedRoom("H101", "property-a");
+
+    await client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "room-plan-base-booking",
+      deviceId: "device-a",
+      changeSet: {
+        bookingRemoteId: "booking-room-plan-only",
+        create: true,
+        setFields: {
+          bookingUuid: "booking-room-plan-only",
+          guestName: "Plan Guest",
+          checkInMillis: START,
+          checkOutMillis: END,
+          bookingStatus: "RESERVED",
+          pricingStatus: "CONFIRMED",
+          grossCharges: 3000,
+        },
+        addRoomRemoteIds: ["H101"],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: true,
+        financialLineTemplate: { gstRatePercent: 5 },
+        financialLineRemoteIdsByKey: {},
+      },
+    });
+
+    await expectFunctionError(client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "room-plan-only-before-persistence",
+      deviceId: "device-a",
+      changeSet: {
+        bookingRemoteId: "booking-room-plan-only",
+        create: false,
+        setFields: {},
+        addRoomRemoteIds: [],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: false,
+        financialLineTemplate: null,
+        financialLineRemoteIdsByKey: {},
+        roomPlanAssignments: [
+          {
+            businessDateMillis: START,
+            roomRemoteId: "H101",
+            propertyRemoteId: "property-a",
+          },
+        ],
+      },
+    }), "invalid-argument");
+
+    const db = getFirestore(adminApp);
+    expect((await db.doc(
+      "hotels/hotel-a/appliedBookingChangeSets/room-plan-only-before-persistence"
+    ).get()).exists).toBe(false);
+  }, 10_000);
+
   test("booking change set rejects a real room-lock conflict without partial writes", async () => {
     const client = await createClient();
     await seedMembership(client.auth.currentUser!.uid);

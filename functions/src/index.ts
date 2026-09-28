@@ -578,6 +578,160 @@ function stringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => String(item || "").trim()).filter(Boolean);
 }
+type BookingRoomPlanCommandAssignment = {
+  businessDateMillis: number;
+  roomRemoteId: string;
+  propertyRemoteId: string | null;
+};
+
+function parseBookingRoomPlanAssignments(
+  changeSet: Record<string, unknown>
+): BookingRoomPlanCommandAssignment[] | null {
+  if (!Object.prototype.hasOwnProperty.call(changeSet, "roomPlanAssignments")) {
+    return null;
+  }
+
+  const rawAssignments = changeSet.roomPlanAssignments;
+  if (!Array.isArray(rawAssignments)) {
+    throw new HttpsError("invalid-argument", "roomPlanAssignments must be a list.");
+  }
+
+  return rawAssignments.map((rawAssignment) => {
+    if (!rawAssignment ||
+        typeof rawAssignment !== "object" ||
+        Array.isArray(rawAssignment)) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Each room plan assignment must be an object."
+      );
+    }
+
+    const assignment = rawAssignment as Record<string, unknown>;
+    const businessDateMillis = Number(assignment.businessDateMillis);
+
+    if (!Number.isSafeInteger(businessDateMillis) || businessDateMillis <= 0) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Room plan assignment is missing a valid businessDateMillis."
+      );
+    }
+
+    const roomRemoteId = String(assignment.roomRemoteId || "").trim();
+    const propertyRemoteId = assignment.propertyRemoteId == null ?
+      null :
+      String(assignment.propertyRemoteId).trim() || null;
+
+    return {
+      businessDateMillis,
+      roomRemoteId,
+      propertyRemoteId,
+    };
+  });
+}
+
+function validateBookingRoomPlan(
+  checkInMillis: number,
+  checkOutMillis: number,
+  assignments: BookingRoomPlanCommandAssignment[]
+): void {
+  if (assignments.length === 0) return;
+
+  const expectedDates: number[] = [];
+  for (let day = checkInMillis; day < checkOutMillis; day += DAY_MILLIS) {
+    expectedDates.push(day);
+  }
+
+  const expectedDateSet = new Set(expectedDates);
+  const errors = new Set<string>();
+  const roomNightKeys = new Set<string>();
+  const propertiesByRoom = new Map<string, Set<string>>();
+  const assignmentsByDate =
+    new Map<number, BookingRoomPlanCommandAssignment[]>();
+
+  for (const assignment of assignments) {
+    if (!assignment.roomRemoteId) {
+      errors.add("Room assignment contains an empty room.");
+    }
+
+    if (!expectedDateSet.has(assignment.businessDateMillis)) {
+      errors.add("Room assignment contains a date outside the booking stay.");
+    }
+
+    const roomNightKey =
+      `${assignment.businessDateMillis}|${assignment.roomRemoteId}`;
+
+    if (roomNightKeys.has(roomNightKey)) {
+      errors.add("The same room cannot be assigned twice for the same night.");
+    }
+    roomNightKeys.add(roomNightKey);
+
+    if (assignment.roomRemoteId) {
+      const propertyKey =
+        assignment.propertyRemoteId || "__MAIN_PROPERTY__";
+
+      const roomProperties =
+        propertiesByRoom.get(assignment.roomRemoteId) ||
+        new Set<string>();
+
+      roomProperties.add(propertyKey);
+
+      propertiesByRoom.set(
+        assignment.roomRemoteId,
+        roomProperties
+      );
+    }
+
+    if (expectedDateSet.has(assignment.businessDateMillis)) {
+      const nightlyAssignments =
+        assignmentsByDate.get(assignment.businessDateMillis) || [];
+
+      nightlyAssignments.push(assignment);
+
+      assignmentsByDate.set(
+        assignment.businessDateMillis,
+        nightlyAssignments
+      );
+    }
+  }
+
+  for (const propertyKeys of propertiesByRoom.values()) {
+    if (propertyKeys.size > 1) {
+      errors.add(
+        "The same room cannot belong to different properties within one booking plan."
+      );
+    }
+  }
+
+  for (const dateMillis of expectedDates) {
+    const nightlyAssignments =
+      assignmentsByDate.get(dateMillis) || [];
+
+    if (nightlyAssignments.length === 0) {
+      errors.add("Every night must have at least one room.");
+      continue;
+    }
+
+    const propertyKeys = new Set(
+      nightlyAssignments.map(
+        (assignment) =>
+          assignment.propertyRemoteId || "__MAIN_PROPERTY__"
+      )
+    );
+
+    if (propertyKeys.size > 1) {
+      errors.add(
+        "Rooms used on the same night must belong to the same property."
+      );
+    }
+  }
+
+  if (errors.size > 0) {
+    throw new HttpsError(
+      "invalid-argument",
+      Array.from(errors).join(" ")
+    );
+  }
+}
 
 function startOfDay(millis: number): number {
   const date = new Date(millis);
@@ -2011,6 +2165,7 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
   const requestedFinancialLineRebuild = booleanValue(changeSet.rebuildFinancialLines);
   const template = (changeSet.financialLineTemplate || {}) as Record<string, unknown>;
   const requestedLineIds = (changeSet.financialLineRemoteIdsByKey || {}) as Record<string, unknown>;
+  const roomPlanAssignments = parseBookingRoomPlanAssignments(changeSet);
 
   const allowedFields = new Set([
     "bookingUuid", "propertyRemoteId", "guestName", "guestMobile", "sourceName", "sourceRemoteId",
@@ -2101,6 +2256,13 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
     const checkOutMillis = numberValue(next.checkOutMillis);
     if (checkInMillis <= 0 || checkOutMillis <= checkInMillis) {
       throw new HttpsError("invalid-argument", "Check-out must be after check-in.");
+    }
+    if (roomPlanAssignments !== null) {
+      validateBookingRoomPlan(
+        checkInMillis,
+        checkOutMillis,
+        roomPlanAssignments
+      );
     }
     if (!String(next.guestName || "").trim()) throw new HttpsError("invalid-argument", "Guest name is required.");
     const cancelled = String(next.bookingStatus || "RESERVED") === "CANCELLED";
