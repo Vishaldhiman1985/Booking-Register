@@ -746,17 +746,78 @@ function startOfDay(millis: number): number {
   return date.getTime();
 }
 
-function lockIdsFor(roomRemoteIds: string[], checkInMillis: number, checkOutMillis: number): Set<string> {
-  const start = startOfDay(checkInMillis);
-  const end = startOfDay(checkOutMillis);
-  const lockIds = new Set<string>();
-  if (end <= start) return lockIds;
+type BookingLockTarget = {
+  roomRemoteId: string;
+  businessDateMillis: number;
+};
 
-  for (const roomId of roomRemoteIds) {
-    for (let day = start; day < end; day += DAY_MILLIS) {
-      lockIds.add(`${roomId}_${day}`);
+function bookingLockId(
+  roomRemoteId: string,
+  businessDateMillis: number
+): string {
+  return `${roomRemoteId}_${businessDateMillis}`;
+}
+
+function exactLockTargetsForRooms(
+  roomRemoteIds: string[],
+  checkInMillis: number,
+  checkOutMillis: number
+): Map<string, BookingLockTarget> {
+  const targets = new Map<string, BookingLockTarget>();
+
+  for (const roomRemoteId of roomRemoteIds) {
+    for (
+      let businessDateMillis = checkInMillis;
+      businessDateMillis < checkOutMillis;
+      businessDateMillis += DAY_MILLIS
+    ) {
+      const target = {
+        roomRemoteId,
+        businessDateMillis,
+      };
+      targets.set(
+        bookingLockId(roomRemoteId, businessDateMillis),
+        target
+      );
     }
   }
+
+  return targets;
+}
+
+function exactLockTargetsForRoomPlan(
+  assignments: BookingRoomPlanCommandAssignment[]
+): Map<string, BookingLockTarget> {
+  const targets = new Map<string, BookingLockTarget>();
+
+  for (const assignment of assignments) {
+    const target = {
+      roomRemoteId: assignment.roomRemoteId,
+      businessDateMillis: assignment.businessDateMillis,
+    };
+    targets.set(
+      bookingLockId(
+        assignment.roomRemoteId,
+        assignment.businessDateMillis
+      ),
+      target
+    );
+  }
+
+  return targets;
+}
+
+function legacyCompatibleLockIdsForTargets(
+  targets: Iterable<BookingLockTarget>
+): Set<string> {
+  const lockIds = new Set<string>();
+
+  for (const target of targets) {
+    lockIds.add(
+      `${target.roomRemoteId}_${startOfDay(target.businessDateMillis)}`
+    );
+  }
+
   return lockIds;
 }
 
@@ -2265,19 +2326,25 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
     if (checkInMillis <= 0 || checkOutMillis <= checkInMillis) {
       throw new HttpsError("invalid-argument", "Check-out must be after check-in.");
     }
+    const bookingDatesChanged =
+      currentSnapshot.exists &&
+      (
+        numberValue(current.checkInMillis) !== checkInMillis ||
+        numberValue(current.checkOutMillis) !== checkOutMillis
+      );
+
     let roomPlanSnapshot: QuerySnapshot | null = null;
+    roomPlanSnapshot = await tx.get(
+      hotelRef.collection("bookingRoomNightAssignments")
+        .where("bookingRemoteId", "==", bookingRemoteId)
+    );
+
     if (roomPlanAssignments !== null) {
       validateBookingRoomPlan(
         checkInMillis,
         checkOutMillis,
         roomPlanAssignments
       );
-
-      roomPlanSnapshot = await tx.get(
-        hotelRef.collection("bookingRoomNightAssignments")
-          .where("bookingRemoteId", "==", bookingRemoteId)
-      );
-
       const plannedRoomIds = Array.from(
         new Set(roomPlanAssignments.map((assignment) => assignment.roomRemoteId))
       );
@@ -2311,6 +2378,40 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
             "failed-precondition",
             "A room plan assignment no longer matches the room property."
           );
+        }
+      }
+    }
+    if (
+      roomPlanAssignments === null &&
+      bookingDatesChanged &&
+      roomPlanSnapshot !== null
+    ) {
+      const activeExistingPlan: BookingRoomPlanCommandAssignment[] =
+        roomPlanSnapshot.docs
+          .filter((doc) => !booleanValue(doc.get("isDeleted")))
+          .map((doc) => ({
+            businessDateMillis: numberValue(doc.get("businessDateMillis")),
+            roomRemoteId: String(doc.get("roomRemoteId") || "").trim(),
+            propertyRemoteId: doc.get("propertyRemoteId") == null
+              ? null
+              : String(doc.get("propertyRemoteId")).trim() || null,
+          }));
+
+      if (activeExistingPlan.length > 0) {
+        try {
+          validateBookingRoomPlan(
+            checkInMillis,
+            checkOutMillis,
+            activeExistingPlan
+          );
+        } catch (error) {
+          if (error instanceof HttpsError) {
+            throw new HttpsError(
+              "failed-precondition",
+              "Update or clear the existing date-wise room plan when changing booking dates."
+            );
+          }
+          throw error;
         }
       }
     }
@@ -2455,32 +2556,116 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
     const propertyKey = Array.from(propertyKeys)[0];
     next.propertyRemoteId = propertyKey === "__MAIN_PROPERTY__" ? null : propertyKey;
 
-    const oldLockIds = currentSnapshot.exists
-      ? lockIdsFor(stringList(current.roomRemoteIds), numberValue(current.checkInMillis), numberValue(current.checkOutMillis))
-      : new Set<string>();
-    const newLockIds = cancelled ? new Set<string>() : lockIdsFor(Array.from(nextRooms), checkInMillis, checkOutMillis);
+    const activeStoredRoomPlan: BookingRoomPlanCommandAssignment[] =
+      roomPlanSnapshot.docs
+        .filter((doc) => !booleanValue(doc.get("isDeleted")))
+        .map((doc) => ({
+          businessDateMillis: numberValue(doc.get("businessDateMillis")),
+          roomRemoteId: String(doc.get("roomRemoteId") || "").trim(),
+          propertyRemoteId: doc.get("propertyRemoteId") == null
+            ? null
+            : String(doc.get("propertyRemoteId")).trim() || null,
+        }));
+
+    // Explicit room-plan input replaces the stored operational plan.
+    // An explicit [] clears the plan and therefore falls back to the
+    // booking's normal room selection across the stay.
+    const effectiveRoomPlan =
+      roomPlanAssignments !== null
+        ? roomPlanAssignments
+        : activeStoredRoomPlan;
+
+    const newLockTargets = cancelled
+      ? new Map<string, BookingLockTarget>()
+      : effectiveRoomPlan.length > 0
+        ? exactLockTargetsForRoomPlan(effectiveRoomPlan)
+        : exactLockTargetsForRooms(
+            Array.from(nextRooms),
+            checkInMillis,
+            checkOutMillis
+          );
+
+    const newLockIds = new Set(newLockTargets.keys());
+
+    // Read the locks that actually exist for this booking. This lets an
+    // old booking migrate safely without reconstructing historical lock IDs.
+    const existingBookingLocks = currentSnapshot.exists
+      ? await tx.get(
+          hotelRef.collection("bookingLocks")
+            .where("bookingRemoteId", "==", bookingRemoteId)
+        )
+      : null;
+
+    // Existing production bookings may still own locks generated by the
+    // previous server-local-midnight scheme. During migration, check both
+    // exact canonical IDs and their legacy-compatible equivalents.
+    const conflictLockIds = new Set<string>(newLockIds);
+
+    for (
+      const legacyLockId of legacyCompatibleLockIdsForTargets(
+        newLockTargets.values()
+      )
+    ) {
+      conflictLockIds.add(legacyLockId);
+    }
+
     const lockSnapshots = new Map<string, DocumentSnapshot>();
     const blockingIds = new Set<string>();
-    for (const lockId of newLockIds) {
-      const snapshot = await tx.get(hotelRef.collection("bookingLocks").doc(lockId));
+
+    for (const lockId of conflictLockIds) {
+      const snapshot = await tx.get(
+        hotelRef.collection("bookingLocks").doc(lockId)
+      );
+
       lockSnapshots.set(lockId, snapshot);
-      const lockedBy = String(snapshot.get("bookingRemoteId") || "");
-      if (snapshot.exists && !booleanValue(snapshot.get("isDeleted")) && lockedBy && lockedBy !== bookingRemoteId) {
+
+      const lockedBy = String(
+        snapshot.get("bookingRemoteId") || ""
+      );
+
+      if (
+        snapshot.exists &&
+        !booleanValue(snapshot.get("isDeleted")) &&
+        lockedBy &&
+        lockedBy !== bookingRemoteId
+      ) {
         blockingIds.add(lockedBy);
       }
     }
-    const blockingBookings = new Map<string, DocumentSnapshot>();
-    for (const id of blockingIds) blockingBookings.set(id, await tx.get(hotelRef.collection("bookings").doc(id)));
+
+    const blockingBookings =
+      new Map<string, DocumentSnapshot>();
+
+    for (const id of blockingIds) {
+      blockingBookings.set(
+        id,
+        await tx.get(
+          hotelRef.collection("bookings").doc(id)
+        )
+      );
+    }
+
     const activeBlockingBookingIds = new Set<string>();
+
     for (const lock of lockSnapshots.values()) {
-      const lockedBy = String(lock.get("bookingRemoteId") || "");
+      const lockedBy = String(
+        lock.get("bookingRemoteId") || ""
+      );
+
       const blocker = blockingBookings.get(lockedBy);
-      if (blocker?.exists && !booleanValue(blocker.get("isDeleted")) && String(blocker.get("bookingStatus") || "") !== "CANCELLED") {
+
+      if (
+        blocker?.exists &&
+        !booleanValue(blocker.get("isDeleted")) &&
+        String(blocker.get("bookingStatus") || "") !== "CANCELLED"
+      ) {
         activeBlockingBookingIds.add(lockedBy);
       }
     }
+
     if (activeBlockingBookingIds.size > 0) {
-      const blockingBookingRemoteIds = Array.from(activeBlockingBookingIds).sort();
+      const blockingBookingRemoteIds =
+        Array.from(activeBlockingBookingIds).sort();
 
       if (conflictResolutionVersion >= 1) {
         const result = {
@@ -2501,7 +2686,9 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
           operationId,
           userUid: requestAuth.uid,
           deviceId,
-          action: create ? "CREATE_REJECTED_ROOM_CONFLICT" : "UPDATE_REJECTED_ROOM_CONFLICT",
+          action: create
+            ? "CREATE_REJECTED_ROOM_CONFLICT"
+            : "UPDATE_REJECTED_ROOM_CONFLICT",
           blockingBookingRemoteIds,
           serverTime: FieldValue.serverTimestamp(),
         });
@@ -2515,9 +2702,11 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
         return result;
       }
 
-      throw new HttpsError("already-exists", "A selected room is already booked for these dates.");
+      throw new HttpsError(
+        "already-exists",
+        "A selected room is already booked for these dates."
+      );
     }
-
     const financialSnapshot = await tx.get(
       hotelRef.collection("bookingFinancialLines").where("bookingRemoteId", "==", bookingRemoteId)
     );
@@ -2556,8 +2745,31 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
       ? 0
       : roomPlanAssignments.length + roomPlanDeletes;
 
-    const estimatedFinancialWrites = rebuildFinancialLines ? newLockIds.size + financialSnapshot.size : 0;
-    const estimatedWrites = 4 + newLockIds.size + Array.from(oldLockIds).filter((id) => !newLockIds.has(id)).length + estimatedFinancialWrites + roomPlanWrites;
+    const financialRoomNightCount =
+      exactLockTargetsForRooms(
+        Array.from(nextRooms),
+        checkInMillis,
+        checkOutMillis
+      ).size;
+
+    const estimatedFinancialWrites =
+      rebuildFinancialLines
+        ? financialRoomNightCount + financialSnapshot.size
+        : 0;
+
+    const staleExistingLockCount =
+      existingBookingLocks === null
+        ? 0
+        : existingBookingLocks.docs.filter(
+            (doc) => !newLockIds.has(doc.id)
+          ).length;
+
+    const estimatedWrites =
+      4 +
+      newLockIds.size +
+      staleExistingLockCount +
+      estimatedFinancialWrites +
+      roomPlanWrites;
     if (estimatedWrites > 450) {
       throw new HttpsError("invalid-argument", "This booking is too large to save safely in one atomic operation.");
     }
@@ -2626,19 +2838,33 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
       }
     }
 
-    for (const lockId of oldLockIds) if (!newLockIds.has(lockId)) tx.delete(hotelRef.collection("bookingLocks").doc(lockId));
-    tx.set(bookingDoc, { ...next, revision, serverUpdatedAt: FieldValue.serverTimestamp() });
-    for (const lockId of newLockIds) {
-      const parts = lockId.split("_");
-      tx.set(hotelRef.collection("bookingLocks").doc(lockId), {
-        hotelRemoteId: hotelId,
-        bookingRemoteId,
-        roomRemoteId: parts.slice(0, -1).join("_"),
-        dateMillis: numberValue(parts[parts.length - 1]),
-        isDeleted: false,
-        updatedByUid: requestAuth.uid,
-        serverUpdatedAt: FieldValue.serverTimestamp(),
-      });
+    if (existingBookingLocks !== null) {
+      for (const existingLock of existingBookingLocks.docs) {
+        if (!newLockIds.has(existingLock.id)) {
+          tx.delete(existingLock.ref);
+        }
+      }
+    }
+
+    tx.set(bookingDoc, {
+      ...next,
+      revision,
+      serverUpdatedAt: FieldValue.serverTimestamp(),
+    });
+
+    for (const [lockId, target] of newLockTargets) {
+      tx.set(
+        hotelRef.collection("bookingLocks").doc(lockId),
+        {
+          hotelRemoteId: hotelId,
+          bookingRemoteId,
+          roomRemoteId: target.roomRemoteId,
+          dateMillis: target.businessDateMillis,
+          isDeleted: false,
+          updatedByUid: requestAuth.uid,
+          serverUpdatedAt: FieldValue.serverTimestamp(),
+        }
+      );
     }
 
     const financialLineRevisions: Record<string, number> = {};

@@ -452,6 +452,178 @@ describe("Firebase callable Functions integration", () => {
     expect(activeFinancialAfterClear[0].get("roomRemoteId")).toBe("H101");
     expect(activeFinancialAfterClear[0].get("revision")).toBe(financialRevisionBefore);
   }, 10_000);
+  test("date change is rejected when an existing explicit room plan would become incomplete", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+    await seedRoom("H101", "property-a");
+    await seedRoom("H102", "property-a");
+
+    await client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "stale-plan-create",
+      deviceId: "device-a",
+      changeSet: {
+        bookingRemoteId: "booking-stale-plan",
+        create: true,
+        setFields: {
+          bookingUuid: "booking-stale-plan",
+          guestName: "Plan Guest",
+          checkInMillis: START,
+          checkOutMillis: END,
+          bookingStatus: "RESERVED",
+          pricingStatus: "CONFIRMED",
+          grossCharges: 3000,
+        },
+        addRoomRemoteIds: ["H101"],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: true,
+        financialLineTemplate: { gstRatePercent: 5 },
+        financialLineRemoteIdsByKey: {},
+      },
+    });
+
+    await client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "stale-plan-attach",
+      deviceId: "device-a",
+      changeSet: {
+        bookingRemoteId: "booking-stale-plan",
+        create: false,
+        setFields: {},
+        addRoomRemoteIds: [],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: false,
+        financialLineTemplate: null,
+        financialLineRemoteIdsByKey: {},
+        roomPlanAssignments: [
+          {
+            businessDateMillis: START,
+            roomRemoteId: "H102",
+            propertyRemoteId: "property-a",
+          },
+        ],
+      },
+    });
+
+    await expectFunctionError(client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "stale-plan-extend-stay",
+      deviceId: "device-a",
+      changeSet: {
+        bookingRemoteId: "booking-stale-plan",
+        create: false,
+        setFields: {
+          checkOutMillis: END + 86_400_000,
+        },
+        addRoomRemoteIds: [],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: false,
+        financialLineTemplate: { gstRatePercent: 5 },
+        financialLineRemoteIdsByKey: {},
+      },
+    }), "failed-precondition");
+
+    const db = getFirestore(adminApp);
+    const booking = await db.doc(
+      "hotels/hotel-a/bookings/booking-stale-plan"
+    ).get();
+
+    expect(booking.get("checkOutMillis")).toBe(END);
+
+    const activePlan = await db.collection(
+      "hotels/hotel-a/bookingRoomNightAssignments"
+    )
+      .where("bookingRemoteId", "==", "booking-stale-plan")
+      .get();
+
+    expect(
+      activePlan.docs.filter((doc) => !doc.get("isDeleted"))
+    ).toHaveLength(1);
+
+    expect((await db.doc(
+      "hotels/hotel-a/appliedBookingChangeSets/stale-plan-extend-stay"
+    ).get()).exists).toBe(false);
+  }, 10_000);
+
+  test("explicit room plan participates in room conflict detection", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+    await seedRoom("H101", "property-a");
+    await seedRoom("H102", "property-a");
+
+    await client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "plan-lock-blocker-create",
+      deviceId: "device-a",
+      changeSet: {
+        bookingRemoteId: "booking-plan-lock-blocker",
+        create: true,
+        setFields: {
+          bookingUuid: "booking-plan-lock-blocker",
+          guestName: "Blocking Guest",
+          checkInMillis: START,
+          checkOutMillis: END,
+          bookingStatus: "RESERVED",
+          pricingStatus: "CONFIRMED",
+          grossCharges: 3000,
+        },
+        addRoomRemoteIds: ["H102"],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: true,
+        financialLineTemplate: { gstRatePercent: 5 },
+        financialLineRemoteIdsByKey: {},
+      },
+    });
+
+    await expectFunctionError(client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "plan-lock-conflict-create",
+      deviceId: "device-a",
+      changeSet: {
+        bookingRemoteId: "booking-plan-lock-conflict",
+        create: true,
+        setFields: {
+          bookingUuid: "booking-plan-lock-conflict",
+          guestName: "Planned Guest",
+          checkInMillis: START,
+          checkOutMillis: END,
+          bookingStatus: "RESERVED",
+          pricingStatus: "CONFIRMED",
+          grossCharges: 3000,
+        },
+        addRoomRemoteIds: ["H101"],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: true,
+        financialLineTemplate: { gstRatePercent: 5 },
+        financialLineRemoteIdsByKey: {},
+        roomPlanAssignments: [
+          {
+            businessDateMillis: START,
+            roomRemoteId: "H102",
+            propertyRemoteId: "property-a",
+          },
+        ],
+      },
+    }), "already-exists");
+
+    const db = getFirestore(adminApp);
+
+    expect((await db.doc(
+      "hotels/hotel-a/bookings/booking-plan-lock-conflict"
+    ).get()).exists).toBe(false);
+
+    const assignments = await db.collection(
+      "hotels/hotel-a/bookingRoomNightAssignments"
+    )
+      .where("bookingRemoteId", "==", "booking-plan-lock-conflict")
+      .get();
+
+    expect(assignments.empty).toBe(true);
+
+    expect((await db.doc(
+      "hotels/hotel-a/appliedBookingChangeSets/plan-lock-conflict-create"
+    ).get()).exists).toBe(false);
+  }, 10_000);
   test("booking change set rejects a real room-lock conflict without partial writes", async () => {
     const client = await createClient();
     await seedMembership(client.auth.currentUser!.uid);
