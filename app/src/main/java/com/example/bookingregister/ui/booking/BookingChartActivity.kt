@@ -25,15 +25,18 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import com.example.bookingregister.R
 import com.example.bookingregister.booking.domain.BookingStatus
+import com.example.bookingregister.booking.domain.BookingRoomPlanChartPolicy
 import com.example.bookingregister.account.domain.AccountPermission
 import com.example.bookingregister.account.domain.BackendAccessManager
 import com.example.bookingregister.data.AppDatabase
 import com.example.bookingregister.data.repository.BookingRepository
+import com.example.bookingregister.data.repository.BookingRoomPlanReadResolver
 import com.example.bookingregister.data.repository.RoomConflictPlanResult
 import com.example.bookingregister.data.repository.RoomConflictResolutionPlan
 import com.example.bookingregister.data.repository.SaveResult
 import com.example.bookingregister.data.entities.BookingAccountingChargeEntity
 import com.example.bookingregister.data.entities.BookingEntity
+import com.example.bookingregister.data.entities.BookingRoomNightAssignmentEntity
 import com.example.bookingregister.data.entities.BookingFinancialLineEntity
 import com.example.bookingregister.data.entities.BookingPaymentEntity
 import com.example.bookingregister.data.entities.BookingSourceEntity
@@ -91,6 +94,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
     private lateinit var balanceSummaryButton: MaterialButton
     private val rooms = mutableListOf<RoomEntity>()
     private val bookings = mutableListOf<BookingEntity>()
+    private val roomPlanAssignments = mutableListOf<BookingRoomNightAssignmentEntity>()
     private val unsyncedBookings = mutableListOf<BookingEntity>()
     private val payments = mutableListOf<BookingPaymentEntity>()
     private val unsyncedPayments = mutableListOf<BookingPaymentEntity>()
@@ -116,6 +120,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
     private var currentPermissions: Set<String> = emptySet()
     private var roomsLoaded = false
     private var bookingsLoaded = false
+    private var roomPlanLoaded = false
     private var emptyRoomPromptShown = false
     private var initialLoadGraceFinished = false
     private var activeBookingDialog: BookingDialog? = null
@@ -266,6 +271,29 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         }
     }
 
+    private fun refreshChartData() {
+        if (!bookingsLoaded || !roomPlanLoaded) return
+
+        val assignmentsByBooking = roomPlanAssignments.groupBy { it.bookingRemoteId }
+
+        val roomSpansByBooking = bookings.associate { booking ->
+            val effectivePlan = BookingRoomPlanReadResolver.resolve(
+                booking = booking,
+                assignmentEntities = assignmentsByBooking[booking.remoteId].orEmpty()
+            )
+
+            booking.remoteId to BookingRoomPlanChartPolicy.toRoomSpans(
+                effectivePlan.assignments
+            )
+        }
+
+        chartView.setData(
+            r = rooms,
+            b = bookings,
+            roomSpansByBookingRemoteId = roomSpansByBooking
+        )
+    }
+
     private fun observeLocalData() {
         repository.observeHotel().observe(this) { hotel ->
             currentHotel = hotel
@@ -276,7 +304,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             roomsLoaded = true
             rooms.clear()
             rooms.addAll(updatedRooms)
-            chartView.setData(rooms, bookings)
+            refreshChartData()
             updateReportSummary()
             updateSyncIndicator()
             updateChartLoadingState()
@@ -362,11 +390,21 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             bookingsLoaded = true
             bookings.clear()
             bookings.addAll(updatedBookings)
-            chartView.setData(rooms, bookings)
+            refreshChartData()
             updateReportSummary()
             updateSyncIndicator()
             updateChartLoadingState()
             showEmptyRoomPromptIfReady()
+        }
+
+        repository.observeRoomPlanForWindow(
+            bookingWindowStart,
+            bookingWindowEnd
+        ).observe(this) { updatedAssignments ->
+            roomPlanLoaded = true
+            roomPlanAssignments.clear()
+            roomPlanAssignments.addAll(updatedAssignments)
+            refreshChartData()
         }
 
         repository.observeOutstandingBalance().observe(this) { balance ->
