@@ -35,6 +35,7 @@ import com.example.bookingregister.data.entities.BookingAccountingChargeEntity
 import com.example.bookingregister.data.entities.BookingAccountingChargeType
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.BookingFinancialLineEntity
+import com.example.bookingregister.data.entities.BookingRoomNightAssignmentEntity
 import com.example.bookingregister.data.entities.BookingFinancialLineSource
 import com.example.bookingregister.data.entities.BookingPaymentCategory
 import com.example.bookingregister.data.entities.BookingPaymentEntity
@@ -757,6 +758,22 @@ class BookingRepository(
                 onSyncError = { markRealtimeSyncError("Financial line", it) }
             )
 
+            cloudSyncManager.startRoomPlanAssignmentListener(
+                sinceUpdatedAt = null,
+                onAssignmentsChanged = { assignments ->
+                    scope.launch {
+                        assignments.forEach {
+                            upsertRemoteRoomPlanAssignmentIfNewer(
+                                it.markSynced()
+                            )
+                        }
+                        clearRealtimeSyncErrorIfClean()
+                    }
+                },
+                onSyncError = {
+                    markRealtimeSyncError("Room plan", it)
+                }
+            )
             val accountingChargeSince = syncBoundary(
                 localCount = bookingAccountingChargeDao.countAllCharges(hotelRemoteId),
                 maxUpdatedAt = bookingAccountingChargeDao.maxUpdatedAt(hotelRemoteId)
@@ -2913,6 +2930,48 @@ class BookingRepository(
         }
     }
 
+    private suspend fun upsertRemoteRoomPlanAssignmentIfNewer(
+        remote: BookingRoomNightAssignmentEntity
+    ) {
+        val local =
+            bookingRoomNightAssignmentDao.getByRemoteId(
+                remote.remoteId
+            )
+
+        if (
+            local == null ||
+            shouldAcceptRemote(
+                local = local,
+                remoteRevision = remote.revision,
+                remoteUpdatedAt = remote.updatedAt
+            )
+        ) {
+            db.withTransaction {
+                val sameRoomNight =
+                    bookingRoomNightAssignmentDao.getByRoomNight(
+                        hotelRemoteId = remote.hotelRemoteId,
+                        bookingRemoteId = remote.bookingRemoteId,
+                        roomRemoteId = remote.roomRemoteId,
+                        businessDateMillis = remote.businessDateMillis
+                    )
+
+                if (
+                    sameRoomNight != null &&
+                    sameRoomNight.remoteId != remote.remoteId
+                ) {
+                    bookingRoomNightAssignmentDao.hardDeleteByLocalId(
+                        sameRoomNight.localId
+                    )
+                }
+
+                bookingRoomNightAssignmentDao.upsert(
+                    remote.copy(
+                        localId = local?.localId ?: 0
+                    ).markSynced()
+                )
+            }
+        }
+    }
     private suspend fun upsertRemoteAccountingChargeIfNewer(remote: BookingAccountingChargeEntity) {
         val local = bookingAccountingChargeDao.getByRemoteId(remote.remoteId)
         if (local == null || shouldAcceptRemote(local, remote.revision, remote.updatedAt)) {
@@ -3031,6 +3090,21 @@ class BookingRepository(
         remoteUpdatedAt = remoteUpdatedAt
     )
 
+    private fun shouldAcceptRemote(
+        local: BookingRoomNightAssignmentEntity,
+        remoteRevision: Long,
+        remoteUpdatedAt: Long
+    ): Boolean {
+        if (
+            local.syncState == SyncState.PENDING ||
+            local.syncState == SyncState.FAILED
+        ) {
+            return false
+        }
+
+        return remoteRevision > local.revision ||
+            remoteUpdatedAt >= local.updatedAt
+    }
     private fun shouldAcceptRemote(
         local: BookingFinancialLineEntity,
         remoteRevision: Long,
@@ -3698,6 +3772,16 @@ private fun BookingFinancialLineEntity.markSynced(result: CloudWriteResult? = nu
     updatedByUid = result?.updatedByUid ?: updatedByUid
 )
 
+private fun BookingRoomNightAssignmentEntity.markSynced(
+    result: CloudWriteResult? = null
+): BookingRoomNightAssignmentEntity = copy(
+    syncState = SyncState.SYNCED,
+    lastSyncError = null,
+    lastSyncedAt = System.currentTimeMillis(),
+    revision = result?.revision ?: revision,
+    baseRevision = result?.revision ?: revision,
+    updatedByUid = result?.updatedByUid ?: updatedByUid
+)
 private fun BookingFinancialLineEntity.markFailed(throwable: Throwable): BookingFinancialLineEntity = copy(
     syncState = SyncState.FAILED,
     lastSyncError = throwable.message ?: throwable::class.java.simpleName

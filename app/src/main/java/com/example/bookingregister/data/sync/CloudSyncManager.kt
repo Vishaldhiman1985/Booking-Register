@@ -7,6 +7,7 @@ import com.example.bookingregister.data.SyncState
 import com.example.bookingregister.data.entities.BookingAccountingChargeEntity
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.BookingFinancialLineEntity
+import com.example.bookingregister.data.entities.BookingRoomNightAssignmentEntity
 import com.example.bookingregister.data.entities.BookingPaymentEntity
 import com.example.bookingregister.data.entities.BookingSourceEntity
 import com.example.bookingregister.data.entities.FoodBillEntity
@@ -63,6 +64,7 @@ class CloudSyncManager(
     private var bookingsListener: ListenerRegistration? = null
     private var accountingChargesListener: ListenerRegistration? = null
     private var financialLinesListener: ListenerRegistration? = null
+    private var roomPlanAssignmentsListener: ListenerRegistration? = null
     private var paymentsListener: ListenerRegistration? = null
     private var sourcesListener: ListenerRegistration? = null
     private var foodGstCategoriesListener: ListenerRegistration? = null
@@ -451,6 +453,31 @@ class CloudSyncManager(
             }
     }
 
+    fun startRoomPlanAssignmentListener(
+        sinceUpdatedAt: Long?,
+        onAssignmentsChanged: (List<BookingRoomNightAssignmentEntity>) -> Unit,
+        onSyncError: (Throwable) -> Unit = {}
+    ) {
+        roomPlanAssignmentsListener?.remove()
+        roomPlanAssignmentsListener =
+            scopedCollectionListener(
+                "bookingRoomNightAssignments",
+                sinceUpdatedAt
+            ).addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    onSyncError(error)
+                    return@addSnapshotListener
+                }
+
+                val assignments = snapshot?.documents
+                    ?.mapNotNull { doc ->
+                        doc.toBookingRoomNightAssignmentEntity()
+                    }
+                    ?: return@addSnapshotListener
+
+                onAssignmentsChanged(assignments)
+            }
+    }
     fun startAccountingChargeListener(
         sinceUpdatedAt: Long?,
         onChargesChanged: (List<BookingAccountingChargeEntity>) -> Unit,
@@ -623,6 +650,7 @@ class CloudSyncManager(
         bookingsListener?.remove()
         accountingChargesListener?.remove()
         financialLinesListener?.remove()
+        roomPlanAssignmentsListener?.remove()
         paymentsListener?.remove()
         sourcesListener?.remove()
         foodGstCategoriesListener?.remove()
@@ -639,6 +667,7 @@ class CloudSyncManager(
         bookingsListener = null
         accountingChargesListener = null
         financialLinesListener = null
+        roomPlanAssignmentsListener = null
         paymentsListener = null
         sourcesListener = null
         foodGstCategoriesListener = null
@@ -1533,6 +1562,34 @@ class CloudSyncManager(
         )
     }
 
+    private fun DocumentSnapshot.toBookingRoomNightAssignmentEntity():
+        BookingRoomNightAssignmentEntity? {
+        if (!exists()) return null
+
+        return BookingRoomNightAssignmentEntity(
+            remoteId = id,
+            hotelRemoteId =
+                getStringCompat("hotelRemoteId") ?: hotelRemoteId,
+            bookingRemoteId =
+                getStringCompat("bookingRemoteId") ?: return null,
+            roomRemoteId =
+                getStringCompat("roomRemoteId") ?: return null,
+            propertyRemoteId =
+                getStringCompat("propertyRemoteId"),
+            businessDateMillis =
+                getLongCompat("businessDateMillis") ?: return null,
+            updatedAt =
+                getLongCompat("updatedAt") ?: System.currentTimeMillis(),
+            isDeleted =
+                getBooleanCompat("isDeleted") ?: false,
+            syncState = SyncState.SYNCED,
+            lastSyncError = null,
+            lastSyncedAt = System.currentTimeMillis(),
+            revision = getLongCompat("revision") ?: 0,
+            baseRevision = getLongCompat("revision") ?: 0,
+            updatedByUid = getStringCompat("updatedByUid")
+        )
+    }
     private fun DocumentSnapshot.toBookingFinancialLineEntity(): BookingFinancialLineEntity? {
         if (!exists()) return null
         return BookingFinancialLineEntity(
@@ -1902,6 +1959,7 @@ class CloudSyncManager(
         return BookingAggregateWriteResult(
             bookingRevision = data.longValue("bookingRevision"),
             financialLineRevisions = data.revisionMap("financialLineRevisions"),
+            roomPlanAssignmentRevisions = data.revisionMap("roomPlanAssignmentRevisions"),
             updatedByUid = data["updatedByUid"]?.toString(),
             outcome = outcome,
             blockingBookingRemoteIds = data.stringList("blockingBookingRemoteIds")
@@ -1974,7 +2032,8 @@ data class BookingAggregateWriteResult(
     val financialLineRevisions: Map<String, Long>,
     val updatedByUid: String?,
     val outcome: String = "APPLIED",
-    val blockingBookingRemoteIds: List<String> = emptyList()
+    val blockingBookingRemoteIds: List<String> = emptyList(),
+    val roomPlanAssignmentRevisions: Map<String, Long> = emptyMap()
 )
 
 data class FoodBillAggregateWriteResult(

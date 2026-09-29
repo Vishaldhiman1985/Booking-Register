@@ -79,6 +79,22 @@ interface BookingRoomNightAssignmentDao {
 
     @Query("""
         SELECT * FROM booking_room_night_assignments
+        WHERE remoteId = :remoteId
+        LIMIT 1
+    """)
+    suspend fun getByRemoteId(
+        remoteId: String
+    ): BookingRoomNightAssignmentEntity?
+
+    @Query("""
+        DELETE FROM booking_room_night_assignments
+        WHERE localId = :localId
+    """)
+    suspend fun hardDeleteByLocalId(
+        localId: Long
+    )
+    @Query("""
+        SELECT * FROM booking_room_night_assignments
         WHERE hotelRemoteId = :hotelRemoteId
         AND syncState != 'SYNCED'
         ORDER BY updatedAt ASC
