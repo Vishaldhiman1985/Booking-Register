@@ -545,6 +545,73 @@ describe("Firebase callable Functions integration", () => {
     ).get()).exists).toBe(false);
   }, 10_000);
 
+  test("historical UTC-midnight legacy room lock blocks a canonical booking", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+    await seedRoom("H101", "property-a");
+    await seedCloudBooking("historical-legacy-blocker", {
+      roomRemoteIds: ["H101"],
+      checkInMillis: START,
+      checkOutMillis: END,
+      bookingStatus: "RESERVED",
+      isDeleted: false,
+    });
+
+    const startDate = new Date(START);
+    const legacyUtcMidnight = Date.UTC(
+      startDate.getUTCFullYear(),
+      startDate.getUTCMonth(),
+      startDate.getUTCDate()
+    );
+
+    expect(legacyUtcMidnight).not.toBe(START);
+
+    const db = getFirestore(adminApp);
+
+    await db.doc(
+      `hotels/hotel-a/bookingLocks/H101_${legacyUtcMidnight}`
+    ).set({
+      hotelRemoteId: "hotel-a",
+      bookingRemoteId: "historical-legacy-blocker",
+      roomRemoteId: "H101",
+      businessDateMillis: legacyUtcMidnight,
+      isDeleted: false,
+      revision: 1,
+      updatedAt: legacyUtcMidnight,
+    });
+
+    await expectFunctionError(client.call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: "legacy-utc-lock-conflict",
+      deviceId: "device-a",
+      changeSet: {
+        bookingRemoteId: "booking-legacy-utc-conflict",
+        create: true,
+        setFields: {
+          bookingUuid: "booking-legacy-utc-conflict",
+          guestName: "Legacy Lock Guest",
+          checkInMillis: START,
+          checkOutMillis: END,
+          bookingStatus: "RESERVED",
+          pricingStatus: "CONFIRMED",
+          grossCharges: 3000,
+        },
+        addRoomRemoteIds: ["H101"],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: true,
+        financialLineTemplate: { gstRatePercent: 5 },
+        financialLineRemoteIdsByKey: {},
+      },
+    }), "already-exists");
+
+    expect((await db.doc(
+      "hotels/hotel-a/bookings/booking-legacy-utc-conflict"
+    ).get()).exists).toBe(false);
+
+    expect((await db.doc(
+      "hotels/hotel-a/appliedBookingChangeSets/legacy-utc-lock-conflict"
+    ).get()).exists).toBe(false);
+  }, 10_000);
   test("explicit room plan participates in room conflict detection", async () => {
     const client = await createClient();
     await seedMembership(client.auth.currentUser!.uid);

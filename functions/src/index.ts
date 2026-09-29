@@ -813,8 +813,23 @@ function legacyCompatibleLockIdsForTargets(
   const lockIds = new Set<string>();
 
   for (const target of targets) {
+    // Preserve compatibility with locks created by the old runtime-local
+    // start-of-day implementation.
     lockIds.add(
       `${target.roomRemoteId}_${startOfDay(target.businessDateMillis)}`
+    );
+
+    // Historical server environments may have normalised the same business
+    // date at UTC midnight. Include that deterministic legacy identity too.
+    const date = new Date(target.businessDateMillis);
+    const utcMidnight = Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate()
+    );
+
+    lockIds.add(
+      `${target.roomRemoteId}_${utcMidnight}`
     );
   }
 
