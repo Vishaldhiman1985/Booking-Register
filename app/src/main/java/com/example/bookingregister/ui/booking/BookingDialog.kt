@@ -91,6 +91,7 @@ class BookingDialog(
     private val existingBooking: BookingEntity?,
     private val canEditBooking: Boolean = true,
     private val roomRateLocked: Boolean = false,
+    private val onRoomPlanRequested: (BookingEntity) -> Unit,
     private val onBookingSaved: (BookingEntity, List<BookingFinancialLineEntity>, (SaveResult) -> Unit) -> Unit,
     private val onBookingDeleted: (BookingEntity, CancellationRequest, (SaveResult) -> Unit) -> Unit,
     private val onPaymentSaved: (BookingEntity, Double, String, String, String?, String?, (SaveResult) -> Unit) -> Unit,
@@ -1123,6 +1124,10 @@ class BookingDialog(
             menu.add("Pricing Summary").isEnabled = canUseBookingActions
             menu.add("Payment History").isEnabled = canUseBookingActions
             menu.add("Ledger Entries").isEnabled = canUseBookingActions
+            menu.add("Room Plan / Shift Room").isEnabled =
+                canUseBookingActions &&
+                    canEditBooking &&
+                    booking?.bookingStatus != BookingStatus.CANCELLED
             menu.add("Cancel Booking").isEnabled = canUseBookingActions &&
                 !roomRateLocked &&
                 booking?.bookingStatus != BookingStatus.CANCELLED
@@ -1139,6 +1144,10 @@ class BookingDialog(
                     }
                     "Ledger Entries" -> {
                         booking?.let { showFolioDetailDialog("Ledger Entries", FinalBillTextFormatter.formatLedgerEntries(currentFinalBillPreview(it))) }
+                        true
+                    }
+                    "Room Plan / Shift Room" -> {
+                        booking?.let(onRoomPlanRequested)
                         true
                     }
                     "Cancel Booking" -> {

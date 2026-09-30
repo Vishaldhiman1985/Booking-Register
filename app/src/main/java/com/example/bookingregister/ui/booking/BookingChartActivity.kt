@@ -82,6 +82,8 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
 
     companion object {
         const val EXTRA_HOTEL_REMOTE_ID = "hotel_remote_id"
+        private const val ROOM_PLAN_DAY_MILLIS =
+            24L * 60L * 60L * 1000L
     }
 
     private lateinit var repository: BookingRepository
@@ -1408,6 +1410,300 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             .show()
     }
 
+    private fun showRoomPlanDialog(booking: BookingEntity) {
+        if (AccountPermission.EDIT_BOOKINGS !in currentPermissions) {
+            Toast.makeText(
+                this,
+                "You do not have permission to change the room plan.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        if (booking.bookingStatus == BookingStatus.CANCELLED) {
+            Toast.makeText(
+                this,
+                "A cancelled booking cannot be moved to another room.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        val effectivePlan = BookingRoomPlanReadResolver.resolve(
+            booking = booking,
+            assignmentEntities = roomPlanAssignments.filter {
+                it.bookingRemoteId == booking.remoteId
+            }
+        )
+
+        if (!effectivePlan.isValid) {
+            Toast.makeText(
+                this,
+                "Current room plan is incomplete: " +
+                    effectivePlan.validation.errors.joinToString(),
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        val stayDates = mutableListOf<Long>()
+        var dateMillis = booking.checkInMillis
+
+        while (dateMillis < booking.checkOutMillis) {
+            stayDates += dateMillis
+            dateMillis += ROOM_PLAN_DAY_MILLIS
+        }
+
+        if (stayDates.isEmpty()) {
+            Toast.makeText(
+                this,
+                "This booking has no room nights.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        val dateFormat = SimpleDateFormat(
+            "dd MMM yyyy",
+            Locale.getDefault()
+        )
+
+        val dateLabels = stayDates.map { businessDateMillis ->
+            val roomNames = effectivePlan.assignments
+                .filter { it.businessDateMillis == businessDateMillis }
+                .map { assignment ->
+                    rooms.firstOrNull {
+                        it.remoteId == assignment.roomRemoteId
+                    }?.roomName
+                        ?: "Room ${assignment.roomRemoteId.takeLast(6)}"
+                }
+                .distinct()
+                .joinToString(", ")
+                .ifBlank { "No room" }
+
+            "${dateFormat.format(Date(businessDateMillis))}  •  $roomNames"
+        }.toTypedArray()
+
+        AlertDialog.Builder(this)
+            .setTitle("Room Plan / Shift Room")
+            .setMessage(
+                "Choose the date from which the guest should move. " +
+                    "The selected room(s) will apply from that date until checkout. " +
+                    "You can create another later shift afterward.`n`n" +
+                    "This is an operational room assignment only. " +
+                    "Booking price, GST, OTA settlement and financial lines will not be changed."
+            )
+            .setItems(dateLabels) { _, which ->
+                showRoomPlanRoomSelectionDialog(
+                    booking = booking,
+                    effectiveDateMillis = stayDates[which],
+                    currentAssignments = effectivePlan.assignments
+                )
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showRoomPlanRoomSelectionDialog(
+        booking: BookingEntity,
+        effectiveDateMillis: Long,
+        currentAssignments: List<com.example.bookingregister.booking.domain.BookingRoomNightAssignment>
+    ) {
+        val selectableRooms = rooms
+            .filter {
+                !it.isDeleted &&
+                    RoomLifecycleStatus.normalize(it.lifecycleStatus) ==
+                    RoomLifecycleStatus.ACTIVE
+            }
+            .sortedWith(
+                compareBy<RoomEntity> { room ->
+                    managedProperties
+                        .firstOrNull {
+                            it.remoteId == room.propertyRemoteId
+                        }
+                        ?.sortOrder
+                        ?: Int.MAX_VALUE
+                }.thenBy { it.sortOrder }
+                    .thenBy { it.roomName }
+            )
+
+        if (selectableRooms.isEmpty()) {
+            Toast.makeText(
+                this,
+                "No active rooms are available to assign.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        val propertyNames = managedProperties.associate {
+            it.remoteId to it.propertyName
+        }
+
+        val currentRoomIds = currentAssignments
+            .filter {
+                it.businessDateMillis == effectiveDateMillis
+            }
+            .mapTo(mutableSetOf()) {
+                it.roomRemoteId
+            }
+
+        val selectedIds = currentRoomIds
+            .filterTo(linkedSetOf()) { currentId ->
+                selectableRooms.any {
+                    it.remoteId == currentId
+                }
+            }
+
+        val labels = selectableRooms.map { room ->
+            val propertyName = room.propertyRemoteId
+                ?.let(propertyNames::get)
+                ?.takeIf(String::isNotBlank)
+                ?: "Unassigned property"
+
+            "$propertyName  •  ${room.roomName}"
+        }.toTypedArray()
+
+        val checked = BooleanArray(selectableRooms.size) { index ->
+            selectableRooms[index].remoteId in selectedIds
+        }
+
+        val dateLabel = SimpleDateFormat(
+            "dd MMM yyyy",
+            Locale.getDefault()
+        ).format(Date(effectiveDateMillis))
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Shift from $dateLabel")
+            .setMessage(
+                "Select one or more rooms. Multiple rooms are allowed, but all rooms " +
+                    "for the same night must belong to one property.`n`n" +
+                    "Changing property here does not move the original booking's billing."
+            )
+            .setMultiChoiceItems(
+                labels,
+                checked
+            ) { _, which, isChecked ->
+                val roomId = selectableRooms[which].remoteId
+
+                if (isChecked) {
+                    selectedIds += roomId
+                } else {
+                    selectedIds -= roomId
+                }
+            }
+            .setPositiveButton("Apply Shift", null)
+            .setNegativeButton("Cancel", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(
+                AlertDialog.BUTTON_POSITIVE
+            ).setOnClickListener {
+                if (selectedIds.isEmpty()) {
+                    Toast.makeText(
+                        this,
+                        "Select at least one room.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return@setOnClickListener
+                }
+
+                val selectedRooms = selectableRooms.filter {
+                    it.remoteId in selectedIds
+                }
+
+                val selectedPropertyIds = selectedRooms
+                    .map {
+                        it.propertyRemoteId
+                            ?.trim()
+                            .orEmpty()
+                    }
+                    .filter {
+                        it.isNotBlank()
+                    }
+                    .distinct()
+
+                if (
+                    selectedPropertyIds.size != 1 ||
+                    selectedRooms.any {
+                        it.propertyRemoteId.isNullOrBlank()
+                    }
+                ) {
+                    Toast.makeText(
+                        this,
+                        "All selected rooms must belong to one property.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return@setOnClickListener
+                }
+
+                val currentIdsForDate = currentRoomIds.sorted()
+                val requestedIds = selectedIds.sorted()
+
+                if (currentIdsForDate == requestedIds) {
+                    Toast.makeText(
+                        this,
+                        "The selected room plan is already active on this date.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return@setOnClickListener
+                }
+
+                dialog.getButton(
+                    AlertDialog.BUTTON_POSITIVE
+                ).isEnabled = false
+
+                lifecycleScope.launch {
+                    when (
+                        val result =
+                            repository.replaceBookingRoomPlanFromDate(
+                                bookingRemoteId = booking.remoteId,
+                                effectiveDateMillis = effectiveDateMillis,
+                                replacementRoomRemoteIds = requestedIds
+                            )
+                    ) {
+                        is SaveResult.Success -> {
+                            Toast.makeText(
+                                this@BookingChartActivity,
+                                "Room plan saved. The chart will update automatically.",
+                                Toast.LENGTH_LONG
+                            ).show()
+
+                            dialog.dismiss()
+                        }
+
+                        is SaveResult.Conflict -> {
+                            dialog.getButton(
+                                AlertDialog.BUTTON_POSITIVE
+                            ).isEnabled = true
+
+                            Toast.makeText(
+                                this@BookingChartActivity,
+                                result.message,
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+
+                        is SaveResult.Error -> {
+                            dialog.getButton(
+                                AlertDialog.BUTTON_POSITIVE
+                            ).isEnabled = true
+
+                            Toast.makeText(
+                                this@BookingChartActivity,
+                                result.message,
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                }
+            }
+        }
+
+        dialog.show()
+    }
+
     private fun showBookingDialog(
         existing: BookingEntity?,
         selectedRoom: RoomEntity?,
@@ -1447,6 +1743,9 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             existingBooking = existing,
             canEditBooking = canEditBooking,
             roomRateLocked = roomRateLocked,
+            onRoomPlanRequested = { booking ->
+                showRoomPlanDialog(booking)
+            },
             onBookingSaved = { booking, lines, onResult ->
                 lifecycleScope.launch {
                     onResult(repository.saveBookingWithFinancialLines(booking, lines))
