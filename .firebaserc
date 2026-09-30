@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "booking-register-aadd3"
-  }
+    "default": "booking-register-aadd3",
+    "staging": "booking-register-staging"
+  },
+  "targets": {},
+  "etags": {}
 }
