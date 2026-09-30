@@ -1956,13 +1956,42 @@ class CloudSyncManager(
         val outcome = (data["outcome"] as? String)
             ?.takeIf(String::isNotBlank)
             ?: "APPLIED"
+        val authoritativeRoomPlanAssignments =
+            (data["authoritativeRoomPlanAssignments"] as? List<*>)
+                .orEmpty()
+                .mapNotNull { raw ->
+                    val row = raw as? Map<*, *> ?: return@mapNotNull null
+                    val remoteId = row["remoteId"]?.toString()
+                        ?.takeIf(String::isNotBlank)
+                        ?: return@mapNotNull null
+                    val businessDateMillis =
+                        (row["businessDateMillis"] as? Number)?.toLong()
+                            ?: return@mapNotNull null
+                    val roomRemoteId = row["roomRemoteId"]?.toString()
+                        ?.takeIf(String::isNotBlank)
+                        ?: return@mapNotNull null
+
+                    AuthoritativeRoomPlanAssignment(
+                        remoteId = remoteId,
+                        businessDateMillis = businessDateMillis,
+                        roomRemoteId = roomRemoteId,
+                        propertyRemoteId = row["propertyRemoteId"]
+                            ?.toString()
+                            ?.takeIf(String::isNotBlank),
+                        revision = (row["revision"] as? Number)?.toLong() ?: 0L,
+                        updatedAt = (row["updatedAt"] as? Number)?.toLong() ?: 0L,
+                        updatedByUid = row["updatedByUid"]?.toString()
+                    )
+                }
+
         return BookingAggregateWriteResult(
             bookingRevision = data.longValue("bookingRevision"),
             financialLineRevisions = data.revisionMap("financialLineRevisions"),
             roomPlanAssignmentRevisions = data.revisionMap("roomPlanAssignmentRevisions"),
             updatedByUid = data["updatedByUid"]?.toString(),
             outcome = outcome,
-            blockingBookingRemoteIds = data.stringList("blockingBookingRemoteIds")
+            blockingBookingRemoteIds = data.stringList("blockingBookingRemoteIds"),
+            authoritativeRoomPlanAssignments = authoritativeRoomPlanAssignments
         )
     }
 
@@ -2027,13 +2056,24 @@ data class CloudWriteResult(
     val updatedByUid: String?
 )
 
+data class AuthoritativeRoomPlanAssignment(
+    val remoteId: String,
+    val businessDateMillis: Long,
+    val roomRemoteId: String,
+    val propertyRemoteId: String?,
+    val revision: Long,
+    val updatedAt: Long,
+    val updatedByUid: String?
+)
+
 data class BookingAggregateWriteResult(
     val bookingRevision: Long,
     val financialLineRevisions: Map<String, Long>,
     val updatedByUid: String?,
     val outcome: String = "APPLIED",
     val blockingBookingRemoteIds: List<String> = emptyList(),
-    val roomPlanAssignmentRevisions: Map<String, Long> = emptyMap()
+    val roomPlanAssignmentRevisions: Map<String, Long> = emptyMap(),
+    val authoritativeRoomPlanAssignments: List<AuthoritativeRoomPlanAssignment> = emptyList()
 )
 
 data class FoodBillAggregateWriteResult(

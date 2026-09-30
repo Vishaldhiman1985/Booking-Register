@@ -37,6 +37,17 @@ interface BookingRoomNightAssignmentDao {
     @Query("""
         SELECT * FROM booking_room_night_assignments
         WHERE hotelRemoteId = :hotelRemoteId
+        AND bookingRemoteId = :bookingRemoteId
+        ORDER BY businessDateMillis ASC, roomRemoteId ASC
+    """)
+    suspend fun getAllForBooking(
+        hotelRemoteId: String,
+        bookingRemoteId: String
+    ): List<BookingRoomNightAssignmentEntity>
+
+    @Query("""
+        SELECT * FROM booking_room_night_assignments
+        WHERE hotelRemoteId = :hotelRemoteId
         AND isDeleted = 0
         AND businessDateMillis >= :startMillis
         AND businessDateMillis < :endMillis

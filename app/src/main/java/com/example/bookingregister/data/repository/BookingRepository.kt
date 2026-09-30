@@ -23,6 +23,7 @@ import com.example.bookingregister.booking.domain.BookingPricingStatus
 import com.example.bookingregister.booking.domain.BookingPropertyPolicy
 import com.example.bookingregister.booking.domain.RoomConflictResolutionPolicy
 import com.example.bookingregister.booking.domain.BookingChangeSet
+import com.example.bookingregister.booking.domain.BookingRoomPlanPolicy
 import com.example.bookingregister.booking.domain.DerivedBookingCachePolicy
 import com.example.bookingregister.booking.domain.CheckoutBalancePolicy
 import com.example.bookingregister.booking.domain.CancellationRequest
@@ -860,6 +861,166 @@ class BookingRepository(
         booking: BookingEntity,
         financialLines: List<BookingFinancialLineEntity>
     ): SaveResult = saveBookingInternal(booking, financialLines)
+
+    suspend fun replaceBookingRoomPlanFromDate(
+        bookingRemoteId: String,
+        effectiveDateMillis: Long,
+        replacementRoomRemoteIds: List<String>
+    ): SaveResult {
+        val current = bookingDao.getByRemoteId(bookingRemoteId)
+            ?: return SaveResult.Error("Booking not found.")
+
+        if (current.hotelRemoteId != hotelRemoteId || current.isDeleted) {
+            return SaveResult.Error("Booking is no longer available.")
+        }
+
+        if (current.bookingStatus == BookingStatus.CANCELLED) {
+            return SaveResult.Error("A cancelled booking cannot be moved to another room.")
+        }
+
+        val requestedRoomIds = replacementRoomRemoteIds
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+
+        if (requestedRoomIds.isEmpty()) {
+            return SaveResult.Error("Select at least one replacement room.")
+        }
+
+        val selectedRooms = requestedRoomIds.map { roomRemoteId ->
+            roomDao.getByRemoteId(roomRemoteId)
+                ?: return SaveResult.Error(
+                    "Selected room is no longer available. Please refresh rooms and choose an active room."
+                )
+        }
+
+        selectedRooms.forEach { room ->
+            if (room.hotelRemoteId != hotelRemoteId || room.isDeleted) {
+                return SaveResult.Error(
+                    "Selected room is deleted or unavailable. Please choose an active room."
+                )
+            }
+
+            when (RoomLifecycleStatus.normalize(room.lifecycleStatus)) {
+                RoomLifecycleStatus.DISABLED ->
+                    return SaveResult.Error(
+                        "${room.roomName} is disabled. Enable it before assigning it."
+                    )
+
+                RoomLifecycleStatus.RETIRED ->
+                    return SaveResult.Error(
+                        "${room.roomName} is retired and cannot be assigned."
+                    )
+            }
+        }
+
+        val selectedPropertyIds = selectedRooms
+            .map {
+                it.propertyRemoteId
+                    ?.trim()
+                    ?.takeIf(String::isNotBlank)
+            }
+            .distinct()
+
+        if (selectedPropertyIds.size != 1) {
+            return SaveResult.Error(
+                "All replacement rooms for the same night must belong to one property."
+            )
+        }
+
+        val replacementPropertyRemoteId = selectedPropertyIds.single()
+
+        val currentActiveRows = bookingRoomNightAssignmentDao.getForBooking(
+            hotelRemoteId = hotelRemoteId,
+            bookingRemoteId = current.remoteId
+        )
+
+        val effectivePlan = BookingRoomPlanReadResolver.resolve(
+            booking = current,
+            assignmentEntities = currentActiveRows
+        )
+
+        if (!effectivePlan.isValid) {
+            return SaveResult.Error(
+                "Current room plan is incomplete: " +
+                    effectivePlan.validation.errors.joinToString()
+            )
+        }
+
+        val targetAssignments = try {
+            BookingRoomPlanPolicy.replaceFromDate(
+                checkInMillis = current.checkInMillis,
+                checkOutMillis = current.checkOutMillis,
+                existingAssignments = effectivePlan.assignments,
+                effectiveDateMillis = effectiveDateMillis,
+                replacementRoomRemoteIds = requestedRoomIds,
+                replacementPropertyRemoteId = replacementPropertyRemoteId
+            )
+        } catch (error: IllegalArgumentException) {
+            return SaveResult.Error(
+                error.message ?: "Could not prepare the requested room change."
+            )
+        }
+
+        val allExistingRows = bookingRoomNightAssignmentDao.getAllForBooking(
+            hotelRemoteId = hotelRemoteId,
+            bookingRemoteId = current.remoteId
+        )
+
+        val now = System.currentTimeMillis()
+
+        val prepared = try {
+            BookingRoomPlanWriteComposer.prepare(
+                booking = current,
+                targetAssignments = targetAssignments,
+                existingRows = allExistingRows,
+                now = now
+            )
+        } catch (error: IllegalArgumentException) {
+            return SaveResult.Error(
+                error.message ?: "Could not prepare the requested room plan."
+            )
+        }
+
+        val existingFinancialLines =
+            bookingFinancialLineDao.getAllLinesForBooking(
+                hotelRemoteId,
+                current.remoteId
+            )
+
+        val updatedBooking = current.copy(
+            updatedAt = now,
+            syncState = SyncState.PENDING,
+            lastSyncError = null,
+            baseRevision = current.baseRevision.takeIf { it > 0 }
+                ?: current.revision
+        )
+
+        val changeSet = BookingChangeSet.create(
+            previous = current,
+            requested = updatedBooking,
+            previousLines = existingFinancialLines,
+            requestedLines = existingFinancialLines
+        ).withRoomPlanAssignments(
+            prepared.commandAssignments
+        )
+
+        if (changeSet.rebuildFinancialLines) {
+            return SaveResult.Error(
+                "Room-plan safety check failed: financial lines would be rebuilt."
+            )
+        }
+
+        db.withTransaction {
+            bookingDao.upsert(updatedBooking)
+            bookingRoomNightAssignmentDao.upsertAll(prepared.localRows)
+            enqueueBookingChangeSet(updatedBooking, changeSet)
+        }
+
+        enqueueBackgroundSync()
+
+        return SaveResult.Success(syncPending = true)
+    }
 
     private suspend fun saveBookingInternal(
         booking: BookingEntity,
@@ -2561,7 +2722,8 @@ class BookingRepository(
                     handleRejectedRoomConflict(
                         operation = operation,
                         sentBooking = sentBooking,
-                        rejectedChangeSet = submittedChangeSet
+                        rejectedChangeSet = submittedChangeSet,
+                        result = result
                     )
                 } else {
                     acknowledgeBookingAggregate(operation, sentBooking, lines, result)
@@ -2586,7 +2748,8 @@ class BookingRepository(
     private suspend fun handleRejectedRoomConflict(
         operation: BookingSyncOutboxEntity,
         sentBooking: BookingEntity,
-        rejectedChangeSet: BookingChangeSet
+        rejectedChangeSet: BookingChangeSet,
+        result: BookingAggregateWriteResult
     ) {
         db.withTransaction {
             if (rejectedChangeSet.create) {
@@ -2685,6 +2848,41 @@ class BookingRepository(
             // If the user already moved/edited the booking, do not overwrite that newer decision.
             if (!unchangedSinceSend) return@withTransaction
 
+            if (rejectedChangeSet.roomPlanAssignments != null) {
+                // The optimistic local plan was rejected by the server. Replace it with the
+                // exact active server snapshot returned by the same atomic conflict decision.
+                // An empty snapshot intentionally restores legacy BookingEntity room fallback.
+                bookingRoomNightAssignmentDao.hardDeleteForBooking(
+                    hotelRemoteId = hotelRemoteId,
+                    bookingRemoteId = operation.bookingRemoteId
+                )
+
+                val rollbackRows =
+                    result.authoritativeRoomPlanAssignments.map { server ->
+                        BookingRoomNightAssignmentEntity(
+                            remoteId = server.remoteId,
+                            hotelRemoteId = hotelRemoteId,
+                            bookingRemoteId = operation.bookingRemoteId,
+                            roomRemoteId = server.roomRemoteId,
+                            propertyRemoteId = server.propertyRemoteId,
+                            businessDateMillis = server.businessDateMillis,
+                            updatedAt = server.updatedAt.takeIf { it > 0L }
+                                ?: System.currentTimeMillis(),
+                            isDeleted = false,
+                            syncState = SyncState.SYNCED,
+                            lastSyncError = null,
+                            lastSyncedAt = System.currentTimeMillis(),
+                            revision = server.revision,
+                            baseRevision = server.revision,
+                            updatedByUid = server.updatedByUid
+                        )
+                    }
+
+                if (rollbackRows.isNotEmpty()) {
+                    bookingRoomNightAssignmentDao.upsertAll(rollbackRows)
+                }
+            }
+
             bookingDao.upsert(
                 currentBooking.copy(
                     syncState = SyncState.FAILED,
@@ -2747,6 +2945,31 @@ class BookingRepository(
                             baseRevision = revision,
                             syncState = SyncState.PENDING,
                             lastSyncError = null
+                        )
+                    }
+                )
+            }
+
+            result.roomPlanAssignmentRevisions.forEach { (remoteId, revision) ->
+                val currentAssignment =
+                    bookingRoomNightAssignmentDao.getByRemoteId(remoteId)
+                        ?: return@forEach
+
+                bookingRoomNightAssignmentDao.upsert(
+                    if (!hasLaterOperation) {
+                        currentAssignment.markSynced(
+                            CloudWriteResult(
+                                revision = revision,
+                                updatedByUid = result.updatedByUid
+                            )
+                        )
+                    } else {
+                        currentAssignment.copy(
+                            revision = revision,
+                            baseRevision = revision,
+                            syncState = SyncState.PENDING,
+                            lastSyncError = null,
+                            updatedByUid = result.updatedByUid
                         )
                     }
                 )

@@ -2307,6 +2307,8 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
         bookingRevision: numberValue(applied.get("bookingRevision")),
         financialLineRevisions: applied.get("financialLineRevisions") || {},
         roomPlanAssignmentRevisions: applied.get("roomPlanAssignmentRevisions") || {},
+        authoritativeRoomPlanAssignments:
+          applied.get("authoritativeRoomPlanAssignments") || [],
         updatedByUid: String(applied.get("updatedByUid") || requestAuth.uid),
         alreadyApplied: true,
         outcome,
@@ -2353,6 +2355,22 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
       hotelRef.collection("bookingRoomNightAssignments")
         .where("bookingRemoteId", "==", bookingRemoteId)
     );
+
+    const authoritativeRoomPlanAssignments = roomPlanSnapshot.docs
+      .filter((doc) => !booleanValue(doc.get("isDeleted")))
+      .map((doc) => ({
+        remoteId: doc.id,
+        businessDateMillis: numberValue(doc.get("businessDateMillis")),
+        roomRemoteId: String(doc.get("roomRemoteId") || ""),
+        propertyRemoteId: doc.get("propertyRemoteId") == null
+          ? null
+          : String(doc.get("propertyRemoteId")),
+        revision: numberValue(doc.get("revision")),
+        updatedAt: numberValue(doc.get("updatedAt")),
+        updatedByUid: doc.get("updatedByUid") == null
+          ? null
+          : String(doc.get("updatedByUid")),
+      }));
 
     if (roomPlanAssignments !== null) {
       validateBookingRoomPlan(
@@ -2689,6 +2707,7 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
           bookingRevision: 0,
           financialLineRevisions: {},
           roomPlanAssignmentRevisions: {},
+          authoritativeRoomPlanAssignments,
           updatedByUid: requestAuth.uid,
           alreadyApplied: false,
           outcome: "REJECTED_ROOM_CONFLICT",

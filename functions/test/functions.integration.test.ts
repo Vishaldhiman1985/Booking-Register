@@ -805,6 +805,13 @@ describe("Firebase callable Functions integration", () => {
         ...baseChange,
         bookingRemoteId: "booking-existing-edit-target",
         addRoomRemoteIds: ["H102"],
+        roomPlanAssignments: [
+          {
+            businessDateMillis: START,
+            roomRemoteId: "H102",
+            propertyRemoteId: "property-a",
+          },
+        ],
       },
     });
 
@@ -817,11 +824,18 @@ describe("Firebase callable Functions integration", () => {
         bookingRemoteId: "booking-existing-edit-target",
         create: false,
         setFields: {},
-        addRoomRemoteIds: ["H101"],
+        addRoomRemoteIds: [],
         removeRoomRemoteIds: [],
         rebuildFinancialLines: false,
         financialLineTemplate: { gstRatePercent: 5 },
         financialLineRemoteIdsByKey: {},
+        roomPlanAssignments: [
+          {
+            businessDateMillis: START,
+            roomRemoteId: "H101",
+            propertyRemoteId: "property-a",
+          },
+        ],
       },
     };
 
@@ -834,6 +848,13 @@ describe("Firebase callable Functions integration", () => {
     expect(rejected.alreadyApplied).toBe(false);
     expect(rejected.blockingBookingRemoteIds).toEqual(["booking-existing-edit-owner"]);
 
+    const authoritativePlan =
+      rejected.authoritativeRoomPlanAssignments as Array<Record<string, unknown>>;
+    expect(authoritativePlan).toHaveLength(1);
+    expect(authoritativePlan[0].businessDateMillis).toBe(START);
+    expect(authoritativePlan[0].roomRemoteId).toBe("H102");
+    expect(authoritativePlan[0].propertyRemoteId).toBe("property-a");
+
     const replay = await client.call(
       "applyBookingChangeSetServer",
       conflictPayload
@@ -842,6 +863,9 @@ describe("Firebase callable Functions integration", () => {
     expect(replay.outcome).toBe("REJECTED_ROOM_CONFLICT");
     expect(replay.alreadyApplied).toBe(true);
     expect(replay.blockingBookingRemoteIds).toEqual(["booking-existing-edit-owner"]);
+    expect(replay.authoritativeRoomPlanAssignments).toEqual(
+      rejected.authoritativeRoomPlanAssignments
+    );
 
     await expectFunctionError(client.call("applyBookingChangeSetServer", {
       hotelId: "hotel-a",
