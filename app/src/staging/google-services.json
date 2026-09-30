@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1054392382300",
+    "project_id": "booking-register-staging",
+    "storage_bucket": "booking-register-staging.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1054392382300:android:f5966eb0778c8448680799",
+        "android_client_info": {
+          "package_name": "com.bookingregister.app.staging"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCdSipdKXjYiw1xVww8vC5agf5FCD5n7YA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

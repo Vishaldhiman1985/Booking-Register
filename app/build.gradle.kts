@@ -33,6 +33,14 @@ android {
             arg("room.incremental", "true")
         }
     }
+    buildTypes {
+        create("staging") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".staging"
+            versionNameSuffix = "-staging"
+        }
+    }
+
     sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")
 }
 
