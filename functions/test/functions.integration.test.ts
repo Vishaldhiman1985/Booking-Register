@@ -893,6 +893,54 @@ describe("Firebase callable Functions integration", () => {
     expect(audit.exists).toBe(true);
     expect(audit.get("action")).toBe("UPDATE_REJECTED_ROOM_CONFLICT");
   }, 10_000);
+  test("protocol v1 legacy conflict replay preserves an unknown authoritative room plan", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+
+    const db = getFirestore(adminApp);
+    const operationId = "legacy-conflict-without-room-plan-snapshot";
+    const bookingRemoteId = "legacy-conflict-booking";
+
+    await db.doc(
+      `hotels/hotel-a/appliedBookingChangeSets/${operationId}`
+    ).set({
+      operationId,
+      bookingRemoteId,
+      hotelRemoteId: "hotel-a",
+      bookingRevision: 0,
+      financialLineRevisions: {},
+      roomPlanAssignmentRevisions: {},
+      updatedByUid: client.auth.currentUser!.uid,
+      outcome: "REJECTED_ROOM_CONFLICT",
+      blockingBookingRemoteIds: ["blocking-booking"],
+    });
+
+    const replay = await client.call(
+      "applyBookingChangeSetServer",
+      {
+        hotelId: "hotel-a",
+        operationId,
+        deviceId: "device-a",
+        conflictResolutionVersion: 1,
+        changeSet: {
+          bookingRemoteId,
+          create: false,
+          setFields: { notes: "legacy replay probe" },
+          addRoomRemoteIds: [],
+          removeRoomRemoteIds: [],
+          rebuildFinancialLines: false,
+          financialLineTemplate: { gstRatePercent: 5 },
+          financialLineRemoteIdsByKey: {},
+        },
+      }
+    ) as Record<string, unknown>;
+
+    expect(replay.outcome).toBe("REJECTED_ROOM_CONFLICT");
+    expect(replay.alreadyApplied).toBe(true);
+    expect(replay.blockingBookingRemoteIds).toEqual(["blocking-booking"]);
+    expect(replay.authoritativeRoomPlanAssignments).toBeNull();
+  }, 10_000);
+
   test("a missing cloud booking can be recovered with the same operation ID without partial writes", async () => {
     const client = await createClient();
     await seedMembership(client.auth.currentUser!.uid);

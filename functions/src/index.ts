@@ -2308,7 +2308,7 @@ export const applyBookingChangeSetServer = onCall({ invoker: "public" }, async (
         financialLineRevisions: applied.get("financialLineRevisions") || {},
         roomPlanAssignmentRevisions: applied.get("roomPlanAssignmentRevisions") || {},
         authoritativeRoomPlanAssignments:
-          applied.get("authoritativeRoomPlanAssignments") || [],
+          applied.get("authoritativeRoomPlanAssignments") ?? null,
         updatedByUid: String(applied.get("updatedByUid") || requestAuth.uid),
         alreadyApplied: true,
         outcome,

@@ -1958,8 +1958,7 @@ class CloudSyncManager(
             ?: "APPLIED"
         val authoritativeRoomPlanAssignments =
             (data["authoritativeRoomPlanAssignments"] as? List<*>)
-                .orEmpty()
-                .mapNotNull { raw ->
+                ?.mapNotNull { raw ->
                     val row = raw as? Map<*, *> ?: return@mapNotNull null
                     val remoteId = row["remoteId"]?.toString()
                         ?.takeIf(String::isNotBlank)
@@ -2073,7 +2072,7 @@ data class BookingAggregateWriteResult(
     val outcome: String = "APPLIED",
     val blockingBookingRemoteIds: List<String> = emptyList(),
     val roomPlanAssignmentRevisions: Map<String, Long> = emptyMap(),
-    val authoritativeRoomPlanAssignments: List<AuthoritativeRoomPlanAssignment> = emptyList()
+    val authoritativeRoomPlanAssignments: List<AuthoritativeRoomPlanAssignment>? = null
 )
 
 data class FoodBillAggregateWriteResult(

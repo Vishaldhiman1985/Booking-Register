@@ -2848,17 +2848,26 @@ class BookingRepository(
             // If the user already moved/edited the booking, do not overwrite that newer decision.
             if (!unchangedSinceSend) return@withTransaction
 
-            if (rejectedChangeSet.roomPlanAssignments != null) {
-                // The optimistic local plan was rejected by the server. Replace it with the
-                // exact active server snapshot returned by the same atomic conflict decision.
-                // An empty snapshot intentionally restores legacy BookingEntity room fallback.
+            val authoritativeRoomPlanAssignments =
+                result.authoritativeRoomPlanAssignments
+
+            if (
+                rejectedChangeSet.roomPlanAssignments != null &&
+                authoritativeRoomPlanAssignments != null
+            ) {
+                // The optimistic local plan was rejected by a server that explicitly returned
+                // its authoritative active room-plan snapshot. Replace local rows with exactly
+                // that snapshot. An explicit empty list intentionally restores legacy
+                // BookingEntity room fallback. A null snapshot means an older server or older
+                // stored mutation that cannot prove the prior plan, so local rows are left
+                // untouched rather than inventing an empty authoritative plan.
                 bookingRoomNightAssignmentDao.hardDeleteForBooking(
                     hotelRemoteId = hotelRemoteId,
                     bookingRemoteId = operation.bookingRemoteId
                 )
 
                 val rollbackRows =
-                    result.authoritativeRoomPlanAssignments.map { server ->
+                    authoritativeRoomPlanAssignments.map { server ->
                         BookingRoomNightAssignmentEntity(
                             remoteId = server.remoteId,
                             hotelRemoteId = hotelRemoteId,
