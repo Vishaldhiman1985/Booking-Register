@@ -2658,6 +2658,11 @@ class BookingRepository(
 
         val lines = bookingFinancialLineDao.getAllLinesForBooking(hotelRemoteId, booking.remoteId)
         val sentBooking = booking
+        val sentRoomPlanAssignments =
+            bookingRoomNightAssignmentDao.getAllForBooking(
+                hotelRemoteId = hotelRemoteId,
+                bookingRemoteId = booking.remoteId
+            )
         val isLegacySnapshotOperation = operation.changeSetJson.isBlank()
         val changeSet = if (isLegacySnapshotOperation) {
             // Database versions before 37 stored only the booking operation identity. Rebuild
@@ -2726,7 +2731,13 @@ class BookingRepository(
                         result = result
                     )
                 } else {
-                    acknowledgeBookingAggregate(operation, sentBooking, lines, result)
+                    acknowledgeBookingAggregate(
+                        operation = operation,
+                        sentBooking = sentBooking,
+                        sentLines = lines,
+                        sentRoomPlanAssignments = sentRoomPlanAssignments,
+                        result = result
+                    )
                 }
             }
             .onFailure { error ->
@@ -2906,6 +2917,7 @@ class BookingRepository(
         operation: BookingSyncOutboxEntity,
         sentBooking: BookingEntity,
         sentLines: List<BookingFinancialLineEntity>,
+        sentRoomPlanAssignments: List<BookingRoomNightAssignmentEntity>,
         result: BookingAggregateWriteResult
     ) {
         db.withTransaction {
@@ -2959,13 +2971,34 @@ class BookingRepository(
                 )
             }
 
+            val sentRoomPlanByRemoteId =
+                sentRoomPlanAssignments.associateBy { it.remoteId }
+
             result.roomPlanAssignmentRevisions.forEach { (remoteId, revision) ->
+                val sentAssignment =
+                    sentRoomPlanByRemoteId[remoteId]
                 val currentAssignment =
                     bookingRoomNightAssignmentDao.getByRemoteId(remoteId)
                         ?: return@forEach
 
+                val unchanged =
+                    sentAssignment != null &&
+                        SyncAcknowledgementPolicy.isSameVersion(
+                            sentAssignment.updatedAt,
+                            sentAssignment.revision,
+                            sentAssignment.baseRevision,
+                            currentAssignment.updatedAt,
+                            currentAssignment.revision,
+                            currentAssignment.baseRevision
+                        )
+
                 bookingRoomNightAssignmentDao.upsert(
-                    if (!hasLaterOperation) {
+                    if (
+                        SyncAcknowledgementPolicy.canMarkAggregateSynced(
+                            sentVersionIsCurrent = unchanged,
+                            hasLaterOperation = hasLaterOperation
+                        )
+                    ) {
                         currentAssignment.markSynced(
                             CloudWriteResult(
                                 revision = revision,
