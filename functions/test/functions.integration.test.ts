@@ -1448,6 +1448,155 @@ test("two existing bookings cannot simultaneously shift into the same room-night
     ).get()).exists).toBe(true);
   });
 
+test("cancelling a four-night booking releases inventory without changing its payment history", async () => {
+  const client = await createClient();
+  await seedMembership(client.auth.currentUser!.uid);
+  await seedRoom("H101", "property-a");
+
+  const db = getFirestore(adminApp);
+  const day = 86_400_000;
+  const checkout = START + 4 * day;
+  const bookingId = "booking-four-night-cancellation";
+
+  const created = await client.call("applyBookingChangeSetServer", {
+    hotelId: "hotel-a",
+    operationId: "four-night-cancel-create",
+    deviceId: "device-a",
+    changeSet: {
+      bookingRemoteId: bookingId,
+      create: true,
+      setFields: {
+        bookingUuid: bookingId,
+        guestName: "Cancellation Guest",
+        checkInMillis: START,
+        checkOutMillis: checkout,
+        bookingStatus: "RESERVED",
+        pricingStatus: "CONFIRMED",
+        grossCharges: 12000,
+      },
+      addRoomRemoteIds: ["H101"],
+      removeRoomRemoteIds: [],
+      rebuildFinancialLines: true,
+      financialLineTemplate: { gstRatePercent: 5 },
+      financialLineRemoteIdsByKey: {},
+    },
+  }) as Record<string, unknown>;
+  expect(created.outcome).toBe("APPLIED");
+
+  await client.call("saveBookingPaymentServer", {
+    hotelId: "hotel-a",
+    operationId: "four-night-cancel-advance",
+    entity: payment("four-night-advance", {
+      bookingRemoteId: bookingId,
+      paymentType: "ADVANCE",
+      amount: 1000,
+      allocatedStayAmount: 1000,
+      allocatedFoodAmount: 0,
+      allocatedServiceAmount: 0,
+      allocatedDamageAmount: 0,
+      unappliedAmount: 0,
+    }),
+  });
+
+  const financialQuery = db.collection("hotels/hotel-a/bookingFinancialLines")
+    .where("bookingRemoteId", "==", bookingId);
+  const paymentQuery = db.collection("hotels/hotel-a/bookingPayments")
+    .where("bookingRemoteId", "==", bookingId);
+  const snapshotState = (docs: Array<{ id: string; data: () => Record<string, unknown> }>) =>
+    docs.map((doc) => ({ id: doc.id, data: doc.data() }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+
+  const beforeFinancials = snapshotState((await financialQuery.get()).docs);
+  const beforePayments = snapshotState((await paymentQuery.get()).docs);
+  expect(beforeFinancials).toHaveLength(4);
+  expect(beforePayments).toHaveLength(1);
+
+  const cancellationPayload = {
+    hotelId: "hotel-a",
+    operationId: "four-night-cancel-action",
+    deviceId: "device-a",
+    changeSet: {
+      bookingRemoteId: bookingId,
+      create: false,
+      setFields: {
+        bookingStatus: "CANCELLED",
+        cancellationReason: "Guest cancelled before arrival",
+      },
+      addRoomRemoteIds: [],
+      removeRoomRemoteIds: [],
+      rebuildFinancialLines: false,
+      financialLineTemplate: null,
+      financialLineRemoteIdsByKey: {},
+    },
+  };
+
+  const cancelled = await client.call(
+    "applyBookingChangeSetServer", cancellationPayload
+  ) as Record<string, unknown>;
+  expect(cancelled.outcome).toBe("APPLIED");
+  expect(cancelled.alreadyApplied).toBe(false);
+
+  const bookingAfter = await db.doc(
+    `hotels/hotel-a/bookings/${bookingId}`
+  ).get();
+  expect(bookingAfter.get("bookingStatus")).toBe("CANCELLED");
+  expect(bookingAfter.get("cancellationReason")).toBe("Guest cancelled before arrival");
+  expect(bookingAfter.get("cancellationSettlementStatus")).toBe("PENDING");
+  expect(bookingAfter.get("roomRemoteIds")).toEqual(["H101"]);
+
+  for (let night = 0; night < 4; night++) {
+    const lock = await db.doc(
+      `hotels/hotel-a/bookingLocks/H101_${START + night * day}`
+    ).get();
+    expect(lock.exists).toBe(false);
+  }
+  expect(snapshotState((await financialQuery.get()).docs)).toEqual(beforeFinancials);
+  expect(snapshotState((await paymentQuery.get()).docs)).toEqual(beforePayments);
+
+  const replay = await client.call(
+    "applyBookingChangeSetServer", cancellationPayload
+  ) as Record<string, unknown>;
+  expect(replay.outcome).toBe("APPLIED");
+  expect(replay.alreadyApplied).toBe(true);
+
+  const newBooking = await client.call("applyBookingChangeSetServer", {
+    hotelId: "hotel-a",
+    operationId: "four-night-cancel-rebook",
+    deviceId: "device-a",
+    changeSet: {
+      bookingRemoteId: "booking-after-cancellation",
+      create: true,
+      setFields: {
+        bookingUuid: "booking-after-cancellation",
+        guestName: "Replacement Guest",
+        checkInMillis: START,
+        checkOutMillis: checkout,
+        bookingStatus: "RESERVED",
+        pricingStatus: "CONFIRMED",
+        grossCharges: 12000,
+      },
+      addRoomRemoteIds: ["H101"],
+      removeRoomRemoteIds: [],
+      rebuildFinancialLines: true,
+      financialLineTemplate: { gstRatePercent: 5 },
+      financialLineRemoteIdsByKey: {},
+    },
+  }) as Record<string, unknown>;
+  expect(newBooking.outcome).toBe("APPLIED");
+
+  for (let night = 0; night < 4; night++) {
+    const lock = await db.doc(
+      `hotels/hotel-a/bookingLocks/H101_${START + night * day}`
+    ).get();
+    expect(lock.get("bookingRemoteId")).toBe("booking-after-cancellation");
+  }
+
+  expect(snapshotState((await financialQuery.get()).docs)).toEqual(beforeFinancials);
+  expect(snapshotState((await paymentQuery.get()).docs)).toEqual(beforePayments);
+  expect((await paymentQuery.get()).docs.filter((doc) =>
+    doc.get("paymentType") === "REFUND"
+  )).toHaveLength(0);
+}, 30_000);
   test("older cancellation command defaults safely to pending and a Direct decision becomes immutable", async () => {
     const client = await createClient();
     await seedMembership(client.auth.currentUser!.uid);
