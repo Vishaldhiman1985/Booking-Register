@@ -794,6 +794,137 @@ test("two independent devices cannot both reserve the same room-night", async ()
   ).where("bookingRemoteId", "==", `booking-concurrent-${loser}`).get();
   expect(loserLocks.empty).toBe(true);
 }, 30_000);
+test("two existing bookings cannot simultaneously shift into the same room-night", async () => {
+  const clientA = await createClient();
+  const clientB = await createClient();
+  await seedMembership(clientA.auth.currentUser!.uid);
+  await seedMembership(clientB.auth.currentUser!.uid);
+  for (const room of ["H101", "H102", "H103"]) {
+    await seedRoom(room, "property-a");
+  }
+
+  const db = getFirestore(adminApp);
+  const clients = [clientA, clientB];
+  const originalRooms = ["H101", "H102"];
+  const bookingIds = ["booking-shift-a", "booking-shift-b"];
+
+  for (let index = 0; index < 2; index++) {
+    const id = bookingIds[index];
+    const result = await clients[index].call("applyBookingChangeSetServer", {
+      hotelId: "hotel-a",
+      operationId: `create-${id}`,
+      deviceId: `device-${index}`,
+      conflictResolutionVersion: 1,
+      changeSet: {
+        bookingRemoteId: id,
+        create: true,
+        setFields: {
+          bookingUuid: id,
+          guestName: `Guest ${index}`,
+          checkInMillis: START,
+          checkOutMillis: END,
+          bookingStatus: "RESERVED",
+          pricingStatus: "CONFIRMED",
+          grossCharges: 3000,
+        },
+        addRoomRemoteIds: [originalRooms[index]],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: true,
+        financialLineTemplate: { gstRatePercent: 5 },
+        financialLineRemoteIdsByKey: {},
+      },
+    }) as Record<string, unknown>;
+    expect(result.outcome).toBe("APPLIED");
+  }
+
+  const beforeBookings = await Promise.all(bookingIds.map((id) =>
+    db.doc(`hotels/hotel-a/bookings/${id}`).get()
+  ));
+  const beforeFinancials = await Promise.all(bookingIds.map((id) =>
+    db.collection("hotels/hotel-a/bookingFinancialLines")
+      .where("bookingRemoteId", "==", id).get()
+  ));
+  expect(beforeFinancials.every((snapshot) => snapshot.size === 1)).toBe(true);
+
+  const shiftPayload = (index: number) => ({
+    hotelId: "hotel-a",
+    operationId: `simultaneous-shift-${index}`,
+    deviceId: `device-${index}`,
+    conflictResolutionVersion: 1,
+    changeSet: {
+      bookingRemoteId: bookingIds[index],
+      create: false,
+      setFields: {},
+      addRoomRemoteIds: [],
+      removeRoomRemoteIds: [],
+      rebuildFinancialLines: false,
+      financialLineTemplate: null,
+      financialLineRemoteIdsByKey: {},
+      roomPlanAssignments: [{
+        businessDateMillis: START,
+        roomRemoteId: "H103",
+        propertyRemoteId: "property-a",
+      }],
+    },
+  });
+
+  const outcomes = await Promise.allSettled([
+    clientA.call("applyBookingChangeSetServer", shiftPayload(0)),
+    clientB.call("applyBookingChangeSetServer", shiftPayload(1)),
+  ]);
+  const applied = outcomes.map((outcome, index) =>
+    outcome.status === "fulfilled" &&
+    (outcome.value as Record<string, unknown>).outcome === "APPLIED"
+      ? index : null
+  ).filter((index): index is number => index !== null);
+  expect(applied).toHaveLength(1);
+  const winner = applied[0];
+  const loser = 1 - winner;
+
+  expect(outcomes[loser].status).toBe("fulfilled");
+  if (outcomes[loser].status === "fulfilled") {
+    expect((outcomes[loser].value as Record<string, unknown>).outcome)
+      .toBe("REJECTED_ROOM_CONFLICT");
+  }
+
+  const targetLock = await db.doc(`hotels/hotel-a/bookingLocks/H103_${START}`).get();
+  expect(targetLock.exists).toBe(true);
+  expect(targetLock.get("bookingRemoteId")).toBe(bookingIds[winner]);
+
+  for (let index = 0; index < 2; index++) {
+    const originalLock = await db.doc(
+      `hotels/hotel-a/bookingLocks/${originalRooms[index]}_${START}`
+    ).get();
+    expect(originalLock.exists).toBe(index === loser);
+    if (index === loser) {
+      expect(originalLock.get("bookingRemoteId")).toBe(bookingIds[index]);
+    }
+
+    const afterBooking = await db.doc(
+      `hotels/hotel-a/bookings/${bookingIds[index]}`
+    ).get();
+    expect(afterBooking.get("roomRemoteIds")).toEqual([originalRooms[index]]);
+    if (index === loser) {
+      expect(afterBooking.data()).toEqual(beforeBookings[index].data());
+    }
+
+    const afterFinancials = await db.collection(
+      "hotels/hotel-a/bookingFinancialLines"
+    ).where("bookingRemoteId", "==", bookingIds[index]).get();
+    expect(afterFinancials.docs.map((doc) => ({ id: doc.id, data: doc.data() })))
+      .toEqual(beforeFinancials[index].docs.map((doc) => ({ id: doc.id, data: doc.data() })));
+
+    const activeAssignments = await db.collection(
+      "hotels/hotel-a/bookingRoomNightAssignments"
+    ).where("bookingRemoteId", "==", bookingIds[index]).get();
+    const active = activeAssignments.docs.filter((doc) => !doc.get("isDeleted"));
+    expect(active).toHaveLength(index === winner ? 1 : 0);
+    if (index === winner) {
+      expect(active[0].get("roomRemoteId")).toBe("H103");
+      expect(active[0].get("businessDateMillis")).toBe(START);
+    }
+  }
+}, 30_000);
   test("protocol v1 records a room-conflict create as a durable terminal result", async () => {
     const client = await createClient();
     await seedMembership(client.auth.currentUser!.uid);
