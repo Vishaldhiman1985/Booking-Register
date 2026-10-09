@@ -712,6 +712,88 @@ describe("Firebase callable Functions integration", () => {
     expect((await getFirestore(adminApp).doc("hotels/hotel-a/bookings/booking-blocked").get()).exists).toBe(false);
   }, 10_000);
 
+test("two independent devices cannot both reserve the same room-night", async () => {
+  const clientA = await createClient();
+  const clientB = await createClient();
+  await seedMembership(clientA.auth.currentUser!.uid);
+  await seedMembership(clientB.auth.currentUser!.uid);
+  await seedRoom("H101", "property-a");
+
+  const payload = (suffix: string) => ({
+    hotelId: "hotel-a",
+    operationId: `concurrent-${suffix}`,
+    deviceId: `device-${suffix}`,
+    conflictResolutionVersion: 1,
+    changeSet: {
+      bookingRemoteId: `booking-concurrent-${suffix}`,
+      create: true,
+      setFields: {
+        bookingUuid: `booking-concurrent-${suffix}`,
+        guestName: `Guest ${suffix}`,
+        checkInMillis: START,
+        checkOutMillis: END,
+        bookingStatus: "RESERVED",
+        pricingStatus: "CONFIRMED",
+        grossCharges: 3000,
+      },
+      addRoomRemoteIds: ["H101"],
+      removeRoomRemoteIds: [],
+      rebuildFinancialLines: true,
+      financialLineTemplate: { gstRatePercent: 5 },
+      financialLineRemoteIdsByKey: {},
+    },
+  });
+
+  const results = await Promise.allSettled([
+    clientA.call("applyBookingChangeSetServer", payload("a")),
+    clientB.call("applyBookingChangeSetServer", payload("b")),
+  ]);
+
+  const db = getFirestore(adminApp);
+  const bookings = await Promise.all(["a", "b"].map((suffix) =>
+    db.doc(`hotels/hotel-a/bookings/booking-concurrent-${suffix}`).get()
+  ));
+  const winners = bookings
+    .map((snapshot, index) => snapshot.exists ? ["a", "b"][index] : null)
+    .filter((suffix): suffix is string => suffix !== null);
+
+  expect(winners).toHaveLength(1);
+  const winner = winners[0];
+  const loser = winner === "a" ? "b" : "a";
+
+  const lock = await db.doc(`hotels/hotel-a/bookingLocks/H101_${START}`).get();
+  expect(lock.exists).toBe(true);
+  expect(lock.get("bookingRemoteId")).toBe(`booking-concurrent-${winner}`);
+
+  const winnerIndex = winner === "a" ? 0 : 1;
+  const loserIndex = loser === "a" ? 0 : 1;
+  expect(results[winnerIndex].status).toBe("fulfilled");
+  if (results[winnerIndex].status === "fulfilled") {
+    expect((results[winnerIndex].value as Record<string, unknown>).outcome)
+      .not.toBe("REJECTED_ROOM_CONFLICT");
+  }
+  if (results[loserIndex].status === "fulfilled") {
+    expect((results[loserIndex].value as Record<string, unknown>).outcome)
+      .toBe("REJECTED_ROOM_CONFLICT");
+  } else {
+    expect(results[loserIndex].reason).toBeDefined();
+  }
+
+  const loserFinancialLines = await db.collection(
+    "hotels/hotel-a/bookingFinancialLines"
+  ).where("bookingRemoteId", "==", `booking-concurrent-${loser}`).get();
+  expect(loserFinancialLines.empty).toBe(true);
+
+  const loserAssignments = await db.collection(
+    "hotels/hotel-a/bookingRoomNightAssignments"
+  ).where("bookingRemoteId", "==", `booking-concurrent-${loser}`).get();
+  expect(loserAssignments.empty).toBe(true);
+
+  const loserLocks = await db.collection(
+    "hotels/hotel-a/bookingLocks"
+  ).where("bookingRemoteId", "==", `booking-concurrent-${loser}`).get();
+  expect(loserLocks.empty).toBe(true);
+}, 30_000);
   test("protocol v1 records a room-conflict create as a durable terminal result", async () => {
     const client = await createClient();
     await seedMembership(client.auth.currentUser!.uid);
