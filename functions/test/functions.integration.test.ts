@@ -822,6 +822,122 @@ test("four-night room shift retains earlier nights and releases only future room
       "hotels/hotel-a/appliedBookingChangeSets/plan-lock-conflict-create"
     ).get()).exists).toBe(false);
   }, 10_000);
+  test("extending a stay into another booking is rejected without partial changes", async () => {
+    const client = await createClient();
+    await seedMembership(client.auth.currentUser!.uid);
+    await seedRoom("H101", "property-a");
+
+    const db = getFirestore(adminApp);
+    const day = 86_400_000;
+    const bookings = [
+      { id: "stay-extension-a", checkIn: START, checkOut: START + 2 * day },
+      { id: "stay-extension-b", checkIn: START + 2 * day, checkOut: START + 4 * day },
+    ];
+
+    for (const item of bookings) {
+      const created = await client.call("applyBookingChangeSetServer", {
+        hotelId: "hotel-a",
+        operationId: `create-${item.id}`,
+        deviceId: "device-a",
+        conflictResolutionVersion: 1,
+        changeSet: {
+          bookingRemoteId: item.id,
+          create: true,
+          setFields: {
+            bookingUuid: item.id,
+            guestName: item.id,
+            checkInMillis: item.checkIn,
+            checkOutMillis: item.checkOut,
+            bookingStatus: "RESERVED",
+            pricingStatus: "CONFIRMED",
+            grossCharges: 6000,
+          },
+          addRoomRemoteIds: ["H101"],
+          removeRoomRemoteIds: [],
+          rebuildFinancialLines: true,
+          financialLineTemplate: { gstRatePercent: 5 },
+          financialLineRemoteIdsByKey: {},
+        },
+      }) as Record<string, unknown>;
+      expect(created.outcome).toBe("APPLIED");
+    }
+
+    const bookingRefs = bookings.map((item) =>
+      db.doc(`hotels/hotel-a/bookings/${item.id}`)
+    );
+    const beforeBookings = await Promise.all(bookingRefs.map((ref) => ref.get()));
+    const financialQueries = bookings.map((item) =>
+      db.collection("hotels/hotel-a/bookingFinancialLines")
+        .where("bookingRemoteId", "==", item.id)
+    );
+    const financialState = (docs: Array<{ id: string; data: () => Record<string, unknown> | undefined }>) =>
+      docs.map((doc) => ({ id: doc.id, data: doc.data() }))
+        .sort((a, b) => a.id.localeCompare(b.id));
+
+    const beforeFinancials = await Promise.all(financialQueries.map(async (query) =>
+      financialState((await query.get()).docs)
+    ));
+
+    const lockRefs = [0, 1, 2, 3].map((night) =>
+      db.doc(`hotels/hotel-a/bookingLocks/H101_${START + night * day}`)
+    );
+    const beforeLocks = await Promise.all(lockRefs.map((ref) => ref.get()));
+    expect(beforeLocks.map((lock) => lock.get("bookingRemoteId"))).toEqual([
+      "stay-extension-a", "stay-extension-a", "stay-extension-b", "stay-extension-b",
+    ]);
+
+    const extensionPayload = {
+      hotelId: "hotel-a",
+      operationId: "conflicting-stay-extension",
+      deviceId: "device-a",
+      conflictResolutionVersion: 1,
+      changeSet: {
+        bookingRemoteId: "stay-extension-a",
+        create: false,
+        setFields: { checkOutMillis: START + 3 * day, grossCharges: 9000 },
+        addRoomRemoteIds: [],
+        removeRoomRemoteIds: [],
+        rebuildFinancialLines: false,
+        financialLineTemplate: { gstRatePercent: 5 },
+        financialLineRemoteIdsByKey: {},
+      },
+    };
+
+    const rejected = await client.call(
+      "applyBookingChangeSetServer", extensionPayload
+    ) as Record<string, unknown>;
+    expect(rejected.outcome).toBe("REJECTED_ROOM_CONFLICT");
+    expect(rejected.alreadyApplied).toBe(false);
+    expect(rejected.blockingBookingRemoteIds).toEqual(["stay-extension-b"]);
+
+    const replay = await client.call(
+      "applyBookingChangeSetServer", extensionPayload
+    ) as Record<string, unknown>;
+    expect(replay.outcome).toBe("REJECTED_ROOM_CONFLICT");
+    expect(replay.alreadyApplied).toBe(true);
+    expect(replay.blockingBookingRemoteIds).toEqual(["stay-extension-b"]);
+
+    for (let index = 0; index < bookings.length; index++) {
+      expect((await bookingRefs[index].get()).data())
+        .toEqual(beforeBookings[index].data());
+      expect(financialState((await financialQueries[index].get()).docs))
+        .toEqual(beforeFinancials[index]);
+    }
+
+    for (let index = 0; index < lockRefs.length; index++) {
+      expect((await lockRefs[index].get()).data())
+        .toEqual(beforeLocks[index].data());
+    }
+
+    const mutation = await db.doc(
+      "hotels/hotel-a/appliedBookingChangeSets/conflicting-stay-extension"
+    ).get();
+    const audit = await db.doc(
+      "hotels/hotel-a/bookingAuditEvents/conflicting-stay-extension"
+    ).get();
+    expect(mutation.get("outcome")).toBe("REJECTED_ROOM_CONFLICT");
+    expect(audit.get("action")).toBe("UPDATE_REJECTED_ROOM_CONFLICT");
+  }, 30_000);
   test("booking change set rejects a real room-lock conflict without partial writes", async () => {
     const client = await createClient();
     await seedMembership(client.auth.currentUser!.uid);
