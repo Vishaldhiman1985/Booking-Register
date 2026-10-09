@@ -24,6 +24,7 @@ import com.example.bookingregister.booking.domain.BookingPropertyPolicy
 import com.example.bookingregister.booking.domain.RoomConflictResolutionPolicy
 import com.example.bookingregister.booking.domain.BookingChangeSet
 import com.example.bookingregister.booking.domain.BookingRoomPlanPolicy
+import com.example.bookingregister.booking.domain.BookingRoomNightAssignment
 import com.example.bookingregister.booking.domain.DerivedBookingCachePolicy
 import com.example.bookingregister.booking.domain.CheckoutBalancePolicy
 import com.example.bookingregister.booking.domain.CancellationRequest
@@ -855,12 +856,21 @@ class BookingRepository(
     }
 
     suspend fun saveBooking(booking: BookingEntity): SaveResult =
-        saveBookingInternal(booking, financialLines = null)
+        saveBookingInternal(
+            booking = booking,
+            financialLines = null,
+            roomPlanAssignments = null
+        )
 
     suspend fun saveBookingWithFinancialLines(
         booking: BookingEntity,
-        financialLines: List<BookingFinancialLineEntity>
-    ): SaveResult = saveBookingInternal(booking, financialLines)
+        financialLines: List<BookingFinancialLineEntity>,
+        roomPlanAssignments: List<BookingRoomNightAssignment>? = null
+    ): SaveResult = saveBookingInternal(
+        booking = booking,
+        financialLines = financialLines,
+        roomPlanAssignments = roomPlanAssignments
+    )
 
     suspend fun replaceBookingRoomPlanFromDate(
         bookingRemoteId: String,
@@ -1024,7 +1034,8 @@ class BookingRepository(
 
     private suspend fun saveBookingInternal(
         booking: BookingEntity,
-        financialLines: List<BookingFinancialLineEntity>?
+        financialLines: List<BookingFinancialLineEntity>?,
+        roomPlanAssignments: List<BookingRoomNightAssignment>?
     ): SaveResult {
         val existingBooking = bookingDao.getByRemoteId(booking.remoteId)
         if (existingBooking != null &&
@@ -1082,13 +1093,105 @@ class BookingRepository(
             baseRevision = bookingWithLineCache.baseRevision.takeIf { it > 0 } ?: bookingWithLineCache.revision
         )
 
-        val overlapping = bookingDao.getOverlappingBookings(
-            hotelRemoteId = hotelRemoteId,
-            checkInMillis = normalized.checkInMillis,
-            checkOutMillis = normalized.checkOutMillis
-        ).any { existing ->
-            existing.remoteId != normalized.remoteId &&
-                    existing.roomRemoteIds.any { it in normalized.roomRemoteIds }
+        val preparedRoomPlan = roomPlanAssignments?.let { assignments ->
+            val validation = BookingRoomPlanPolicy.validate(
+                checkInMillis = normalized.checkInMillis,
+                checkOutMillis = normalized.checkOutMillis,
+                assignments = assignments
+            )
+
+            if (!validation.isValid) {
+                return SaveResult.Error(
+                    "Date-wise room plan is incomplete: ${validation.errors.joinToString()}"
+                )
+            }
+
+            val plannedRoomIds = assignments
+                .map { it.roomRemoteId.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+
+            val plannedRooms = plannedRoomIds.map { roomRemoteId ->
+                roomDao.getByRemoteId(roomRemoteId)
+                    ?: return SaveResult.Error(
+                        "A room in the date-wise plan is no longer available."
+                    )
+            }
+
+            val plannedRoomsById = plannedRooms.associateBy { it.remoteId }
+
+            plannedRooms.forEach { room ->
+                if (room.hotelRemoteId != hotelRemoteId || room.isDeleted) {
+                    return SaveResult.Error(
+                        "A room in the date-wise plan is deleted or unavailable."
+                    )
+                }
+
+                when (RoomLifecycleStatus.normalize(room.lifecycleStatus)) {
+                    RoomLifecycleStatus.DISABLED ->
+                        return SaveResult.Error(
+                            "${room.roomName} is disabled. Enable it before assigning it."
+                        )
+
+                    RoomLifecycleStatus.RETIRED ->
+                        return SaveResult.Error(
+                            "${room.roomName} is retired and cannot be assigned."
+                        )
+                }
+            }
+
+            assignments.forEach { assignment ->
+                val room = plannedRoomsById[assignment.roomRemoteId.trim()]
+                    ?: return SaveResult.Error(
+                        "A room in the date-wise plan is no longer available."
+                    )
+
+                val actualPropertyRemoteId = room.propertyRemoteId
+                    ?.trim()
+                    ?.takeIf(String::isNotBlank)
+
+                val requestedPropertyRemoteId = assignment.propertyRemoteId
+                    ?.trim()
+                    ?.takeIf(String::isNotBlank)
+
+                if (actualPropertyRemoteId != requestedPropertyRemoteId) {
+                    return SaveResult.Error(
+                        "A room in the date-wise plan no longer matches its property."
+                    )
+                }
+            }
+
+            val existingRoomPlanRows =
+                bookingRoomNightAssignmentDao.getAllForBooking(
+                    hotelRemoteId = hotelRemoteId,
+                    bookingRemoteId = normalized.remoteId
+                )
+
+            try {
+                BookingRoomPlanWriteComposer.prepare(
+                    booking = normalized,
+                    targetAssignments = assignments,
+                    existingRows = existingRoomPlanRows,
+                    now = normalized.updatedAt
+                )
+            } catch (error: IllegalArgumentException) {
+                return SaveResult.Error(
+                    error.message ?: "Could not prepare the date-wise room plan."
+                )
+            }
+        }
+
+        val overlapping = if (preparedRoomPlan == null) {
+            bookingDao.getOverlappingBookings(
+                hotelRemoteId = hotelRemoteId,
+                checkInMillis = normalized.checkInMillis,
+                checkOutMillis = normalized.checkOutMillis
+            ).any { existing ->
+                existing.remoteId != normalized.remoteId &&
+                        existing.roomRemoteIds.any { it in normalized.roomRemoteIds }
+            }
+        } else {
+            false
         }
 
         if (overlapping) {
@@ -1115,7 +1218,11 @@ class BookingRepository(
             requested = normalized,
             previousLines = existingFinancialLines,
             requestedLines = financialLines ?: existingFinancialLines
-        )
+        ).let { baseChangeSet ->
+            preparedRoomPlan?.let { prepared ->
+                baseChangeSet.withRoomPlanAssignments(prepared.commandAssignments)
+            } ?: baseChangeSet
+        }
         if (!changeSet.hasChanges) {
             return SaveResult.Success(syncPending = false)
         }
@@ -1123,6 +1230,9 @@ class BookingRepository(
         db.withTransaction {
             bookingDao.upsert(normalized)
             changedFinancialLines.forEach { line -> bookingFinancialLineDao.upsert(line) }
+            preparedRoomPlan?.let { prepared ->
+                bookingRoomNightAssignmentDao.upsertAll(prepared.localRows)
+            }
             seedInitialPaymentIfNeeded(normalized)
             enqueueBookingChangeSet(normalized, changeSet)
         }

@@ -100,6 +100,31 @@ object BookingRoomPlanPolicy {
             )
     }
 
+    fun reconcileDraftForStay(
+        checkInMillis: Long,
+        checkOutMillis: Long,
+        assignments: List<BookingRoomNightAssignment>
+    ): List<BookingRoomNightAssignment> {
+        if (checkOutMillis <= checkInMillis) return emptyList()
+
+        val validDates = stayDates(checkInMillis, checkOutMillis).toSet()
+
+        return assignments
+            .filter { it.businessDateMillis in validDates }
+            .map {
+                it.copy(
+                    roomRemoteId = it.roomRemoteId.trim(),
+                    propertyRemoteId = cleanPropertyId(it.propertyRemoteId)
+                )
+            }
+            .filter { it.roomRemoteId.isNotBlank() }
+            .distinctBy { it.businessDateMillis to it.roomRemoteId }
+            .sortedWith(
+                compareBy<BookingRoomNightAssignment> { it.businessDateMillis }
+                    .thenBy { it.roomRemoteId }
+            )
+    }
+
     fun validate(
         checkInMillis: Long,
         checkOutMillis: Long,
@@ -231,7 +256,7 @@ object BookingRoomPlanPolicy {
         return result
     }
 
-    private fun stayDates(
+    fun stayDates(
         checkInMillis: Long,
         checkOutMillis: Long
     ): List<Long> {

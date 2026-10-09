@@ -22,7 +22,7 @@
             android:layout_height="38dp"
             android:background="@drawable/bg_booking_outline_purple"
             android:gravity="center"
-            android:text="‹"
+            android:text="â€¹"
             android:textColor="#0D0D18"
             android:textSize="26sp" />
 
@@ -68,7 +68,7 @@
             android:layout_width="38dp"
             android:layout_height="38dp"
             android:gravity="end|center_vertical"
-            android:text="⋮"
+            android:text="â‹®"
             android:textColor="#111111"
             android:textSize="18sp" />
     </LinearLayout>
@@ -353,6 +353,55 @@
                     android:layout_width="0dp"
                     android:layout_height="0dp"
                     android:visibility="gone" />
+
+                <LinearLayout
+                    android:id="@+id/roomPlanControl"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:background="@drawable/bg_booking_field_world"
+                    android:backgroundTint="#FFFFFF"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="12dp"
+                    android:paddingTop="10dp"
+                    android:paddingEnd="12dp"
+                    android:paddingBottom="10dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Plan Rooms Date-wise"
+                            android:textColor="#3B14A8"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvRoomPlanStatus"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="Optional"
+                            android:textColor="#66616F"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="›"
+                        android:textColor="#3B14A8"
+                        android:textSize="24sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
 
                 <LinearLayout
                     android:layout_width="match_parent"

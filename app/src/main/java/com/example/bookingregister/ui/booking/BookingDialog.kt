@@ -56,6 +56,8 @@ import com.example.bookingregister.folio.domain.FolioSummaryBuilder
 import com.example.bookingregister.booking.domain.BookingStatus
 import com.example.bookingregister.booking.domain.BookingPricingStatus
 import com.example.bookingregister.booking.domain.BookingPropertyPolicy
+import com.example.bookingregister.booking.domain.BookingRoomNightAssignment
+import com.example.bookingregister.booking.domain.BookingRoomPlanPolicy
 import com.example.bookingregister.booking.domain.BookingSavePreparation
 import com.example.bookingregister.booking.domain.BookingPaymentSourcePolicy
 import com.example.bookingregister.booking.domain.CancellationRequest
@@ -91,8 +93,9 @@ class BookingDialog(
     private val existingBooking: BookingEntity?,
     private val canEditBooking: Boolean = true,
     private val roomRateLocked: Boolean = false,
+    private val initialRoomPlanAssignments: List<BookingRoomNightAssignment>? = null,
     private val onRoomPlanRequested: (BookingEntity) -> Unit,
-    private val onBookingSaved: (BookingEntity, List<BookingFinancialLineEntity>, (SaveResult) -> Unit) -> Unit,
+    private val onBookingSaved: (BookingEntity, List<BookingFinancialLineEntity>, List<BookingRoomNightAssignment>?, (SaveResult) -> Unit) -> Unit,
     private val onBookingDeleted: (BookingEntity, CancellationRequest, (SaveResult) -> Unit) -> Unit,
     private val onPaymentSaved: (BookingEntity, Double, String, String, String?, String?, (SaveResult) -> Unit) -> Unit,
     private val onAccountingChargeSaved: (BookingEntity, String, Double, String, String?, String?, (SaveResult) -> Unit) -> Unit,
@@ -129,6 +132,8 @@ class BookingDialog(
     private val nightCountDisplay: TextView = dialogView.findViewById(R.id.tvNightCount)
     private val checkIn: EditText = dialogView.findViewById(R.id.etCheckInDate)
     private val checkOut: EditText = dialogView.findViewById(R.id.etCheckOutDate)
+    private val roomPlanControl: View = dialogView.findViewById(R.id.roomPlanControl)
+    private val roomPlanStatus: TextView = dialogView.findViewById(R.id.tvRoomPlanStatus)
     private val bookingTotalLayout: TextInputLayout = dialogView.findViewById(R.id.tilBookingTotal)
     private val bookingTotal: EditText = dialogView.findViewById(R.id.etBookingTotal)
     private val propertyTaxLayout: TextInputLayout = dialogView.findViewById(R.id.tilPropertyTax)
@@ -191,6 +196,8 @@ class BookingDialog(
         bookingAccountingCharges.filter { !it.isDeleted && it.bookingRemoteId == booking.remoteId }
     }.orEmpty()
     private var draftFinancialLines: List<BookingFinancialLineEntity> = existingFinancialLines
+    private var draftRoomPlanAssignments: MutableList<BookingRoomNightAssignment>? =
+        initialRoomPlanAssignments?.toMutableList()
 
     private val selectedRoomIds = (
             existingBooking?.roomRemoteIds?.takeIf { it.isNotEmpty() }
@@ -210,6 +217,7 @@ class BookingDialog(
         bindFields()
         setupRoomSelection()
         setupDatePickers()
+        setupRoomPlanControl()
         setupPaymentStatus()
         setupPaymentHistory()
         setupCollapsibleSections()
@@ -237,7 +245,7 @@ class BookingDialog(
                 Toast.makeText(context, "Please check booking details", Toast.LENGTH_SHORT).show()
             } else {
                 setSaving(true)
-                onBookingSaved(booking, draftFinancialLines) { result ->
+                onBookingSaved(booking, draftFinancialLines, draftRoomPlanAssignments?.toList()) { result ->
                     setSaving(false)
                     when (result) {
                         is SaveResult.Success -> {
@@ -258,16 +266,35 @@ class BookingDialog(
     }
 
     private fun prepareBookingForSave(): BookingEntity? {
-        return BookingSavePreparation.prepare(
+        val booking = BookingSavePreparation.prepare(
             buildBooking = ::buildBooking,
-            refreshFinancialLines = { booking ->
-                if (BookingPricingStatus.isPending(booking.pricingStatus)) {
+            refreshFinancialLines = { preparedBooking ->
+                if (BookingPricingStatus.isPending(preparedBooking.pricingStatus)) {
                     draftFinancialLines = emptyList()
                 } else {
-                    ensureRoomNightFinancialLinesForBooking(booking)
+                    ensureRoomNightFinancialLinesForBooking(preparedBooking)
                 }
             }
-        )
+        ) ?: return null
+
+        val roomPlan = draftRoomPlanAssignments
+        if (roomPlan != null) {
+            val validation = BookingRoomPlanPolicy.validate(
+                checkInMillis = booking.checkInMillis,
+                checkOutMillis = booking.checkOutMillis,
+                assignments = roomPlan
+            )
+            if (!validation.isValid) {
+                Toast.makeText(
+                    context,
+                    validation.errors.firstOrNull() ?: "Complete the date-wise room plan.",
+                    Toast.LENGTH_LONG
+                ).show()
+                return null
+            }
+        }
+
+        return booking
     }
 
     fun isShowing(): Boolean = dialog.isShowing
@@ -437,6 +464,187 @@ class BookingDialog(
         checkOutDateCard.setOnClickListener { pickCheckoutDate() }
         checkInDisplay.setOnClickListener { pickCheckInDate() }
         checkOutDisplay.setOnClickListener { pickCheckoutDate() }
+    }
+
+    private fun setupRoomPlanControl() {
+        refreshRoomPlanStatus()
+        roomPlanControl.setOnClickListener {
+            if (!bookingEditMode || !canEditBooking) {
+                Toast.makeText(context, "Tap Edit before changing the room plan.", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            showRoomPlanPlannerDialog()
+        }
+    }
+
+    private fun showRoomPlanPlannerDialog() {
+        val checkInMillis = parseDate(checkIn.text.toString())
+        val checkOutMillis = parseDate(checkOut.text.toString())
+
+        if (checkInMillis == null || checkOutMillis == null || checkOutMillis <= checkInMillis) {
+            Toast.makeText(context, "Select valid stay dates first.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        if (draftRoomPlanAssignments == null) {
+            if (selectedRoomIds.isEmpty()) {
+                Toast.makeText(context, "Select the booking room first.", Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            draftRoomPlanAssignments = BookingRoomPlanPolicy.legacyAssignments(
+                checkInMillis = checkInMillis,
+                checkOutMillis = checkOutMillis,
+                roomRemoteIds = selectedRoomIds.toList(),
+                propertyRemoteId = selectedBookingPropertyRemoteId()
+            ).toMutableList()
+            refreshRoomPlanStatus()
+        }
+
+        val stayDates = BookingRoomPlanPolicy.stayDates(checkInMillis, checkOutMillis)
+        val labels = stayDates.map { dateMillis ->
+            val roomNames = draftRoomPlanAssignments.orEmpty()
+                .filter { it.businessDateMillis == dateMillis }
+                .map { assignment ->
+                    rooms.firstOrNull { it.remoteId == assignment.roomRemoteId }?.roomName
+                        ?: assignment.roomRemoteId
+                }
+                .distinct()
+                .joinToString(", ")
+                .ifBlank { "Not assigned" }
+            "${friendlyDate(dateMillis)}\n$roomNames"
+        }.toTypedArray()
+
+        AlertDialog.Builder(context)
+            .setTitle("Plan Rooms Date-wise")
+            .setItems(labels) { _, which ->
+                showRoomPlanNightPicker(stayDates[which])
+            }
+            .setNegativeButton("Done", null)
+            .show()
+    }
+
+    private fun showRoomPlanNightPicker(dateMillis: Long) {
+        val currentRoomIds = draftRoomPlanAssignments.orEmpty()
+            .filter { it.businessDateMillis == dateMillis }
+            .map { it.roomRemoteId }
+            .toMutableSet()
+
+        val selectableRooms = rooms
+            .filter { room ->
+                !room.isDeleted &&
+                    (currentRoomIds.contains(room.remoteId) ||
+                        RoomLifecycleStatus.normalize(room.lifecycleStatus) == RoomLifecycleStatus.ACTIVE)
+            }
+            .sortedWith(
+                compareBy<RoomEntity> { roomPlanPropertyName(it.propertyRemoteId) }
+                    .thenBy { it.sortOrder }
+                    .thenBy { it.roomName }
+            )
+
+        if (selectableRooms.isEmpty()) {
+            Toast.makeText(context, "No rooms are available to plan.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val labels = selectableRooms.map { roomPlanRoomLabel(it) }.toTypedArray()
+        val checked = BooleanArray(selectableRooms.size) { index ->
+            currentRoomIds.contains(selectableRooms[index].remoteId)
+        }
+        val selectedIds = currentRoomIds.toMutableSet()
+
+        AlertDialog.Builder(context)
+            .setTitle("Rooms for ${friendlyDate(dateMillis)}")
+            .setMultiChoiceItems(labels, checked) { dialog, which, isChecked ->
+                val room = selectableRooms[which]
+                if (isChecked) {
+                    selectedIds.add(room.remoteId)
+                    val selectedProperties = selectableRooms
+                        .filter { selectedIds.contains(it.remoteId) }
+                        .map { it.propertyRemoteId }
+
+                    if (!BookingPropertyPolicy.belongsToSingleProperty(selectedProperties)) {
+                        selectedIds.remove(room.remoteId)
+                        (dialog as? AlertDialog)?.listView?.setItemChecked(which, false)
+                        Toast.makeText(
+                            context,
+                            "Rooms used on the same night must belong to the same property.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                } else {
+                    selectedIds.remove(room.remoteId)
+                }
+            }
+            .setPositiveButton("Apply") { _, _ ->
+                if (selectedIds.isEmpty()) {
+                    Toast.makeText(context, "Select at least one room for this night.", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+
+                val selectedRooms = selectableRooms.filter { selectedIds.contains(it.remoteId) }
+                val replacement = selectedRooms.map { room ->
+                    BookingRoomNightAssignment(
+                        businessDateMillis = dateMillis,
+                        roomRemoteId = room.remoteId,
+                        propertyRemoteId = room.propertyRemoteId
+                    )
+                }
+
+                draftRoomPlanAssignments = (
+                    draftRoomPlanAssignments.orEmpty().filter { it.businessDateMillis != dateMillis } +
+                        replacement
+                    )
+                    .distinctBy { it.businessDateMillis to it.roomRemoteId }
+                    .sortedWith(
+                        compareBy<BookingRoomNightAssignment> { it.businessDateMillis }
+                            .thenBy { it.roomRemoteId }
+                    )
+                    .toMutableList()
+
+                refreshRoomPlanStatus()
+                showRoomPlanPlannerDialog()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun roomPlanPropertyName(propertyRemoteId: String?): String {
+        val cleanId = propertyRemoteId?.trim().orEmpty()
+        if (cleanId.isBlank()) return ""
+        return managedProperties
+            .firstOrNull { !it.isDeleted && it.remoteId == cleanId }
+            ?.propertyName
+            ?.takeIf { it.isNotBlank() }
+            ?: cleanId
+    }
+
+    private fun roomPlanRoomLabel(room: RoomEntity): String {
+        val propertyName = roomPlanPropertyName(room.propertyRemoteId)
+        return if (propertyName.isBlank()) room.roomName else "${room.roomName} - $propertyName"
+    }
+
+    private fun refreshRoomPlanStatus() {
+        val assignments = draftRoomPlanAssignments
+        if (assignments == null) {
+            roomPlanStatus.text = "Optional"
+            return
+        }
+
+        val checkInMillis = parseDate(checkIn.text.toString())
+        val checkOutMillis = parseDate(checkOut.text.toString())
+        val totalNights = if (checkInMillis != null && checkOutMillis != null && checkOutMillis > checkInMillis) {
+            BookingRoomPlanPolicy.stayDates(checkInMillis, checkOutMillis).size
+        } else {
+            0
+        }
+        val plannedNights = assignments.map { it.businessDateMillis }.distinct().size
+
+        roomPlanStatus.text = when {
+            totalNights <= 0 -> "Room plan active"
+            plannedNights == totalNights -> "$plannedNights night${if (plannedNights == 1) "" else "s"} planned"
+            else -> "$plannedNights of $totalNights nights planned"
+        }
     }
 
     private fun setupPaymentStatus() {
@@ -882,7 +1090,7 @@ class BookingDialog(
         val originalPaymentSpinner = Spinner(context).apply {
             adapter = spinnerAdapter(correctionCandidates.map { payment ->
                 val remaining = PaymentCorrectionPolicy.remainingCorrectable(payment, existingPaymentEntries)
-                "${payment.paymentType.displayPaymentType()} Rs ${amountText(remaining)} • ${dateFormat.format(Date(payment.paymentMillis))}"
+                "${payment.paymentType.displayPaymentType()} Rs ${amountText(remaining)} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ ${dateFormat.format(Date(payment.paymentMillis))}"
             })
             visibility = if (paymentType == BookingPaymentType.ADJUSTMENT) View.VISIBLE else View.GONE
         }
@@ -1094,7 +1302,7 @@ class BookingDialog(
         bookingTotalLayout.helperText = if (roomRateLocked) {
             "Room rate locked after final bill"
         } else if (existingBooking?.let { BookingPricingStatus.isPending(it.pricingStatus) } == true) {
-            "Rate pending — booking remains confirmed and rooms stay reserved"
+            "Rate pending ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â booking remains confirmed and rooms stay reserved"
         } else {
             null
         }
@@ -1103,6 +1311,8 @@ class BookingDialog(
         } else {
             null
         }
+        roomPlanControl.isEnabled = editable
+        roomPlanControl.alpha = if (editable) 1f else 0.55f
         sourceSpinner.isEnabled = editable
         paymentStatusSpinner.isEnabled = initialAdvanceEditable
         checkInDateCard.isEnabled = editable
@@ -1872,6 +2082,20 @@ class BookingDialog(
 
     private fun afterDateChanged() {
         updateDateRangeText()
+
+        draftRoomPlanAssignments?.let { currentPlan ->
+            val checkInMillis = parseDate(checkIn.text.toString())
+            val checkOutMillis = parseDate(checkOut.text.toString())
+            if (checkInMillis != null && checkOutMillis != null && checkOutMillis > checkInMillis) {
+                draftRoomPlanAssignments = BookingRoomPlanPolicy.reconcileDraftForStay(
+                    checkInMillis = checkInMillis,
+                    checkOutMillis = checkOutMillis,
+                    assignments = currentPlan
+                ).toMutableList()
+            }
+            refreshRoomPlanStatus()
+        }
+
         refreshBalanceForCurrentStatus()
         refreshSourceMode()
     }

@@ -26,6 +26,7 @@ import androidx.lifecycle.lifecycleScope
 import com.example.bookingregister.R
 import com.example.bookingregister.booking.domain.BookingStatus
 import com.example.bookingregister.booking.domain.BookingRoomPlanChartPolicy
+import com.example.bookingregister.booking.domain.BookingRoomNightAssignment
 import com.example.bookingregister.account.domain.AccountPermission
 import com.example.bookingregister.account.domain.BackendAccessManager
 import com.example.bookingregister.data.AppDatabase
@@ -707,7 +708,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                                 }
                                 append("\nRole: ")
                                 append(user.role)
-                                append("   •   ")
+                                append("   â€¢   ")
                                 append(status)
                             }
                             textSize = 15f
@@ -1481,18 +1482,11 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                 .joinToString(", ")
                 .ifBlank { "No room" }
 
-            "${dateFormat.format(Date(businessDateMillis))}  •  $roomNames"
+            "${dateFormat.format(Date(businessDateMillis))}  â€¢  $roomNames"
         }.toTypedArray()
 
         AlertDialog.Builder(this)
-            .setTitle("Room Plan / Shift Room")
-            .setMessage(
-                "Choose the date from which the guest should move. " +
-                    "The selected room(s) will apply from that date until checkout. " +
-                    "You can create another later shift afterward.`n`n" +
-                    "This is an operational room assignment only. " +
-                    "Booking price, GST, OTA settlement and financial lines will not be changed."
-            )
+            .setTitle("Room Plan - Choose Stay Night")
             .setItems(dateLabels) { _, which ->
                 showRoomPlanRoomSelectionDialog(
                     booking = booking,
@@ -1561,7 +1555,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                 ?.takeIf(String::isNotBlank)
                 ?: "Unassigned property"
 
-            "$propertyName  •  ${room.roomName}"
+            "$propertyName  â€¢  ${room.roomName}"
         }.toTypedArray()
 
         val checked = BooleanArray(selectableRooms.size) { index ->
@@ -1577,7 +1571,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             .setTitle("Shift from $dateLabel")
             .setMessage(
                 "Select one or more rooms. Multiple rooms are allowed, but all rooms " +
-                    "for the same night must belong to one property.`n`n" +
+                    "for the same night must belong to one property.\n\n" +
                     "Changing property here does not move the original booking's billing."
             )
             .setMultiChoiceItems(
@@ -1743,12 +1737,33 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             existingBooking = existing,
             canEditBooking = canEditBooking,
             roomRateLocked = roomRateLocked,
+            initialRoomPlanAssignments = existing?.let { booking ->
+                roomPlanAssignments
+                    .filter {
+                        !it.isDeleted &&
+                            it.bookingRemoteId == booking.remoteId
+                    }
+                    .map {
+                        BookingRoomNightAssignment(
+                            businessDateMillis = it.businessDateMillis,
+                            roomRemoteId = it.roomRemoteId,
+                            propertyRemoteId = it.propertyRemoteId
+                        )
+                    }
+                    .takeIf { it.isNotEmpty() }
+            },
             onRoomPlanRequested = { booking ->
                 showRoomPlanDialog(booking)
             },
-            onBookingSaved = { booking, lines, onResult ->
+            onBookingSaved = { booking, lines, roomPlan, onResult ->
                 lifecycleScope.launch {
-                    onResult(repository.saveBookingWithFinancialLines(booking, lines))
+                    onResult(
+                        repository.saveBookingWithFinancialLines(
+                            booking = booking,
+                            financialLines = lines,
+                            roomPlanAssignments = roomPlan
+                        )
+                    )
                 }
             },
             onBookingDeleted = { booking, request, onResult ->

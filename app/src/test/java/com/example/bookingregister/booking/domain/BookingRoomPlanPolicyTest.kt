@@ -241,6 +241,44 @@ class BookingRoomPlanPolicyTest {
         assertEquals(listOf("501", "502"), segments[1].roomRemoteIds)
     }
 
+    @Test
+    fun `planner draft drops nights outside a shortened stay`() {
+        val original = BookingRoomPlanPolicy.legacyAssignments(
+            checkInMillis = day1,
+            checkOutMillis = day4,
+            roomRemoteIds = listOf("401"),
+            propertyRemoteId = "hotel-a"
+        )
+
+        val reconciled = BookingRoomPlanPolicy.reconcileDraftForStay(
+            checkInMillis = day1,
+            checkOutMillis = day3,
+            assignments = original
+        )
+
+        assertEquals(listOf(day1, day2), reconciled.map { it.businessDateMillis }.distinct())
+        assertEquals(listOf("401", "401"), reconciled.map { it.roomRemoteId })
+    }
+
+    @Test
+    fun `planner draft does not guess rooms for newly added nights`() {
+        val original = BookingRoomPlanPolicy.legacyAssignments(
+            checkInMillis = day1,
+            checkOutMillis = day3,
+            roomRemoteIds = listOf("401"),
+            propertyRemoteId = "hotel-a"
+        )
+
+        val reconciled = BookingRoomPlanPolicy.reconcileDraftForStay(
+            checkInMillis = day1,
+            checkOutMillis = day4,
+            assignments = original
+        )
+
+        assertEquals(listOf(day1, day2), reconciled.map { it.businessDateMillis }.distinct())
+        assertFalse(reconciled.any { it.businessDateMillis == day3 })
+    }
+
     companion object {
         private const val DAY_MILLIS = 24L * 60L * 60L * 1000L
     }
