@@ -1090,7 +1090,7 @@ class BookingDialog(
         val originalPaymentSpinner = Spinner(context).apply {
             adapter = spinnerAdapter(correctionCandidates.map { payment ->
                 val remaining = PaymentCorrectionPolicy.remainingCorrectable(payment, existingPaymentEntries)
-                "${payment.paymentType.displayPaymentType()} Rs ${amountText(remaining)} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ ${dateFormat.format(Date(payment.paymentMillis))}"
+                "${payment.paymentType.displayPaymentType()} Rs ${amountText(remaining)} • ${dateFormat.format(Date(payment.paymentMillis))}"
             })
             visibility = if (paymentType == BookingPaymentType.ADJUSTMENT) View.VISIBLE else View.GONE
         }
@@ -1302,7 +1302,7 @@ class BookingDialog(
         bookingTotalLayout.helperText = if (roomRateLocked) {
             "Room rate locked after final bill"
         } else if (existingBooking?.let { BookingPricingStatus.isPending(it.pricingStatus) } == true) {
-            "Rate pending ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â booking remains confirmed and rooms stay reserved"
+            "Rate pending — booking remains confirmed and rooms stay reserved"
         } else {
             null
         }

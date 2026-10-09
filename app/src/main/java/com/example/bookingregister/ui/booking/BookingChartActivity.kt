@@ -708,7 +708,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                                 }
                                 append("\nRole: ")
                                 append(user.role)
-                                append("   â€¢   ")
+                                append("   •   ")
                                 append(status)
                             }
                             textSize = 15f
@@ -1482,7 +1482,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                 .joinToString(", ")
                 .ifBlank { "No room" }
 
-            "${dateFormat.format(Date(businessDateMillis))}  â€¢  $roomNames"
+            "${dateFormat.format(Date(businessDateMillis))}  •  $roomNames"
         }.toTypedArray()
 
         AlertDialog.Builder(this)
@@ -1555,7 +1555,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                 ?.takeIf(String::isNotBlank)
                 ?: "Unassigned property"
 
-            "$propertyName  â€¢  ${room.roomName}"
+            "$propertyName  •  ${room.roomName}"
         }.toTypedArray()
 
         val checked = BooleanArray(selectableRooms.size) { index ->

@@ -22,7 +22,7 @@
             android:layout_height="38dp"
             android:background="@drawable/bg_booking_outline_purple"
             android:gravity="center"
-            android:text="â€¹"
+            android:text="&#8249;"
             android:textColor="#0D0D18"
             android:textSize="26sp" />
 
@@ -68,7 +68,7 @@
             android:layout_width="38dp"
             android:layout_height="38dp"
             android:gravity="end|center_vertical"
-            android:text="â‹®"
+            android:text="&#8942;"
             android:textColor="#111111"
             android:textSize="18sp" />
     </LinearLayout>
