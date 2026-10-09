@@ -545,6 +545,137 @@ describe("Firebase callable Functions integration", () => {
     ).get()).exists).toBe(false);
   }, 10_000);
 
+test("four-night room shift retains earlier nights and releases only future room locks", async () => {
+  const client = await createClient();
+  await seedMembership(client.auth.currentUser!.uid);
+  await seedRoom("H101", "property-a");
+  await seedRoom("H102", "property-a");
+
+  const db = getFirestore(adminApp);
+  const day = 86_400_000;
+  const checkOut = START + 4 * day;
+  const bookingId = "booking-four-night-shift";
+  const initial = await client.call("applyBookingChangeSetServer", {
+    hotelId: "hotel-a",
+    operationId: "four-night-create",
+    deviceId: "device-a",
+    changeSet: {
+      bookingRemoteId: bookingId,
+      create: true,
+      setFields: {
+        bookingUuid: bookingId,
+        guestName: "Four Night Guest",
+        checkInMillis: START,
+        checkOutMillis: checkOut,
+        bookingStatus: "RESERVED",
+        pricingStatus: "CONFIRMED",
+        grossCharges: 12000,
+      },
+      addRoomRemoteIds: ["H101"],
+      removeRoomRemoteIds: [],
+      rebuildFinancialLines: true,
+      financialLineTemplate: { gstRatePercent: 5 },
+      financialLineRemoteIdsByKey: {},
+    },
+  }) as Record<string, unknown>;
+  expect(initial.outcome).toBe("APPLIED");
+
+  const financialQuery = db.collection("hotels/hotel-a/bookingFinancialLines")
+    .where("bookingRemoteId", "==", bookingId);
+  const beforeFinancials = await financialQuery.get();
+  expect(beforeFinancials.docs.filter((doc) => !doc.get("isDeleted"))).toHaveLength(4);
+  const financialState = (snapshot: typeof beforeFinancials) =>
+    snapshot.docs.map((doc) => ({ id: doc.id, data: doc.data() }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+
+  const shift = await client.call("applyBookingChangeSetServer", {
+    hotelId: "hotel-a",
+    operationId: "four-night-shift",
+    deviceId: "device-a",
+    changeSet: {
+      bookingRemoteId: bookingId,
+      create: false,
+      setFields: {},
+      addRoomRemoteIds: [],
+      removeRoomRemoteIds: [],
+      rebuildFinancialLines: false,
+      financialLineTemplate: null,
+      financialLineRemoteIdsByKey: {},
+      roomPlanAssignments: [0, 1, 2, 3].map((night) => ({
+        businessDateMillis: START + night * day,
+        roomRemoteId: night < 2 ? "H101" : "H102",
+        propertyRemoteId: "property-a",
+      })),
+    },
+  }) as Record<string, unknown>;
+  expect(shift.outcome).toBe("APPLIED");
+
+  const assignments = await db.collection("hotels/hotel-a/bookingRoomNightAssignments")
+    .where("bookingRemoteId", "==", bookingId).get();
+  const activeAssignments = assignments.docs.filter((doc) => !doc.get("isDeleted"))
+    .map((doc) => ({
+      night: doc.get("businessDateMillis"),
+      room: doc.get("roomRemoteId"),
+    })).sort((a, b) => a.night - b.night);
+  expect(activeAssignments).toEqual([0, 1, 2, 3].map((night) => ({
+    night: START + night * day,
+    room: night < 2 ? "H101" : "H102",
+  })));
+
+  for (let night = 0; night < 4; night++) {
+    for (const roomId of ["H101", "H102"]) {
+      const lock = await db.doc(
+        `hotels/hotel-a/bookingLocks/${roomId}_${START + night * day}`
+      ).get();
+      const expected = roomId === (night < 2 ? "H101" : "H102");
+      expect(lock.exists).toBe(expected);
+      if (expected) {
+        expect(lock.get("bookingRemoteId")).toBe(bookingId);
+      }
+    }
+  }
+
+  expect(financialState(await financialQuery.get())).toEqual(financialState(beforeFinancials));
+
+  const bookingAfterShift = await db.doc(
+    `hotels/hotel-a/bookings/${bookingId}`
+  ).get();
+  expect(bookingAfterShift.get("roomRemoteIds")).toEqual(["H101"]);
+  expect(bookingAfterShift.get("checkOutMillis")).toBe(checkOut);
+
+  const followingBooking = await client.call("applyBookingChangeSetServer", {
+    hotelId: "hotel-a",
+    operationId: "four-night-released-room-rebook",
+    deviceId: "device-a",
+    changeSet: {
+      bookingRemoteId: "booking-released-h101",
+      create: true,
+      setFields: {
+        bookingUuid: "booking-released-h101",
+        guestName: "New Guest",
+        checkInMillis: START + 2 * day,
+        checkOutMillis: checkOut,
+        bookingStatus: "RESERVED",
+        pricingStatus: "CONFIRMED",
+        grossCharges: 6000,
+      },
+      addRoomRemoteIds: ["H101"],
+      removeRoomRemoteIds: [],
+      rebuildFinancialLines: true,
+      financialLineTemplate: { gstRatePercent: 5 },
+      financialLineRemoteIdsByKey: {},
+    },
+  }) as Record<string, unknown>;
+  expect(followingBooking.outcome).toBe("APPLIED");
+
+  for (const night of [2, 3]) {
+    const releasedRoomLock = await db.doc(
+      `hotels/hotel-a/bookingLocks/H101_${START + night * day}`
+    ).get();
+    expect(releasedRoomLock.get("bookingRemoteId")).toBe("booking-released-h101");
+  }
+  expect(financialState(await financialQuery.get())).toEqual(financialState(beforeFinancials));
+}, 30_000);
   test("historical UTC-midnight legacy room lock blocks a canonical booking", async () => {
     const client = await createClient();
     await seedMembership(client.auth.currentUser!.uid);
