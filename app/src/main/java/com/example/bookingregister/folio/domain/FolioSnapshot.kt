@@ -144,7 +144,12 @@ class FolioSnapshotBuilder {
                 totals.addTo(BookingPaymentCategory.FOOD, sign * payment.allocatedFoodAmount)
                 totals.addTo(BookingPaymentCategory.SERVICE, sign * payment.allocatedServiceAmount)
                 totals.addTo(BookingPaymentCategory.DAMAGE, sign * payment.allocatedDamageAmount)
-            } else if (!(payment.paymentType == BookingPaymentType.ADJUSTMENT && payment.unappliedAmount > 0.0)) {
+            } else if (payment.unappliedAmount <= 0.0) {
+                // Legacy payment rows can have no explicit allocation fields.
+                // Only those rows use the category fallback. Modern receipts
+                // explicitly marked as unapplied must not be treated as
+                // room/food/service/damage payments; their corresponding
+                // reversal must likewise not alter a charge bucket.
                 val category = BookingPaymentCategory.normalize(payment.paymentCategory)
                 val bucket = when (category) {
                     BookingPaymentCategory.FOOD,
