@@ -728,7 +728,14 @@ class BookingDialog(
             accountingCharges = existingAccountingCharges,
             foodOrders = foodOrders,
             foodOrderItems = foodOrderItems,
-            bookingFinancialLines = draftFinancialLines
+            bookingFinancialLines = existingFinancialLines,
+            roomPlan = com.example.bookingregister.booking.domain.BookingRoomPlanResolver.resolve(
+                checkInMillis = booking.checkInMillis,
+                checkOutMillis = booking.checkOutMillis,
+                legacyRoomRemoteIds = booking.roomRemoteIds,
+                legacyPropertyRemoteId = booking.propertyRemoteId,
+                explicitAssignments = initialRoomPlanAssignments.orEmpty()
+            )
         )
     }
 

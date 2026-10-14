@@ -1959,6 +1959,10 @@ class BookingRepository(
             val roomNamesById = roomDao.getRooms(hotelRemoteId)
                 .associate { it.remoteId to it.roomName }
 
+            val savedRoomPlan = BookingRoomPlanReadResolver.resolve(
+                current,
+                bookingRoomNightAssignmentDao.getForBooking(hotelRemoteId, current.remoteId)
+            )
             val stayItems = StayBillItemBuilder.build(
                 billRemoteId = billRemoteId,
                 hotelRemoteId = hotelRemoteId,
@@ -1967,7 +1971,8 @@ class BookingRepository(
                 stayTotal = summary.stayTotal,
                 financialLines = stayFinancialLines,
                 roomNamesById = roomNamesById,
-                now = now
+                now = now,
+                roomPlan = savedRoomPlan
             )
             grossSubtotalBeforeDiscount += stayItems.sumOf { it.lineTotal.takeIf { total -> total > 0.0 } ?: it.lineSubtotal }
             billItems += applyGrossDiscountToBillItems(stayItems, roomDiscount)

@@ -1,5 +1,7 @@
 package com.example.bookingregister.finalbill.domain
 
+import com.example.bookingregister.accounting.domain.RoomNightDescriptionPolicy
+import com.example.bookingregister.booking.domain.EffectiveBookingRoomPlan
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.BookingAccountingChargeEntity
 import com.example.bookingregister.data.entities.BookingPaymentCategory
@@ -26,7 +28,8 @@ class FinalBillPreviewBuilder {
         bookingFinancialLines: List<BookingFinancialLineEntity> = emptyList(),
         accountingCharges: List<BookingAccountingChargeEntity> = emptyList(),
         foodOrders: List<FoodOrderEntity>,
-        foodOrderItems: List<FoodOrderItemEntity>
+        foodOrderItems: List<FoodOrderItemEntity>,
+        roomPlan: EffectiveBookingRoomPlan? = null
     ): FinalBillPreview {
         val linkedOrders = foodOrders
             .filter { it.isLedgerFoodFor(booking.remoteId) }
@@ -37,6 +40,9 @@ class FinalBillPreviewBuilder {
             .groupBy { it.orderRemoteId }
 
         val roomNameById = rooms.associate { it.remoteId to it.roomName }
+        val roomLineCountsByNight = bookingFinancialLines
+            .filter { !it.isDeleted && it.bookingRemoteId == booking.remoteId }
+            .groupingBy { it.businessDateMillis }.eachCount()
         val roomItemPreviews = bookingFinancialLines
             .filter { !it.isDeleted && it.bookingRemoteId == booking.remoteId }
             .sortedWith(
@@ -44,8 +50,23 @@ class FinalBillPreviewBuilder {
                     .thenBy { roomNameById[it.roomRemoteId].orEmpty() }
             )
             .map { line ->
+                val billedName = roomNameById[line.roomRemoteId] ?: "Room"
+                val occupiedName = roomPlan?.let { plan ->
+                    RoomNightDescriptionPolicy.occupiedRoomNameForCharge(
+                        plan = plan,
+                        businessDateMillis = line.businessDateMillis,
+                        billedPropertyRemoteId = line.propertyRemoteId,
+                        financialLineCountForNight = roomLineCountsByNight[line.businessDateMillis] ?: 0,
+                        roomNamesById = roomNameById
+                    )
+                }
+                val displayName = if (occupiedName != null && occupiedName != billedName) {
+                    "$occupiedName (billed $billedName)"
+                } else {
+                    billedName
+                }
                 FinalBillRoomItemPreview(
-                    roomName = roomNameById[line.roomRemoteId] ?: "Room",
+                    roomName = displayName,
                     businessDateMillis = line.businessDateMillis,
                     grossAmount = line.grossAmount,
                     taxableAmount = line.taxableAmount,

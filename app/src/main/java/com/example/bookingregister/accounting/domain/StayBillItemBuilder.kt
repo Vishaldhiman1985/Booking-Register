@@ -1,5 +1,6 @@
 package com.example.bookingregister.accounting.domain
 
+import com.example.bookingregister.booking.domain.EffectiveBookingRoomPlan
 import com.example.bookingregister.data.SyncState
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.BookingFinancialLineEntity
@@ -22,7 +23,8 @@ object StayBillItemBuilder {
         financialLines: List<BookingFinancialLineEntity>,
         roomNamesById: Map<String, String> = emptyMap(),
         now: Long,
-        idFactory: () -> String = { UUID.randomUUID().toString() }
+        idFactory: () -> String = { UUID.randomUUID().toString() },
+        roomPlan: EffectiveBookingRoomPlan? = null
     ): List<FoodBillItemEntity> {
 
         if (stayTotal <= 0.0) return emptyList()
@@ -38,7 +40,24 @@ object StayBillItemBuilder {
             return emptyList()
         }
 
+        val lineCountsByNight = activeLines.groupingBy { it.businessDateMillis }.eachCount()
         return activeLines.map { line ->
+            val billedName = roomNamesById[line.roomRemoteId]?.takeIf { it.isNotBlank() }
+                ?: line.roomRemoteId
+            val occupiedName = roomPlan?.let { plan ->
+                RoomNightDescriptionPolicy.occupiedRoomNameForCharge(
+                    plan = plan,
+                    businessDateMillis = line.businessDateMillis,
+                    billedPropertyRemoteId = line.propertyRemoteId,
+                    financialLineCountForNight = lineCountsByNight[line.businessDateMillis] ?: 0,
+                    roomNamesById = roomNamesById
+                )
+            }
+            val displayName = if (occupiedName != null && occupiedName != billedName) {
+                "$occupiedName (billed $billedName)"
+            } else {
+                billedName
+            }
             val gross = line.grossAmount.coerceAtLeast(0.0)
             val taxable = line.taxableAmount.coerceAtLeast(0.0)
             val gst = line.gstAmount.coerceAtLeast(0.0)
@@ -56,7 +75,7 @@ object StayBillItemBuilder {
                 orderMillis = line.businessDateMillis,
                 roomName = roomNamesById[line.roomRemoteId]?.takeIf { it.isNotBlank() }
                     ?: roomsIncluded,
-                itemName = roomNightLabel(line, roomNamesById),
+                itemName = roomNightLabel(line, roomNamesById, displayName),
                 quantity = 1.0,
                 unitPrice = guestPayable,
                 lineSubtotal = guestPayable,
@@ -85,7 +104,8 @@ object StayBillItemBuilder {
 
     private fun roomNightLabel(
         line: BookingFinancialLineEntity,
-        roomNamesById: Map<String, String>
+        roomNamesById: Map<String, String>,
+        displayName: String
     ): String {
         val dateText = billDateFormat.format(Date(line.businessDateMillis))
         val gstText = line.gstRatePercent
@@ -97,7 +117,7 @@ object StayBillItemBuilder {
             ?.takeIf { it.isNotBlank() }
             ?: line.roomRemoteId
 
-        return "Room stay - $roomName - $dateText$gstText"
+        return "Room stay - $displayName - $dateText$gstText"
     }
 
     private fun formatRate(rate: Double): String {
