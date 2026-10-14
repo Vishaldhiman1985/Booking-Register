@@ -94,6 +94,7 @@ class BookingDialog(
     private val canEditBooking: Boolean = true,
     private val roomRateLocked: Boolean = false,
     private val initialRoomPlanAssignments: List<BookingRoomNightAssignment>? = null,
+    private val onRoomNightAvailabilityRequested: (Long, (Set<String>?) -> Unit) -> Unit,
     private val onRoomPlanRequested: (BookingEntity) -> Unit,
     private val onBookingSaved: (BookingEntity, List<BookingFinancialLineEntity>, List<BookingRoomNightAssignment>?, (SaveResult) -> Unit) -> Unit,
     private val onBookingDeleted: (BookingEntity, CancellationRequest, (SaveResult) -> Unit) -> Unit,
@@ -525,90 +526,92 @@ class BookingDialog(
     }
 
     private fun showRoomPlanNightPicker(dateMillis: Long) {
-        val currentRoomIds = draftRoomPlanAssignments.orEmpty()
-            .filter { it.businessDateMillis == dateMillis }
-            .map { it.roomRemoteId }
-            .toMutableSet()
-
-        val selectableRooms = rooms
-            .filter { room ->
-                !room.isDeleted &&
-                    (currentRoomIds.contains(room.remoteId) ||
-                        RoomLifecycleStatus.normalize(room.lifecycleStatus) == RoomLifecycleStatus.ACTIVE)
+        // Query the selected night, not the chart's possibly incomplete date window.
+        onRoomNightAvailabilityRequested(dateMillis) { occupiedRoomIds ->
+            if (occupiedRoomIds == null) {
+                Toast.makeText(context, "Could not check room availability. Please try again.", Toast.LENGTH_LONG).show()
+                return@onRoomNightAvailabilityRequested
             }
-            .sortedWith(
-                compareBy<RoomEntity> { roomPlanPropertyName(it.propertyRemoteId) }
-                    .thenBy { it.sortOrder }
-                    .thenBy { it.roomName }
-            )
+            if (!dialog.isShowing) return@onRoomNightAvailabilityRequested
 
-        if (selectableRooms.isEmpty()) {
-            Toast.makeText(context, "No rooms are available to plan.", Toast.LENGTH_SHORT).show()
-            return
-        }
+            val currentRoomIds = draftRoomPlanAssignments.orEmpty()
+                .filter { it.businessDateMillis == dateMillis }
+                .map { it.roomRemoteId }
+                .toMutableSet()
 
-        val labels = selectableRooms.map { roomPlanRoomLabel(it) }.toTypedArray()
-        val checked = BooleanArray(selectableRooms.size) { index ->
-            currentRoomIds.contains(selectableRooms[index].remoteId)
-        }
-        val selectedIds = currentRoomIds.toMutableSet()
+            val selectableRooms = rooms
+                .filter { room ->
+                    !room.isDeleted && room.remoteId !in occupiedRoomIds &&
+                        (currentRoomIds.contains(room.remoteId) ||
+                            RoomLifecycleStatus.normalize(room.lifecycleStatus) == RoomLifecycleStatus.ACTIVE)
+                }
+                .sortedWith(
+                    compareBy<RoomEntity> { roomPlanPropertyName(it.propertyRemoteId) }
+                        .thenBy { it.sortOrder }
+                        .thenBy { it.roomName }
+                )
 
-        AlertDialog.Builder(context)
-            .setTitle("Rooms for ${friendlyDate(dateMillis)}")
-            .setMultiChoiceItems(labels, checked) { dialog, which, isChecked ->
-                val room = selectableRooms[which]
-                if (isChecked) {
-                    selectedIds.add(room.remoteId)
-                    val selectedProperties = selectableRooms
-                        .filter { selectedIds.contains(it.remoteId) }
-                        .map { it.propertyRemoteId }
+            if (selectableRooms.isEmpty()) {
+                Toast.makeText(context, "No rooms are available for this night.", Toast.LENGTH_SHORT).show()
+                return@onRoomNightAvailabilityRequested
+            }
 
-                    if (!BookingPropertyPolicy.belongsToSingleProperty(selectedProperties)) {
+            val labels = selectableRooms.map { roomPlanRoomLabel(it) }.toTypedArray()
+            val checked = BooleanArray(selectableRooms.size) { index ->
+                currentRoomIds.contains(selectableRooms[index].remoteId)
+            }
+            val selectedIds = currentRoomIds.intersect(selectableRooms.map { it.remoteId }.toSet()).toMutableSet()
+
+            AlertDialog.Builder(context)
+                .setTitle("Rooms for ${friendlyDate(dateMillis)}")
+                .setMultiChoiceItems(labels, checked) { picker, which, isChecked ->
+                    val room = selectableRooms[which]
+                    if (isChecked) {
+                        selectedIds.add(room.remoteId)
+                        val selectedProperties = selectableRooms
+                            .filter { selectedIds.contains(it.remoteId) }
+                            .map { it.propertyRemoteId }
+                        if (!BookingPropertyPolicy.belongsToSingleProperty(selectedProperties)) {
+                            selectedIds.remove(room.remoteId)
+                            (picker as? AlertDialog)?.listView?.setItemChecked(which, false)
+                            Toast.makeText(context,
+                                "Rooms used on the same night must belong to the same property.",
+                                Toast.LENGTH_LONG).show()
+                        }
+                    } else {
                         selectedIds.remove(room.remoteId)
-                        (dialog as? AlertDialog)?.listView?.setItemChecked(which, false)
-                        Toast.makeText(
-                            context,
-                            "Rooms used on the same night must belong to the same property.",
-                            Toast.LENGTH_LONG
-                        ).show()
                     }
-                } else {
-                    selectedIds.remove(room.remoteId)
                 }
-            }
-            .setPositiveButton("Apply") { _, _ ->
-                if (selectedIds.isEmpty()) {
-                    Toast.makeText(context, "Select at least one room for this night.", Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
+                .setPositiveButton("Apply") { _, _ ->
+                    if (selectedIds.isEmpty()) {
+                        Toast.makeText(context, "Select at least one room for this night.", Toast.LENGTH_SHORT).show()
+                        return@setPositiveButton
+                    }
+                    val selectedRooms = selectableRooms.filter { selectedIds.contains(it.remoteId) }
+                    val replacement = selectedRooms.map { room ->
+                        BookingRoomNightAssignment(
+                            businessDateMillis = dateMillis,
+                            roomRemoteId = room.remoteId,
+                            propertyRemoteId = room.propertyRemoteId
+                        )
+                    }
+                    draftRoomPlanAssignments = (
+                        draftRoomPlanAssignments.orEmpty().filter { it.businessDateMillis != dateMillis } +
+                            replacement
+                        )
+                        .distinctBy { it.businessDateMillis to it.roomRemoteId }
+                        .sortedWith(
+                            compareBy<BookingRoomNightAssignment> { it.businessDateMillis }
+                                .thenBy { it.roomRemoteId }
+                        )
+                        .toMutableList()
+                    refreshRoomPlanStatus()
+                    showRoomPlanPlannerDialog()
                 }
-
-                val selectedRooms = selectableRooms.filter { selectedIds.contains(it.remoteId) }
-                val replacement = selectedRooms.map { room ->
-                    BookingRoomNightAssignment(
-                        businessDateMillis = dateMillis,
-                        roomRemoteId = room.remoteId,
-                        propertyRemoteId = room.propertyRemoteId
-                    )
-                }
-
-                draftRoomPlanAssignments = (
-                    draftRoomPlanAssignments.orEmpty().filter { it.businessDateMillis != dateMillis } +
-                        replacement
-                    )
-                    .distinctBy { it.businessDateMillis to it.roomRemoteId }
-                    .sortedWith(
-                        compareBy<BookingRoomNightAssignment> { it.businessDateMillis }
-                            .thenBy { it.roomRemoteId }
-                    )
-                    .toMutableList()
-
-                refreshRoomPlanStatus()
-                showRoomPlanPlannerDialog()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
     }
-
     private fun roomPlanPropertyName(propertyRemoteId: String?): String {
         val cleanId = propertyRemoteId?.trim().orEmpty()
         if (cleanId.isBlank()) return ""

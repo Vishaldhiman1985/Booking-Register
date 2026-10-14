@@ -80,7 +80,7 @@ import com.example.bookingregister.room.domain.RoomLifecycleStatus
 import com.example.bookingregister.source.domain.SourceSettlementCalculator
 import com.example.bookingregister.source.domain.SourceSyncFailureDisposition
 import com.example.bookingregister.source.domain.SourceSyncFailurePolicy
-
+import com.example.bookingregister.booking.domain.BookingRoomNightAvailabilityPolicy
 
 
 class BookingRepository(
@@ -130,6 +130,41 @@ class BookingRepository(
         managedPropertyDao.observeProperties(hotelRemoteId)
 
     fun observeRooms(): LiveData<List<RoomEntity>> = roomDao.observeRooms(hotelRemoteId)
+    /** Only used by the date-wise room picker. Read-only; never reserves a room. */
+    suspend fun occupiedRoomIdsForDateWisePicker(
+        dateMillis: Long,
+        editingBookingRemoteId: String?
+    ): Set<String> {
+        val candidates = bookingDao.getOverlappingBookings(
+            hotelRemoteId = hotelRemoteId,
+            checkInMillis = dateMillis,
+            checkOutMillis = dateMillis + 24L * 60L * 60L * 1000L
+        )
+        val occupants = candidates.map { booking ->
+            val rows = bookingRoomNightAssignmentDao.getForBooking(hotelRemoteId, booking.remoteId)
+            BookingRoomNightAvailabilityPolicy.Occupant(
+                bookingId = booking.remoteId,
+                checkInMillis = booking.checkInMillis,
+                checkOutMillis = booking.checkOutMillis,
+                legacyRoomIds = booking.roomRemoteIds,
+                legacyPropertyId = booking.propertyRemoteId,
+                explicitAssignments = BookingRoomPlanReadResolver.resolve(booking, rows)
+                    .takeIf { rows.isNotEmpty() }?.assignments.orEmpty()
+            )
+        }
+        return roomDao.getRooms(hotelRemoteId)
+            .asSequence()
+            .filter { room ->
+                BookingRoomNightAvailabilityPolicy.isOccupied(
+                    roomId = room.remoteId,
+                    nightMillis = dateMillis,
+                    occupants = occupants,
+                    excludeBookingId = editingBookingRemoteId
+                )
+            }
+            .map { it.remoteId }
+            .toSet()
+    }
 
     fun observeBookings(): LiveData<List<BookingEntity>> = bookingDao.observeBookings(hotelRemoteId)
 
@@ -1181,20 +1216,63 @@ class BookingRepository(
             }
         }
 
-        val overlapping = if (preparedRoomPlan == null) {
-            bookingDao.getOverlappingBookings(
-                hotelRemoteId = hotelRemoteId,
-                checkInMillis = normalized.checkInMillis,
-                checkOutMillis = normalized.checkOutMillis
-            ).any { existing ->
-                existing.remoteId != normalized.remoteId &&
-                        existing.roomRemoteIds.any { it in normalized.roomRemoteIds }
-            }
+        // Reuse the actual nightly plan when editing an existing booking. The
+        // legacy room list is not authoritative after a date-wise room move.
+        val savedNightRows = if (existingBooking != null && roomPlanAssignments == null) {
+            bookingRoomNightAssignmentDao.getForBooking(hotelRemoteId, normalized.remoteId)
         } else {
-            false
+            emptyList()
         }
-
-        if (overlapping) {
+        if (savedNightRows.isNotEmpty() && existingBooking != null &&
+            (normalized.checkInMillis != existingBooking.checkInMillis ||
+                normalized.checkOutMillis != existingBooking.checkOutMillis)
+        ) {
+            return SaveResult.Error(
+                "Date-wise room plan must be updated when changing the stay dates."
+            )
+        }
+        val targetAssignments = when {
+            roomPlanAssignments != null -> roomPlanAssignments
+            savedNightRows.isNotEmpty() -> {
+                val savedPlan = BookingRoomPlanReadResolver.resolve(normalized, savedNightRows)
+                if (!savedPlan.isValid) {
+                    return SaveResult.Error("Existing date-wise room plan is incomplete. Please correct it before saving.")
+                }
+                savedPlan.assignments
+            }
+            else -> BookingRoomPlanPolicy.legacyAssignments(
+                checkInMillis = normalized.checkInMillis,
+                checkOutMillis = normalized.checkOutMillis,
+                roomRemoteIds = normalized.roomRemoteIds,
+                propertyRemoteId = normalized.propertyRemoteId
+            )
+        }
+        val overlappingBookings = bookingDao.getOverlappingBookings(
+            hotelRemoteId = hotelRemoteId,
+            checkInMillis = normalized.checkInMillis,
+            checkOutMillis = normalized.checkOutMillis
+        )
+        val occupants = overlappingBookings.map { existing ->
+            val assignmentRows = bookingRoomNightAssignmentDao.getForBooking(
+                hotelRemoteId = hotelRemoteId,
+                bookingRemoteId = existing.remoteId
+            )
+            val plan = BookingRoomPlanReadResolver.resolve(existing, assignmentRows)
+            BookingRoomNightAvailabilityPolicy.Occupant(
+                bookingId = existing.remoteId,
+                checkInMillis = existing.checkInMillis,
+                checkOutMillis = existing.checkOutMillis,
+                legacyRoomIds = existing.roomRemoteIds,
+                legacyPropertyId = existing.propertyRemoteId,
+                explicitAssignments = if (assignmentRows.isNotEmpty()) plan.assignments else emptyList()
+            )
+        }
+        if (BookingRoomNightAvailabilityPolicy.conflicts(
+                requestedBookingId = normalized.remoteId,
+                targetAssignments = targetAssignments,
+                occupants = occupants
+            )
+        ) {
             return SaveResult.Conflict("Selected room is already booked for these dates")
         }
 

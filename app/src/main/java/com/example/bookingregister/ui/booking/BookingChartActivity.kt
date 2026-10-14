@@ -1752,7 +1752,20 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                     }
                     .takeIf { it.isNotEmpty() }
             },
-            onRoomPlanRequested = { booking ->
+            onRoomNightAvailabilityRequested = { dateMillis, onResult ->
+                lifecycleScope.launch {
+                    try {
+                        onResult(repository.occupiedRoomIdsForDateWisePicker(
+                            dateMillis = dateMillis,
+                            editingBookingRemoteId = existing?.remoteId
+                        ))
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        onResult(null)
+                    }
+                }
+            },            onRoomPlanRequested = { booking ->
                 showRoomPlanDialog(booking)
             },
             onBookingSaved = { booking, lines, roomPlan, onResult ->
