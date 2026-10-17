@@ -212,7 +212,7 @@ class BookingDialog(
         .create()
 
     init {
-        dialogView.setBackgroundColor(Color.WHITE)
+        dialogView.setBackgroundColor(Color.parseColor("#F6F7FB"))
         forceLightDialogColors(dialogView)
         setupSourceSelection()
         bindFields()
@@ -344,7 +344,7 @@ class BookingDialog(
     private fun setSaving(isSaving: Boolean) {
         saveButton.apply {
             isEnabled = !isSaving
-            text = if (isSaving) "Saving..." else "Save"
+            text = if (isSaving) "Saving..." else saveButtonLabel()
         }
         cancelButton.isEnabled = !isSaving
         bookingMenuButton.isEnabled = !isSaving
@@ -370,7 +370,7 @@ class BookingDialog(
 
     private fun bindFields() {
         dialogTitle.visibility = View.VISIBLE
-        dialogTitle.text = "Rooms"
+        dialogTitle.text = if (existingBooking == null) "New booking" else "Booking details"
         dialogTitle.setTextColor(Color.parseColor("#101018"))
         bookingIdText.visibility = View.GONE
         bookingMenuButton.visibility = if (existingBooking == null) View.GONE else View.VISIBLE
@@ -1333,10 +1333,14 @@ class BookingDialog(
         dialogTitle.isEnabled = editable
         saveButton.isEnabled = editable
         saveButton.alpha = if (editable) 1f else 0.45f
+        saveButton.text = saveButtonLabel()
         editButton.text = if (editable) "Editing" else "Edit"
         editButton.isEnabled = canEditBooking && !editable
         editButton.alpha = if (canEditBooking) 1f else 0.45f
     }
+
+    private fun saveButtonLabel(): String =
+        if (existingBooking == null) "Save booking" else "Save changes"
     private fun showBookingMenu() {
         PopupMenu(context, bookingMenuButton).apply {
             val booking = existingBooking

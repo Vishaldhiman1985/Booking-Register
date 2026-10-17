@@ -71,6 +71,9 @@ import com.example.bookingregister.data.sync.SyncFailureCode
 import com.example.bookingregister.data.sync.SyncWorkScheduler
 import com.example.bookingregister.data.sync.SyncAcknowledgementPolicy
 import com.example.bookingregister.data.sync.BookingOrphanReconciliationPolicy
+import com.example.bookingregister.data.sync.BookingFinancialLineOrphanReconciliationPolicy
+import com.example.bookingregister.data.sync.BookingRoomPlanOrphanReconciliationPolicy
+import com.example.bookingregister.data.sync.BookingSyncCoordinator
 import com.example.bookingregister.data.sync.shouldAcceptRemotePaymentEntity
 import com.example.bookingregister.data.withCalculatedPayment
 import com.example.bookingregister.tax.domain.FoodGstCalculator
@@ -81,7 +84,7 @@ import com.example.bookingregister.source.domain.SourceSettlementCalculator
 import com.example.bookingregister.source.domain.SourceSyncFailureDisposition
 import com.example.bookingregister.source.domain.SourceSyncFailurePolicy
 import com.example.bookingregister.booking.domain.BookingRoomNightAvailabilityPolicy
-
+import com.example.bookingregister.data.sync.BookingAckDispositionPolicy
 
 class BookingRepository(
     context: Context,
@@ -93,6 +96,12 @@ class BookingRepository(
         private const val ROOM_CONFLICT_OUTCOME = "REJECTED_ROOM_CONFLICT"
         private const val ROOM_CONFLICT_REQUIRES_ACTION =
             "Room is already occupied for these dates. Please select another room or delete this booking."
+        private const val ACKNOWLEDGED_VERSION_MISMATCH_MESSAGE =
+            "Cloud acknowledged an earlier aggregate version, but the current local version differs and no later upload instruction exists. Local data was preserved for reconciliation."
+        private const val ORPHANED_ROOM_PLAN_INTENT_MESSAGE =
+            "Room-plan sync intent is missing. Local assignment data was preserved and will only reconcile with an identical cloud assignment."
+        private const val ORPHANED_FINANCIAL_LINE_INTENT_MESSAGE =
+            "Booking-charge sync intent is missing. Local financial data was preserved and will only reconcile with an identical cloud line."
     }
     private val appContext = context.applicationContext
     init {
@@ -191,6 +200,9 @@ class BookingRepository(
 
     fun observeUnsyncedFinancialLines(): LiveData<List<BookingFinancialLineEntity>> =
         bookingFinancialLineDao.observeUnsyncedLines(hotelRemoteId)
+
+    fun observeUnsyncedRoomPlanAssignments(): LiveData<List<BookingRoomNightAssignmentEntity>> =
+        bookingRoomNightAssignmentDao.observeUnsynced(hotelRemoteId)
 
     fun observeUnsyncedAccountingCharges(): LiveData<List<BookingAccountingChargeEntity>> =
         bookingAccountingChargeDao.observeUnsyncedCharges(hotelRemoteId)
@@ -1641,13 +1653,27 @@ class BookingRepository(
                 ?: roomDao.getByRemoteId(line.roomRemoteId)
                     ?.propertyRemoteId
                     ?.takeIf { it.isNotBlank() }
-            line.copy(
+            val normalizedLine = line.copy(
                 localId = existing?.localId ?: line.localId,
                 hotelRemoteId = hotelRemoteId,
                 bookingRemoteId = booking.remoteId,
                 propertyRemoteId = propertyRemoteId,
+                isDeleted = false
+            )
+
+            if (
+                existing != null &&
+                BookingFinancialLineOrphanReconciliationPolicy.hasSameAccountingContent(
+                    existing,
+                    normalizedLine
+                )
+            ) {
+                // A booking or date-wise room-plan save must not manufacture
+                // financial work when every accounting value is unchanged.
+                existing
+            } else {
+                normalizedLine.copy(
                 updatedAt = now,
-                isDeleted = false,
                 syncState = SyncState.PENDING,
                 lastSyncError = null,
                 lastSyncedAt = existing?.lastSyncedAt,
@@ -1655,7 +1681,8 @@ class BookingRepository(
                 baseRevision = existing?.baseRevision?.takeIf { it > 0 }
                     ?: existing?.revision
                     ?: line.baseRevision
-            )
+                )
+            }
         }
         return deletedLines + normalizedLines
     }
@@ -2519,6 +2546,12 @@ class BookingRepository(
         bookingDao.upsertAll(repairedBookings)
     }
     suspend fun retryFailedSync(force: Boolean = false) {
+        BookingSyncCoordinator.withHotelLock(hotelRemoteId) {
+            retryFailedSyncUnderHotelLock(force)
+        }
+    }
+
+    private suspend fun retryFailedSyncUnderHotelLock(force: Boolean) {
         val now = System.currentTimeMillis()
         if (!force && now - lastRetryAttemptAt < RETRY_THROTTLE_MILLIS) return
         if (retryInProgress) return
@@ -2567,6 +2600,52 @@ class BookingRepository(
 
             val bookingIntentIds = bookingOperations
                 .mapTo(mutableSetOf()) { it.bookingRemoteId }
+            val bookingIdsWithFinancialIntent = bookingOperations
+                .filter { operation ->
+                    BookingAckDispositionPolicy.operationCoversFinancialLines(
+                        operation.changeSetJson
+                    )
+                }
+                .mapTo(mutableSetOf()) { it.bookingRemoteId }
+
+            bookingFinancialLineDao.getUnsyncedLines(hotelRemoteId)
+                .filter { line ->
+                    line.syncState == SyncState.PENDING &&
+                        line.bookingRemoteId !in bookingIdsWithFinancialIntent
+                }
+                .forEach { orphaned ->
+                    bookingFinancialLineDao.upsert(
+                        orphaned.copy(
+                            syncState = SyncState.FAILED,
+                            lastSyncError = syncFailureText(
+                                StructuredSyncException(
+                                    SyncFailureCode.ORPHANED_BOOKING_INTENT,
+                                    ORPHANED_FINANCIAL_LINE_INTENT_MESSAGE
+                                )
+                            )
+                        )
+                    )
+                }
+
+            bookingRoomNightAssignmentDao.getUnsynced(hotelRemoteId)
+                .filter { assignment ->
+                    assignment.syncState == SyncState.PENDING &&
+                        assignment.bookingRemoteId !in bookingIntentIds
+                }
+                .forEach { orphaned ->
+                    bookingRoomNightAssignmentDao.upsert(
+                        orphaned.copy(
+                            syncState = SyncState.FAILED,
+                            lastSyncError = syncFailureText(
+                                StructuredSyncException(
+                                    SyncFailureCode.ORPHANED_BOOKING_INTENT,
+                                    ORPHANED_ROOM_PLAN_INTENT_MESSAGE
+                                )
+                            )
+                        )
+                    )
+                }
+
             bookingDao.getUnsyncedBookings(hotelRemoteId)
                 .filter { it.syncState == SyncState.PENDING && it.remoteId !in bookingIntentIds }
                 .forEach { orphaned ->
@@ -3114,11 +3193,35 @@ class BookingRepository(
         result: BookingAggregateWriteResult
     ) {
         db.withTransaction {
-            bookingSyncOutboxDao.delete(operation.operationId)
-            val hasLaterOperation = bookingSyncOutboxDao.countPendingForBooking(
-                hotelRemoteId = operation.hotelRemoteId,
-                bookingRemoteId = operation.bookingRemoteId
-            ) > 0
+            val operationWasRemoved =
+                bookingSyncOutboxDao.delete(operation.operationId) > 0
+
+            // A competing processor may already have committed this exact
+            // acknowledgement. Its aggregate updates and outbox deletion are one
+            // Room transaction, so a missing row means there is nothing left for
+            // this callback to acknowledge locally.
+            if (
+                BookingAckDispositionPolicy.operationDisposition(operationWasRemoved) ==
+                BookingAckDispositionPolicy.OperationDisposition.IGNORE_ALREADY_ACKNOWLEDGED
+            ) {
+                return@withTransaction
+            }
+
+            val laterOperations = bookingSyncOutboxDao.getPending(operation.hotelRemoteId)
+                .filter { pending ->
+                    pending.bookingRemoteId == operation.bookingRemoteId
+                }
+            val hasLaterOperation = laterOperations.isNotEmpty()
+            val hasLaterFinancialLineOperation = laterOperations.any { pending ->
+                BookingAckDispositionPolicy.operationCoversFinancialLines(
+                    pending.changeSetJson
+                )
+            }
+            val hasLaterRoomPlanOperation = laterOperations.any { pending ->
+                BookingAckDispositionPolicy.operationCoversRoomPlan(
+                    pending.changeSetJson
+                )
+            }
             val currentBooking = bookingDao.getByRemoteId(sentBooking.remoteId)
             if (currentBooking != null) {
                 val unchanged = SyncAcknowledgementPolicy.isSameVersion(
@@ -3129,19 +3232,39 @@ class BookingRepository(
                     revision = maxOf(currentBooking.revision, result.bookingRevision),
                     updatedByUid = result.updatedByUid
                 )
+
+                val disposition = BookingAckDispositionPolicy.decide(
+                    sentVersionIsCurrent = unchanged,
+                    hasLaterOperation = hasLaterOperation
+                )
+
+                val acknowledgedBooking = currentBooking.copy(
+                    revision = writeResult.revision,
+                    baseRevision = writeResult.revision,
+                    updatedByUid = writeResult.updatedByUid
+                )
+
                 bookingDao.upsert(
-                    if (SyncAcknowledgementPolicy.canMarkAggregateSynced(unchanged, hasLaterOperation)) {
-                        currentBooking.markSynced(writeResult)
-                    } else {
-                        currentBooking.copy(
-                            revision = writeResult.revision,
-                            baseRevision = writeResult.revision,
-                            syncState = SyncState.PENDING,
-                            lastSyncError = null,
-                            updatedByUid = writeResult.updatedByUid
-                        )
+                    when (disposition) {
+                        BookingAckDispositionPolicy.Disposition.SYNCED ->
+                            currentBooking.markSynced(writeResult)
+
+                        BookingAckDispositionPolicy.Disposition.PENDING_WITH_OUTBOX ->
+                            acknowledgedBooking.copy(
+                                syncState = SyncState.PENDING,
+                                lastSyncError = null
+                            )
+
+                        BookingAckDispositionPolicy.Disposition.RECONCILIATION_REQUIRED ->
+                            acknowledgedBooking.markFailed(
+                                StructuredSyncException(
+                                    SyncFailureCode.ORPHANED_BOOKING_INTENT,
+                                    ACKNOWLEDGED_VERSION_MISMATCH_MESSAGE
+                                )
+                            )
                     }
                 )
+
             }
             sentLines.forEach { sentLine ->
                 val revision = result.financialLineRevisions[sentLine.remoteId] ?: return@forEach
@@ -3150,16 +3273,34 @@ class BookingRepository(
                     sentLine.updatedAt, sentLine.revision, sentLine.baseRevision,
                     currentLine.updatedAt, currentLine.revision, currentLine.baseRevision
                 )
+                val disposition = BookingAckDispositionPolicy.decideChildRow(
+                    sentVersionIsCurrent = unchanged,
+                    hasLaterCoveringOperation = hasLaterFinancialLineOperation
+                )
+                val acknowledgedLineRevision = maxOf(currentLine.revision, revision)
+                val acknowledgedLine = currentLine.copy(
+                    revision = acknowledgedLineRevision,
+                    baseRevision = acknowledgedLineRevision,
+                    updatedByUid = result.updatedByUid
+                )
                 bookingFinancialLineDao.upsert(
-                    if (unchanged) {
-                        currentLine.markSynced(CloudWriteResult(revision, result.updatedByUid))
-                    } else {
-                        currentLine.copy(
-                            revision = revision,
-                            baseRevision = revision,
-                            syncState = SyncState.PENDING,
-                            lastSyncError = null
-                        )
+                    when (disposition) {
+                        BookingAckDispositionPolicy.Disposition.SYNCED ->
+                            currentLine.markSynced(
+                                CloudWriteResult(revision, result.updatedByUid)
+                            )
+
+                        BookingAckDispositionPolicy.Disposition.PENDING_WITH_OUTBOX ->
+                            acknowledgedLine.copy(
+                                syncState = SyncState.PENDING,
+                                lastSyncError = null
+                            )
+
+                        BookingAckDispositionPolicy.Disposition.RECONCILIATION_REQUIRED ->
+                            acknowledgedLine.copy(
+                                syncState = SyncState.FAILED,
+                                lastSyncError = ACKNOWLEDGED_VERSION_MISMATCH_MESSAGE
+                            )
                     }
                 )
             }
@@ -3185,27 +3326,38 @@ class BookingRepository(
                             currentAssignment.baseRevision
                         )
 
+                val disposition = BookingAckDispositionPolicy.decideChildRow(
+                    sentVersionIsCurrent = unchanged,
+                    hasLaterCoveringOperation = hasLaterRoomPlanOperation
+                )
+                val acknowledgedAssignmentRevision =
+                    maxOf(currentAssignment.revision, revision)
+                val acknowledgedAssignment = currentAssignment.copy(
+                    revision = acknowledgedAssignmentRevision,
+                    baseRevision = acknowledgedAssignmentRevision,
+                    updatedByUid = result.updatedByUid
+                )
                 bookingRoomNightAssignmentDao.upsert(
-                    if (
-                        SyncAcknowledgementPolicy.canMarkAggregateSynced(
-                            sentVersionIsCurrent = unchanged,
-                            hasLaterOperation = hasLaterOperation
-                        )
-                    ) {
-                        currentAssignment.markSynced(
-                            CloudWriteResult(
-                                revision = revision,
-                                updatedByUid = result.updatedByUid
+                    when (disposition) {
+                        BookingAckDispositionPolicy.Disposition.SYNCED ->
+                            currentAssignment.markSynced(
+                                CloudWriteResult(
+                                    revision = revision,
+                                    updatedByUid = result.updatedByUid
+                                )
                             )
-                        )
-                    } else {
-                        currentAssignment.copy(
-                            revision = revision,
-                            baseRevision = revision,
-                            syncState = SyncState.PENDING,
-                            lastSyncError = null,
-                            updatedByUid = result.updatedByUid
-                        )
+
+                        BookingAckDispositionPolicy.Disposition.PENDING_WITH_OUTBOX ->
+                            acknowledgedAssignment.copy(
+                                syncState = SyncState.PENDING,
+                                lastSyncError = null
+                            )
+
+                        BookingAckDispositionPolicy.Disposition.RECONCILIATION_REQUIRED ->
+                            acknowledgedAssignment.copy(
+                                syncState = SyncState.FAILED,
+                                lastSyncError = ACKNOWLEDGED_VERSION_MISMATCH_MESSAGE
+                            )
                     }
                 )
             }
@@ -3214,7 +3366,15 @@ class BookingRepository(
 
     private suspend fun acknowledgeEmptyBookingOperation(operation: BookingSyncOutboxEntity) {
         db.withTransaction {
-            bookingSyncOutboxDao.delete(operation.operationId)
+            val operationWasRemoved =
+                bookingSyncOutboxDao.delete(operation.operationId) > 0
+            if (
+                BookingAckDispositionPolicy.operationDisposition(operationWasRemoved) ==
+                BookingAckDispositionPolicy.OperationDisposition.IGNORE_ALREADY_ACKNOWLEDGED
+            ) {
+                return@withTransaction
+            }
+
             val hasLaterOperation = bookingSyncOutboxDao.countPendingForBooking(
                 hotelRemoteId = operation.hotelRemoteId,
                 bookingRemoteId = operation.bookingRemoteId
@@ -3368,7 +3528,32 @@ class BookingRepository(
 
     private suspend fun upsertRemoteFinancialLineIfNewer(remote: BookingFinancialLineEntity) {
         val local = bookingFinancialLineDao.getByRemoteId(remote.remoteId)
-        if (local == null || remote.revision >= local.revision) {
+        val hasPendingFinancialIntent = local != null &&
+            bookingSyncOutboxDao.getPending(hotelRemoteId)
+                .asSequence()
+                .filter { operation ->
+                    operation.bookingRemoteId == remote.bookingRemoteId
+                }
+                .any { operation ->
+                    BookingAckDispositionPolicy.operationCoversFinancialLines(
+                        operation.changeSetJson
+                    )
+                }
+        val resolvesMatchingOrphan = local != null &&
+            BookingFinancialLineOrphanReconciliationPolicy.canAcceptMatchingCloudLine(
+                local = local,
+                cloud = remote,
+                hasPendingFinancialIntent = hasPendingFinancialIntent
+            )
+
+        if (
+            local == null ||
+            resolvesMatchingOrphan ||
+            (
+                local.syncState == SyncState.SYNCED &&
+                    remote.revision >= local.revision
+            )
+        ) {
             db.withTransaction {
                 val sameRoomNight = bookingFinancialLineDao.getByRoomNight(
                     hotelRemoteId = remote.hotelRemoteId,
@@ -3395,9 +3580,21 @@ class BookingRepository(
             bookingRoomNightAssignmentDao.getByRemoteId(
                 remote.remoteId
             )
+        val hasPendingIntent = local != null &&
+            bookingSyncOutboxDao.countPendingForBooking(
+                hotelRemoteId = hotelRemoteId,
+                bookingRemoteId = remote.bookingRemoteId
+            ) > 0
+        val resolvesMatchingOrphan = local != null &&
+            BookingRoomPlanOrphanReconciliationPolicy.canAcceptMatchingCloudAssignment(
+                local = local,
+                cloud = remote,
+                hasPendingIntent = hasPendingIntent
+            )
 
         if (
             local == null ||
+            resolvesMatchingOrphan ||
             shouldAcceptRemote(
                 local = local,
                 remoteRevision = remote.revision,

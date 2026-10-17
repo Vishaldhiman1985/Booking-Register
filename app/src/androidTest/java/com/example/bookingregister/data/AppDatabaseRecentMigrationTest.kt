@@ -19,7 +19,7 @@ class AppDatabaseRecentMigrationTest {
     )
 
     @Test
-    fun version35MigratesTo41WithoutDataDestruction() {
+    fun version35MigratesTo42WithoutDataDestruction() {
         migrateEmptyDatabaseFrom(35)
     }
 
@@ -38,7 +38,7 @@ class AppDatabaseRecentMigrationTest {
             close()
         }
 
-        helper.runMigrationsAndValidate(name, 41, true, *AppDatabase.allMigrations()).use { db ->
+        helper.runMigrationsAndValidate(name, 42, true, *AppDatabase.allMigrations()).use { db ->
             db.query(
                 "SELECT operationId, changeSetJson, attemptCount, lastError FROM booking_sync_outbox"
             ).use { cursor ->
@@ -60,7 +60,7 @@ class AppDatabaseRecentMigrationTest {
             close()
         }
 
-        helper.runMigrationsAndValidate(name, 41, true, *AppDatabase.allMigrations()).use { db ->
+        helper.runMigrationsAndValidate(name, 42, true, *AppDatabase.allMigrations()).use { db ->
             db.query(
                 """
                 SELECT remoteId FROM booking_financial_lines
@@ -82,7 +82,7 @@ class AppDatabaseRecentMigrationTest {
     }
 
     @Test
-    fun version38MigratesTo41WithoutDataDestruction() {
+    fun version38MigratesTo42WithoutDataDestruction() {
         migrateEmptyDatabaseFrom(38)
     }
 
@@ -99,7 +99,7 @@ class AppDatabaseRecentMigrationTest {
             close()
         }
 
-        helper.runMigrationsAndValidate(name, 41, true, *AppDatabase.allMigrations()).use { db ->
+        helper.runMigrationsAndValidate(name, 42, true, *AppDatabase.allMigrations()).use { db ->
             val statuses = mutableMapOf<String, Pair<String, Double>>()
             db.query(
                 """
@@ -119,10 +119,40 @@ class AppDatabaseRecentMigrationTest {
         }
     }
 
+    @Test
+    fun version41AddsChartWindowIndexWithoutChangingBookings() {
+        val name = databaseName("v41_chart_index")
+        helper.createDatabase(name, 41).apply {
+            insertBooking("preserved", "RESERVED", "DIRECT")
+            close()
+        }
+
+        helper.runMigrationsAndValidate(name, 42, true, *AppDatabase.allMigrations()).use { db ->
+            db.query("SELECT guestName FROM bookings WHERE remoteId = 'preserved'").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("Guest preserved", cursor.getString(0))
+            }
+
+            var indexFound = false
+            db.query("PRAGMA index_list(`bookings`)").use { cursor ->
+                val nameColumn = cursor.getColumnIndexOrThrow("name")
+                while (cursor.moveToNext()) {
+                    if (
+                        cursor.getString(nameColumn) ==
+                        "index_bookings_hotelRemoteId_isDeleted_checkInMillis_checkOutMillis"
+                    ) {
+                        indexFound = true
+                    }
+                }
+            }
+            assertTrue(indexFound)
+        }
+    }
+
     private fun migrateEmptyDatabaseFrom(version: Int) {
         val name = databaseName("v$version")
         helper.createDatabase(name, version).close()
-        helper.runMigrationsAndValidate(name, 41, true, *AppDatabase.allMigrations()).close()
+        helper.runMigrationsAndValidate(name, 42, true, *AppDatabase.allMigrations()).close()
     }
 
     private fun SupportSQLiteDatabase.insertFinancialLine(

@@ -14,6 +14,7 @@ import com.example.bookingregister.booking.domain.CancellationSettlementStatus
         Index(value = ["bookingUuid"], unique = true),
         Index(value = ["hotelRemoteId"]),
         Index(value = ["hotelRemoteId", "bookingStatus"]),
+        Index(value = ["hotelRemoteId", "isDeleted", "checkInMillis", "checkOutMillis"]),
         Index(value = ["propertyRemoteId"])
     ]
 )

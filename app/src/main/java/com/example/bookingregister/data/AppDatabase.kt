@@ -68,7 +68,7 @@ import com.example.bookingregister.data.entities.RoomGstSlabEntity
         RoomGstSlabEntity::class,
         BookingSyncOutboxEntity::class,
     ],
-    version = 41,
+    version = 42,
     exportSchema = true
 )
 @TypeConverters(AppConverters::class)
@@ -555,6 +555,14 @@ abstract class AppDatabase : RoomDatabase() {
                 )
             }
         }
+        private val MIGRATION_41_42 = object : Migration(41, 42) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_bookings_hotelRemoteId_isDeleted_checkInMillis_checkOutMillis " +
+                        "ON bookings(hotelRemoteId, isDeleted, checkInMillis, checkOutMillis)"
+                )
+            }
+        }
         fun allMigrations(): Array<Migration> = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -595,7 +603,8 @@ abstract class AppDatabase : RoomDatabase() {
             MIGRATION_37_38,
             MIGRATION_38_39,
             MIGRATION_39_40,
-            MIGRATION_40_41
+            MIGRATION_40_41,
+            MIGRATION_41_42
         )
 
         /**

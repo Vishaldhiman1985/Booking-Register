@@ -22,7 +22,6 @@ import com.example.bookingregister.data.repository.PaymentStatus
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.BookingSourceType
 import com.example.bookingregister.data.entities.RoomEntity
-import com.example.bookingregister.room.domain.RoomLifecyclePolicy
 import com.example.bookingregister.room.domain.RoomLifecycleStatus
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -51,9 +50,15 @@ class BookingChartView @JvmOverloads constructor(
         data class Room(val room: RoomEntity) : ChartRow()
     }
 
+    private data class VisibleBookingSpan(
+        val booking: BookingEntity,
+        val span: BookingRoomChartSpan
+    )
+
     private var rooms: List<RoomEntity> = emptyList()
     private var bookings: List<BookingEntity> = emptyList()
     private var roomSpansByBookingRemoteId: Map<String, List<BookingRoomChartSpan>> = emptyMap()
+    private var bookingSpansInViewport: List<VisibleBookingSpan> = emptyList()
     private var chartRows: List<ChartRow> = emptyList()
     private var listener: Listener? = null
 
@@ -537,10 +542,7 @@ class BookingChartView @JvmOverloads constructor(
         val startVisibleRow = max(0, (verticalScroll / rowHeight).toInt())
         val endVisibleRow = min(chartRows.lastIndex, startVisibleRow + ceil((height - headerHeight) / rowHeight).toInt() + 2)
 
-        for (booking in bookings) {
-            val spans = roomSpansByBookingRemoteId[booking.remoteId].orEmpty()
-
-            for (span in spans) {
+        for ((booking, span) in bookingSpansInViewport) {
                 val startMillis = startOfDay(span.startDateMillis)
                 val endMillis = startOfDay(span.endDateMillis)
                 val startColumn = getColumnIndexForDate(startMillis)
@@ -576,7 +578,6 @@ class BookingChartView @JvmOverloads constructor(
                 )
                 drawBookingText(canvas, booking, clippedLeft, clippedRight, top, bottom)
                 drawBookingStatusIcon(canvas, booking, clippedLeft, clippedRight, top)
-            }
         }
 
         canvas.restoreToCount(saveCount)
@@ -712,15 +713,14 @@ class BookingChartView @JvmOverloads constructor(
             }
             .toMap()
 
-        for (booking in bookings.reversed()) {
-            val matchingSpan = roomSpansByBookingRemoteId[booking.remoteId]
-                .orEmpty()
-                .firstOrNull { span ->
-                    span.roomRemoteId == roomRemoteId &&
-                        normalizedTappedMillis >= startOfDay(span.startDateMillis) &&
-                        normalizedTappedMillis < startOfDay(span.endDateMillis)
-                }
-                ?: continue
+        for ((booking, matchingSpan) in bookingSpansInViewport.asReversed()) {
+            if (
+                matchingSpan.roomRemoteId != roomRemoteId ||
+                normalizedTappedMillis < startOfDay(matchingSpan.startDateMillis) ||
+                normalizedTappedMillis >= startOfDay(matchingSpan.endDateMillis)
+            ) {
+                continue
+            }
 
             val rowIndex = roomIndexMap[roomRemoteId] ?: continue
             val startMillis = startOfDay(matchingSpan.startDateMillis)
@@ -786,33 +786,36 @@ class BookingChartView @JvmOverloads constructor(
                         span.startDateMillis < windowEnd &&
                             span.endDateMillis > windowStart
                     }
-                    .map { span -> booking to span }
+                    .map { span -> VisibleBookingSpan(booking, span) }
             }
             .toList()
 
+        bookingSpansInViewport = effectiveSpansInWindow
+
         val effectiveRoomIdsInWindow = effectiveSpansInWindow
-            .mapTo(mutableSetOf()) { (_, span) -> span.roomRemoteId }
+            .mapTo(mutableSetOf()) { it.span.roomRemoteId }
 
         val visibleRooms = rooms.filter { room ->
-            RoomLifecyclePolicy.isVisibleInChartWindow(
-                room = room,
-                bookings = bookings,
-                windowStartMillis = windowStart,
-                windowEndMillis = windowEnd,
-                nowMillis = now
-            ) || (
-                windowEnd <= now &&
-                    room.remoteId in effectiveRoomIdsInWindow
-                )
+            !room.isDeleted &&
+                (
+                    RoomLifecycleStatus.normalize(room.lifecycleStatus) !=
+                        RoomLifecycleStatus.RETIRED ||
+                        (
+                            windowEnd <= now &&
+                                room.remoteId in effectiveRoomIdsInWindow
+                            )
+                    )
         }.toMutableList()
 
         val knownRoomIds = rooms.mapTo(mutableSetOf()) { it.remoteId }
 
         effectiveSpansInWindow
             .asSequence()
-            .filter { (_, span) -> span.roomRemoteId !in knownRoomIds }
-            .distinctBy { (_, span) -> span.roomRemoteId }
-            .map { (booking, span) ->
+            .filter { it.span.roomRemoteId !in knownRoomIds }
+            .distinctBy { it.span.roomRemoteId }
+            .map { visibleSpan ->
+                val booking = visibleSpan.booking
+                val span = visibleSpan.span
                 RoomEntity(
                     remoteId = span.roomRemoteId,
                     hotelRemoteId = booking.hotelRemoteId,

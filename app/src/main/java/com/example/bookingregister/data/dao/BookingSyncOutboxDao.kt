@@ -15,7 +15,7 @@ interface BookingSyncOutboxDao {
     suspend fun upsert(operation: BookingSyncOutboxEntity)
 
     @Query("DELETE FROM booking_sync_outbox WHERE operationId = :operationId")
-    suspend fun delete(operationId: String)
+    suspend fun delete(operationId: String): Int
 
     @Query("DELETE FROM booking_sync_outbox WHERE hotelRemoteId = :hotelRemoteId AND bookingRemoteId = :bookingRemoteId")
     suspend fun deleteForBooking(hotelRemoteId: String, bookingRemoteId: String)
