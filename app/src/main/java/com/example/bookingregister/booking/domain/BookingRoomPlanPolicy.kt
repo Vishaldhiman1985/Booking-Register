@@ -256,6 +256,45 @@ object BookingRoomPlanPolicy {
         return result
     }
 
+    /**
+     * Returns the single room set used on every planned night, or null when the
+     * room set varies by date. An empty plan has no uniform room selection.
+     *
+     * This is deliberately presentation/editing policy only. It does not alter
+     * booking financial attribution or the persisted nightly assignments.
+     */
+    fun uniformRoomRemoteIdsOrNull(
+        assignments: List<BookingRoomNightAssignment>
+    ): List<String>? {
+        val nightlyRoomSets = normalizedNightlyRoomSets(assignments)
+        if (nightlyRoomSets.isEmpty()) return null
+
+        val firstNight = nightlyRoomSets.first().second
+        return if (nightlyRoomSets.all { (_, roomIds) -> roomIds == firstNight }) {
+            firstNight.toList().sorted()
+        } else {
+            null
+        }
+    }
+
+    fun variesByDate(assignments: List<BookingRoomNightAssignment>): Boolean {
+        val nightlyRoomSets = normalizedNightlyRoomSets(assignments)
+        return nightlyRoomSets.size > 1 &&
+            nightlyRoomSets.drop(1).any { (_, roomIds) -> roomIds != nightlyRoomSets.first().second }
+    }
+
+    fun allRoomRemoteIds(assignments: List<BookingRoomNightAssignment>): List<String> =
+        assignments
+            .asSequence()
+            .sortedWith(
+                compareBy<BookingRoomNightAssignment> { it.businessDateMillis }
+                    .thenBy { it.roomRemoteId }
+            )
+            .map { it.roomRemoteId.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .toList()
+
     fun stayDates(
         checkInMillis: Long,
         checkOutMillis: Long
@@ -274,4 +313,19 @@ object BookingRoomPlanPolicy {
 
     private fun propertyKey(propertyRemoteId: String?): String =
         cleanPropertyId(propertyRemoteId) ?: MAIN_PROPERTY_KEY
+
+    private fun normalizedNightlyRoomSets(
+        assignments: List<BookingRoomNightAssignment>
+    ): List<Pair<Long, Set<String>>> = assignments
+        .asSequence()
+        .filter { it.roomRemoteId.isNotBlank() }
+        .groupBy { it.businessDateMillis }
+        .toSortedMap()
+        .map { (dateMillis, nightlyAssignments) ->
+            dateMillis to nightlyAssignments
+                .map { it.roomRemoteId.trim() }
+                .filter { it.isNotBlank() }
+                .toSet()
+        }
+        .filter { (_, roomIds) -> roomIds.isNotEmpty() }
 }

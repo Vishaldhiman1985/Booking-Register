@@ -1853,8 +1853,6 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                         onResult(null)
                     }
                 }
-            },            onRoomPlanRequested = { booking ->
-                showRoomPlanDialog(booking)
             },
             onBookingSaved = { booking, lines, roomPlan, onResult ->
                 lifecycleScope.launch {

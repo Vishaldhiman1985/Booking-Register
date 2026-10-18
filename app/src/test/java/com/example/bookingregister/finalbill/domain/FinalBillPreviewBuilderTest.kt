@@ -1,5 +1,7 @@
 ﻿package com.example.bookingregister.finalbill.domain
 
+import com.example.bookingregister.booking.domain.BookingRoomNightAssignment
+import com.example.bookingregister.booking.domain.BookingRoomPlanResolver
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.BookingAccountingChargeEntity
 import com.example.bookingregister.data.entities.BookingAccountingChargeType
@@ -145,6 +147,44 @@ class FinalBillPreviewBuilderTest {
         assertEquals(240.0, preview.foodBalance, 0.01)
         assertEquals(4_740.0, preview.totalCharges, 0.01)
         assertEquals(4_740.0, preview.folioBalance, 0.01)
+    }
+
+    @Test
+    fun dateWisePlanShowsEveryOccupiedRoomWithoutChangingFinancialTotals() {
+        val twoNightBooking = booking().copy(checkOutMillis = 2 * 86_400_000L)
+        val financialLines = authoritativeRoomLines(twoNightBooking)
+        val roomPlan = BookingRoomPlanResolver.resolve(
+            checkInMillis = twoNightBooking.checkInMillis,
+            checkOutMillis = twoNightBooking.checkOutMillis,
+            legacyRoomRemoteIds = twoNightBooking.roomRemoteIds,
+            legacyPropertyRemoteId = twoNightBooking.propertyRemoteId,
+            explicitAssignments = listOf(
+                BookingRoomNightAssignment(0L, "room_1", null),
+                BookingRoomNightAssignment(0L, "room_2", null),
+                BookingRoomNightAssignment(86_400_000L, "room_1", null)
+            )
+        )
+
+        val preview = builder.build(
+            booking = twoNightBooking,
+            rooms = listOf(
+                room(),
+                RoomEntity(
+                    remoteId = "room_2",
+                    hotelRemoteId = "hotel_1",
+                    roomName = "M102"
+                )
+            ),
+            bookingPayments = emptyList(),
+            bookingFinancialLines = financialLines,
+            foodOrders = emptyList(),
+            foodOrderItems = emptyList(),
+            roomPlan = roomPlan
+        )
+
+        assertEquals("M101, M102", preview.roomNames)
+        assertEquals(financialLines.sumOf { it.grossAmount }, preview.roomCharges, 0.01)
+        assertEquals(2, preview.roomItems.size)
     }
 
     private fun booking(

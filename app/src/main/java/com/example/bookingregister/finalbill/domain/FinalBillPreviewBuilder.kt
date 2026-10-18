@@ -2,6 +2,7 @@ package com.example.bookingregister.finalbill.domain
 
 import com.example.bookingregister.accounting.domain.RoomNightDescriptionPolicy
 import com.example.bookingregister.booking.domain.EffectiveBookingRoomPlan
+import com.example.bookingregister.booking.domain.BookingRoomPlanPolicy
 import com.example.bookingregister.data.entities.BookingEntity
 import com.example.bookingregister.data.entities.BookingAccountingChargeEntity
 import com.example.bookingregister.data.entities.BookingPaymentCategory
@@ -77,7 +78,12 @@ class FinalBillPreviewBuilder {
                 )
             }
 
-        val bookingRoomNames = booking.roomRemoteIds
+        val plannedRoomIds = roomPlan
+            ?.takeIf { it.isValid }
+            ?.assignments
+            ?.let(BookingRoomPlanPolicy::allRoomRemoteIds)
+            .orEmpty()
+        val bookingRoomNames = (plannedRoomIds.takeIf { it.isNotEmpty() } ?: booking.roomRemoteIds)
             .mapNotNull { roomNameById[it] }
             .joinToString(", ")
             .ifBlank { "Rooms not selected" }

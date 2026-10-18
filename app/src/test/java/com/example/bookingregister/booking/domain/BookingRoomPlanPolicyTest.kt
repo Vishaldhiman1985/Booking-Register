@@ -279,6 +279,59 @@ class BookingRoomPlanPolicyTest {
         assertFalse(reconciled.any { it.businessDateMillis == day3 })
     }
 
+    @Test
+    fun `same room set on every night remains a simple assignment`() {
+        val assignments = BookingRoomPlanPolicy.legacyAssignments(
+            checkInMillis = day1,
+            checkOutMillis = day4,
+            roomRemoteIds = listOf("402", "401"),
+            propertyRemoteId = "hotel-a"
+        )
+
+        assertEquals(
+            listOf("401", "402"),
+            BookingRoomPlanPolicy.uniformRoomRemoteIdsOrNull(assignments)
+        )
+        assertFalse(BookingRoomPlanPolicy.variesByDate(assignments))
+    }
+
+    @Test
+    fun `early room checkout is recognized as date wise planning`() {
+        val assignments = listOf(
+            BookingRoomNightAssignment(day1, "401", "hotel-a"),
+            BookingRoomNightAssignment(day1, "402", "hotel-a"),
+            BookingRoomNightAssignment(day1, "403", "hotel-a"),
+            BookingRoomNightAssignment(day2, "401", "hotel-a"),
+            BookingRoomNightAssignment(day2, "402", "hotel-a"),
+            BookingRoomNightAssignment(day2, "403", "hotel-a"),
+            BookingRoomNightAssignment(day3, "401", "hotel-a"),
+            BookingRoomNightAssignment(day3, "402", "hotel-a")
+        )
+
+        assertEquals(null, BookingRoomPlanPolicy.uniformRoomRemoteIdsOrNull(assignments))
+        assertTrue(BookingRoomPlanPolicy.variesByDate(assignments))
+        assertEquals(
+            listOf("401", "402", "403"),
+            BookingRoomPlanPolicy.allRoomRemoteIds(assignments)
+        )
+    }
+
+    @Test
+    fun `moving only one night is recognized as date wise planning`() {
+        val assignments = listOf(
+            BookingRoomNightAssignment(day1, "401", "hotel-a"),
+            BookingRoomNightAssignment(day2, "501", "hotel-a"),
+            BookingRoomNightAssignment(day3, "401", "hotel-a")
+        )
+
+        assertEquals(null, BookingRoomPlanPolicy.uniformRoomRemoteIdsOrNull(assignments))
+        assertTrue(BookingRoomPlanPolicy.variesByDate(assignments))
+        assertEquals(
+            listOf("401", "501"),
+            BookingRoomPlanPolicy.allRoomRemoteIds(assignments)
+        )
+    }
+
     companion object {
         private const val DAY_MILLIS = 24L * 60L * 60L * 1000L
     }

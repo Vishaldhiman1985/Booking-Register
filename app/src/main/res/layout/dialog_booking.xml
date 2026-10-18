@@ -10,7 +10,7 @@
     <LinearLayout
         android:id="@+id/bookingDialogHeader"
         android:layout_width="match_parent"
-        android:layout_height="54dp"
+        android:layout_height="64dp"
         android:background="#FFFFFF"
         android:gravity="center_vertical"
         android:orientation="horizontal"
@@ -52,10 +52,10 @@
             android:layout_weight="1"
             android:ellipsize="end"
             android:gravity="start|center_vertical"
-            android:maxLines="1"
+            android:maxLines="2"
             android:text="H101"
             android:textColor="#1976D2"
-            android:textSize="16sp"
+            android:textSize="14sp"
             android:textStyle="bold" />
 
         <TextView
@@ -388,6 +388,7 @@
                     android:focusable="true"
                     android:gravity="center_vertical"
                     android:orientation="horizontal"
+                    android:visibility="gone"
                     android:paddingStart="12dp"
                     android:paddingTop="10dp"
                     android:paddingEnd="12dp"

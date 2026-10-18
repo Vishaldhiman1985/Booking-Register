@@ -95,7 +95,6 @@ class BookingDialog(
     private val roomRateLocked: Boolean = false,
     private val initialRoomPlanAssignments: List<BookingRoomNightAssignment>? = null,
     private val onRoomNightAvailabilityRequested: (Long, (Set<String>?) -> Unit) -> Unit,
-    private val onRoomPlanRequested: (BookingEntity) -> Unit,
     private val onBookingSaved: (BookingEntity, List<BookingFinancialLineEntity>, List<BookingRoomNightAssignment>?, (SaveResult) -> Unit) -> Unit,
     private val onBookingDeleted: (BookingEntity, CancellationRequest, (SaveResult) -> Unit) -> Unit,
     private val onPaymentSaved: (BookingEntity, Double, String, String, String?, String?, (SaveResult) -> Unit) -> Unit,
@@ -419,44 +418,126 @@ class BookingDialog(
         selectedRoomsText.setOnClickListener { selectRoomsButton.performClick() }
         dialogTitle.setOnClickListener { selectRoomsButton.performClick() }
         selectRoomsButton.setOnClickListener {
-            val availableRooms = getAvailableRoomsForSelectedDates()
-            if (availableRooms.isEmpty()) {
-                Toast.makeText(context, "No rooms available for selected dates", Toast.LENGTH_LONG).show()
-                return@setOnClickListener
-            }
-            val roomNames = availableRooms.map { it.roomName }.toTypedArray()
-            val checkedItems = BooleanArray(availableRooms.size) { index -> selectedRoomIds.contains(availableRooms[index].remoteId) }
-            AlertDialog.Builder(context)
-                .setTitle("Select Available Rooms")
-                .setMultiChoiceItems(roomNames, checkedItems) { dialog, which, isChecked ->
-                    val selectedRoom = availableRooms[which]
-                    val selectedId = selectedRoom.remoteId
-                    if (isChecked) {
-                        val selectedProperties = rooms
-                            .filter { selectedRoomIds.contains(it.remoteId) }
-                            .map { it.propertyRemoteId } + selectedRoom.propertyRemoteId
-                        if (!BookingPropertyPolicy.belongsToSingleProperty(selectedProperties)) {
-                            (dialog as? AlertDialog)?.listView?.setItemChecked(which, false)
-                            Toast.makeText(
-                                context,
-                                "Rooms from different properties require separate bookings.",
-                                Toast.LENGTH_LONG
-                            ).show()
-                        } else if (!selectedRoomIds.contains(selectedId)) {
-                            selectedRoomIds.add(selectedId)
-                        }
-                    } else {
-                        selectedRoomIds.remove(selectedId)
-                    }
-                }
-                .setPositiveButton("OK") { _, _ ->
-                    updateSelectedRoomsText()
-                    refreshBalanceForCurrentStatus()
-                    refreshSourceMode()
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
+            showRoomAssignmentOptions()
         }
+    }
+
+    private fun showRoomAssignmentOptions() {
+        val planVaries = draftRoomPlanAssignments
+            ?.let(BookingRoomPlanPolicy::variesByDate)
+            ?: false
+
+        val simpleRoomNames = rooms
+            .filter { simpleRoomIdsForPicker().contains(it.remoteId) }
+            .joinToString(", ") { it.roomName }
+            .ifBlank { "Select rooms" }
+
+        val options = arrayOf(
+            "Same rooms for the complete stay\n$simpleRoomNames",
+            if (planVaries) {
+                "Different rooms or room counts by date\nDate-wise plan active"
+            } else {
+                "Different rooms or room counts by date\nUse only when one or more nights differ"
+            }
+        )
+
+        AlertDialog.Builder(context)
+            .setTitle("Rooms for this booking")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> showSimpleRoomPicker()
+                    1 -> showRoomPlanPlannerDialog()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showSimpleRoomPicker() {
+        val availableRooms = getAvailableRoomsForSelectedDates()
+        if (availableRooms.isEmpty()) {
+            Toast.makeText(context, "No rooms available for selected dates", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val selectedIds = simpleRoomIdsForPicker().toMutableSet()
+        val roomNames = availableRooms.map { it.roomName }.toTypedArray()
+        val checkedItems = BooleanArray(availableRooms.size) { index ->
+            selectedIds.contains(availableRooms[index].remoteId)
+        }
+
+        AlertDialog.Builder(context)
+            .setTitle(
+                if (draftRoomPlanAssignments?.let(BookingRoomPlanPolicy::variesByDate) == true) {
+                    "Replace plan with the same rooms every night?"
+                } else {
+                    "Same rooms for the complete stay"
+                }
+            )
+            .setMultiChoiceItems(roomNames, checkedItems) { picker, which, isChecked ->
+                val room = availableRooms[which]
+                if (isChecked) {
+                    val selectedProperties = availableRooms
+                        .filter { selectedIds.contains(it.remoteId) }
+                        .map { it.propertyRemoteId } + room.propertyRemoteId
+                    if (!BookingPropertyPolicy.belongsToSingleProperty(selectedProperties)) {
+                        (picker as? AlertDialog)?.listView?.setItemChecked(which, false)
+                        Toast.makeText(
+                            context,
+                            "Rooms from different properties require separate bookings.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    } else {
+                        selectedIds.add(room.remoteId)
+                    }
+                } else {
+                    selectedIds.remove(room.remoteId)
+                }
+            }
+            .setPositiveButton("Apply") { _, _ ->
+                if (selectedIds.isEmpty()) {
+                    Toast.makeText(context, "Select at least one room.", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+
+                selectedRoomIds.clear()
+                selectedRoomIds.addAll(
+                    availableRooms
+                        .filter { selectedIds.contains(it.remoteId) }
+                        .map { it.remoteId }
+                )
+
+                // A previously explicit plan must also be replaced, otherwise its
+                // nightly rows would continue to override the simple room choice.
+                if (draftRoomPlanAssignments != null) {
+                    replaceDraftPlanWithSimpleSelection()
+                }
+
+                refreshRoomPlanStatus()
+                updateSelectedRoomsText()
+                refreshBalanceForCurrentStatus()
+                refreshSourceMode()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun simpleRoomIdsForPicker(): List<String> =
+        draftRoomPlanAssignments
+            ?.let(BookingRoomPlanPolicy::uniformRoomRemoteIdsOrNull)
+            ?: selectedRoomIds.toList()
+
+    private fun replaceDraftPlanWithSimpleSelection() {
+        val checkInMillis = parseDate(checkIn.text.toString()) ?: return
+        val checkOutMillis = parseDate(checkOut.text.toString()) ?: return
+        if (checkOutMillis <= checkInMillis || selectedRoomIds.isEmpty()) return
+
+        draftRoomPlanAssignments = BookingRoomPlanPolicy.legacyAssignments(
+            checkInMillis = checkInMillis,
+            checkOutMillis = checkOutMillis,
+            roomRemoteIds = selectedRoomIds.toList(),
+            propertyRemoteId = selectedBookingPropertyRemoteId()
+        ).toMutableList()
     }
 
     private fun setupDatePickers() {
@@ -517,7 +598,7 @@ class BookingDialog(
         }.toTypedArray()
 
         AlertDialog.Builder(context)
-            .setTitle("Plan Rooms Date-wise")
+            .setTitle("Different Rooms by Date")
             .setItems(labels) { _, which ->
                 showRoomPlanNightPicker(stayDates[which])
             }
@@ -605,7 +686,14 @@ class BookingDialog(
                                 .thenBy { it.roomRemoteId }
                         )
                         .toMutableList()
+                    BookingRoomPlanPolicy.uniformRoomRemoteIdsOrNull(
+                        draftRoomPlanAssignments.orEmpty()
+                    )?.let { uniformRoomIds ->
+                        selectedRoomIds.clear()
+                        selectedRoomIds.addAll(uniformRoomIds)
+                    }
                     refreshRoomPlanStatus()
+                    updateSelectedRoomsText()
                     showRoomPlanPlannerDialog()
                 }
                 .setNegativeButton("Cancel", null)
@@ -630,7 +718,7 @@ class BookingDialog(
     private fun refreshRoomPlanStatus() {
         val assignments = draftRoomPlanAssignments
         if (assignments == null) {
-            roomPlanStatus.text = "Optional"
+            roomPlanStatus.text = "Same rooms for the complete stay"
             return
         }
 
@@ -645,8 +733,9 @@ class BookingDialog(
 
         roomPlanStatus.text = when {
             totalNights <= 0 -> "Room plan active"
-            plannedNights == totalNights -> "$plannedNights night${if (plannedNights == 1) "" else "s"} planned"
-            else -> "$plannedNights of $totalNights nights planned"
+            plannedNights != totalNights -> "$plannedNights of $totalNights nights planned"
+            BookingRoomPlanPolicy.variesByDate(assignments) -> "Different rooms or room counts by date"
+            else -> "Same rooms for the complete stay"
         }
     }
 
@@ -1348,10 +1437,6 @@ class BookingDialog(
             menu.add("Pricing Summary").isEnabled = canUseBookingActions
             menu.add("Payment History").isEnabled = canUseBookingActions
             menu.add("Ledger Entries").isEnabled = canUseBookingActions
-            menu.add("Room Plan / Shift Room").isEnabled =
-                canUseBookingActions &&
-                    canEditBooking &&
-                    booking?.bookingStatus != BookingStatus.CANCELLED
             menu.add("Cancel Booking").isEnabled = canUseBookingActions &&
                 !roomRateLocked &&
                 booking?.bookingStatus != BookingStatus.CANCELLED
@@ -1368,10 +1453,6 @@ class BookingDialog(
                     }
                     "Ledger Entries" -> {
                         booking?.let { showFolioDetailDialog("Ledger Entries", FinalBillTextFormatter.formatLedgerEntries(currentFinalBillPreview(it))) }
-                        true
-                    }
-                    "Room Plan / Shift Room" -> {
-                        booking?.let(onRoomPlanRequested)
                         true
                     }
                     "Cancel Booking" -> {
@@ -2043,11 +2124,30 @@ class BookingDialog(
     }
 
     private fun updateSelectedRoomsText() {
-        val roomNames = rooms.filter { selectedRoomIds.contains(it.remoteId) }
+        val assignments = draftRoomPlanAssignments.orEmpty()
+        val planRoomIds = BookingRoomPlanPolicy.allRoomRemoteIds(assignments)
+        val displayedRoomIds = planRoomIds.takeIf { it.isNotEmpty() } ?: selectedRoomIds
+        val roomNames = rooms.filter { displayedRoomIds.contains(it.remoteId) }
             .joinToString(", ") { it.roomName }
             .ifBlank { "No rooms selected" }
-        selectedRoomsText.text = roomNames
+        val planSuffix = when {
+            assignments.isEmpty() -> ""
+            currentPlanIsIncomplete(assignments) -> " · plan incomplete"
+            BookingRoomPlanPolicy.variesByDate(assignments) -> " · varies by date"
+            else -> ""
+        }
+        selectedRoomsText.text = roomNames + planSuffix
         selectedRoomsText.setTextColor(Color.parseColor("#5427F4"))
+    }
+
+    private fun currentPlanIsIncomplete(assignments: List<BookingRoomNightAssignment>): Boolean {
+        val checkInMillis = parseDate(checkIn.text.toString()) ?: return true
+        val checkOutMillis = parseDate(checkOut.text.toString()) ?: return true
+        return !BookingRoomPlanPolicy.validate(
+            checkInMillis = checkInMillis,
+            checkOutMillis = checkOutMillis,
+            assignments = assignments
+        ).isValid
     }
 
     private fun updateDateRangeText() {
@@ -2108,6 +2208,7 @@ class BookingDialog(
                 ).toMutableList()
             }
             refreshRoomPlanStatus()
+            updateSelectedRoomsText()
         }
 
         refreshBalanceForCurrentStatus()
