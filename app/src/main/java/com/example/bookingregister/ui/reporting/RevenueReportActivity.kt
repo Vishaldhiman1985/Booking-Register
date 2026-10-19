@@ -27,8 +27,10 @@ import com.example.bookingregister.data.entities.RoomEntity
 import com.example.bookingregister.data.repository.BookingRepository
 import com.example.bookingregister.data.repository.OtaSettlementSelection
 import com.example.bookingregister.data.repository.SaveResult
+import com.example.bookingregister.data.sync.isStaleRevisionFailure
 import com.example.bookingregister.room.domain.RoomLifecyclePolicy
 import com.example.bookingregister.reporting.property.OtaReceivableGroup
+import com.example.bookingregister.reporting.property.OtaSettlementSnapshotPolicy
 import com.example.bookingregister.reporting.property.PropertyOccupancyBucket
 import com.example.bookingregister.reporting.property.PropertyOccupancyPeriodRequest
 import com.example.bookingregister.reporting.property.PropertyOccupancyReportEngine
@@ -77,6 +79,8 @@ class RevenueReportActivity : AppCompatActivity() {
     private var selectedPropertyKey: String = ALL_PROPERTIES_KEY
     private lateinit var settlementRepository: BookingRepository
     private var otaSettlementInProgress: Boolean = false
+    private var otaBalanceCheckInProgress: Boolean = false
+    private val serverVerifiedOtaBookingIds = linkedSetOf<String>()
 
     private val propertyReportBuilder = PropertyReportBuilder()
     private val propertyRevenueEngine = PropertyRevenueReportEngine()
@@ -464,19 +468,20 @@ class RevenueReportActivity : AppCompatActivity() {
                     onChangeProperty =
                         ::showPropertyPicker,
                     onSettleOta =
-                        ::showOtaSettlementSelection
+                        { group -> showOtaSettlementSelection(group) }
                 )
             }
         )
     }
 
     private fun showOtaSettlementSelection(
-        group: OtaReceivableGroup
+        group: OtaReceivableGroup,
+        openSelection: Boolean = true
     ) {
-        if (otaSettlementInProgress) {
+        if (otaSettlementInProgress || otaBalanceCheckInProgress) {
             Toast.makeText(
                 this,
-                "Another OTA settlement is being recorded.",
+                "An OTA balance is already being checked or recorded.",
                 Toast.LENGTH_SHORT
             ).show()
             return
@@ -520,27 +525,76 @@ class RevenueReportActivity : AppCompatActivity() {
             return
         }
 
-        OtaSettlementSelectionDialog.show(
-            activity = this,
-            propertyName = propertyChoice.label,
-            sourceName = group.sourceName,
-            bookings = group.bookings,
-            moneyFormatter = { amount ->
-                "\u20B9" + money(amount)
+        otaBalanceCheckInProgress = true
+        val propertyKeyAtStart = selectedPropertyKey
+        lifecycleScope.launch {
+            val currentGroup = try {
+                val local = PropertyReportingDataSource(
+                    context = applicationContext,
+                    hotelRemoteId = hotelRemoteId
+                ).loadRawData()
+                val localGroup = propertyBalanceEngine.build(
+                    raw = local,
+                    scope = currentPropertyScope(visibleReportRange())
+                ).otaReceivables.firstOrNull { it.sourceRemoteId == sourceRemoteId }
+                val currentIds = (group.bookings + localGroup?.bookings.orEmpty())
+                    .map { it.bookingRemoteId }
+                    .distinct()
+                val combinedIds = (serverVerifiedOtaBookingIds + currentIds).distinct()
+                val candidateIds = combinedIds.takeIf { it.size <= 100 } ?: currentIds
+                val server = settlementRepository.loadOtaSettlementServerSnapshot(candidateIds)
+                if (selectedPropertyKey != propertyKeyAtStart) return@launch
+                val refreshed = OtaSettlementSnapshotPolicy.overlay(local, candidateIds, server)
+                serverVerifiedOtaBookingIds.clear()
+                serverVerifiedOtaBookingIds.addAll(candidateIds)
+                reportingRawData = refreshed
+                rebuildPropertyChoices(refreshed)
+                applyPropertyScope()
+                render()
+                propertyBalanceEngine.build(
+                    raw = refreshed,
+                    scope = currentPropertyScope(visibleReportRange())
+                ).otaReceivables.firstOrNull { it.sourceRemoteId == sourceRemoteId }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                Toast.makeText(
+                    this@RevenueReportActivity,
+                    (error.message ?: "Could not verify current cloud balances.") +
+                        " No payment was recorded.",
+                    Toast.LENGTH_LONG
+                ).show()
+                return@launch
+            } finally {
+                otaBalanceCheckInProgress = false
             }
-        ) { selectedRows, settlementReference, note ->
 
-            val selectedTotal =
-                selectedRows.sumOf { it.outstanding }
+            if (!openSelection) return@launch
+            if (currentGroup == null || currentGroup.bookings.isEmpty()) {
+                Toast.makeText(
+                    this@RevenueReportActivity,
+                    "No unpaid bookings remain for this OTA. Nothing was recorded.",
+                    Toast.LENGTH_LONG
+                ).show()
+                return@launch
+            }
 
-            otaSettlementInProgress = true
+            OtaSettlementSelectionDialog.show(
+                activity = this@RevenueReportActivity,
+                propertyName = propertyChoice.label,
+                sourceName = currentGroup.sourceName,
+                bookings = currentGroup.bookings,
+                moneyFormatter = { amount -> "\u20B9" + money(amount) }
+            ) { selectedRows, settlementReference, note ->
 
-            lifecycleScope.launch {
-                val result =
-                    settlementRepository.recordOtaSettlement(
+                val selectedTotal = selectedRows.sumOf { it.outstanding }
+
+                otaSettlementInProgress = true
+
+                lifecycleScope.launch {
+                    val result = settlementRepository.recordOtaSettlement(
                         propertyRemoteId = propertyRemoteId,
                         sourceRemoteId = sourceRemoteId,
-                        sourceName = group.sourceName,
+                        sourceName = currentGroup.sourceName,
                         selections = selectedRows.map {
                             OtaSettlementSelection(
                                 bookingRemoteId = it.bookingRemoteId,
@@ -551,38 +605,43 @@ class RevenueReportActivity : AppCompatActivity() {
                         note = note
                     )
 
-                otaSettlementInProgress = false
+                    otaSettlementInProgress = false
 
-                when (result) {
-                    is SaveResult.Success -> {
-                        Toast.makeText(
-                            this@RevenueReportActivity,
-                            group.sourceName +
-                                " payment \u20B9" +
-                                money(selectedTotal) +
-                                " recorded.",
-                            Toast.LENGTH_LONG
-                        ).show()
+                    when (result) {
+                        is SaveResult.Success -> {
+                            Toast.makeText(
+                                this@RevenueReportActivity,
+                                currentGroup.sourceName +
+                                    " payment \u20B9" +
+                                    money(selectedTotal) +
+                                    " recorded.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            loadReportingSnapshot()
+                        }
 
-                        loadReportingSnapshot()
-                    }
+                        is SaveResult.Conflict -> {
+                            Toast.makeText(
+                                this@RevenueReportActivity,
+                                result.message,
+                                Toast.LENGTH_LONG
+                            ).show()
+                            showOtaSettlementSelection(currentGroup, openSelection = false)
+                        }
 
-                    is SaveResult.Conflict -> {
-                        Toast.makeText(
-                            this@RevenueReportActivity,
-                            result.message,
-                            Toast.LENGTH_LONG
-                        ).show()
-                        render()
-                    }
-
-                    is SaveResult.Error -> {
-                        Toast.makeText(
-                            this@RevenueReportActivity,
-                            result.message,
-                            Toast.LENGTH_LONG
-                        ).show()
-                        render()
+                        is SaveResult.Error -> {
+                            Toast.makeText(
+                                this@RevenueReportActivity,
+                                result.message,
+                                Toast.LENGTH_LONG
+                            ).show()
+                            if (isStaleRevisionFailure(result.message) ||
+                                result.message.contains("recorded on the server")) {
+                                showOtaSettlementSelection(currentGroup, openSelection = false)
+                            } else {
+                                loadReportingSnapshot()
+                            }
+                        }
                     }
                 }
             }

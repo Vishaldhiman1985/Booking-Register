@@ -1854,6 +1854,21 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                     }
                 }
             },
+            onSimpleStayAvailabilityRequested = { checkInMillis, checkOutMillis, onResult ->
+                lifecycleScope.launch {
+                    try {
+                        onResult(repository.occupiedRoomIdsForSimpleStayPicker(
+                            checkInMillis = checkInMillis,
+                            checkOutMillis = checkOutMillis,
+                            editingBookingRemoteId = existing?.remoteId
+                        ))
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        onResult(null)
+                    }
+                }
+            },
             onBookingSaved = { booking, lines, roomPlan, onResult ->
                 lifecycleScope.launch {
                     onResult(

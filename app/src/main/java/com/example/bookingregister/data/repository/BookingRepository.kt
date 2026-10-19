@@ -175,6 +175,39 @@ class BookingRepository(
             .toSet()
     }
 
+    /** One read for the whole stay; Simple Stay must reject rooms occupied on any night. */
+    suspend fun occupiedRoomIdsForSimpleStayPicker(
+        checkInMillis: Long,
+        checkOutMillis: Long,
+        editingBookingRemoteId: String?
+    ): Set<String> {
+        require(checkOutMillis > checkInMillis)
+        val candidates = bookingDao.getOverlappingBookings(
+            hotelRemoteId = hotelRemoteId,
+            checkInMillis = checkInMillis,
+            checkOutMillis = checkOutMillis
+        )
+        val occupants = candidates.map { booking ->
+            val rows = bookingRoomNightAssignmentDao.getForBooking(hotelRemoteId, booking.remoteId)
+            BookingRoomNightAvailabilityPolicy.Occupant(
+                bookingId = booking.remoteId,
+                checkInMillis = booking.checkInMillis,
+                checkOutMillis = booking.checkOutMillis,
+                legacyRoomIds = booking.roomRemoteIds,
+                legacyPropertyId = booking.propertyRemoteId,
+                explicitAssignments = BookingRoomPlanReadResolver.resolve(booking, rows)
+                    .takeIf { rows.isNotEmpty() }?.assignments.orEmpty()
+            )
+        }
+        return BookingRoomNightAvailabilityPolicy.occupiedRoomIdsForStay(
+            roomIds = roomDao.getRooms(hotelRemoteId).map { it.remoteId },
+            checkInMillis = checkInMillis,
+            checkOutMillis = checkOutMillis,
+            occupants = occupants,
+            excludeBookingId = editingBookingRemoteId
+        )
+    }
+
     fun observeBookings(): LiveData<List<BookingEntity>> = bookingDao.observeBookings(hotelRemoteId)
 
     fun observeChartBookingsForWindow(startMillis: Long, endMillis: Long): LiveData<List<BookingEntity>> =
@@ -1854,6 +1887,11 @@ class BookingRepository(
             )
         }
     }
+
+    /** Read-only, server-sourced inputs for the OTA settlement confirmation screen. */
+    suspend fun loadOtaSettlementServerSnapshot(
+        bookingRemoteIds: List<String>
+    ) = cloudSyncManager.loadOtaSettlementServerSnapshot(bookingRemoteIds)
 
     suspend fun addSourcePayment(
         sourceRemoteId: String?,

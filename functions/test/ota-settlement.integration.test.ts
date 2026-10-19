@@ -159,6 +159,65 @@ describe.sequential("Atomic OTA settlement", () => {
     expect(paymentsAfterRetry.size).toBe(2);
   }, 20_000);
 
+  test("settles a historical OTA booking only when cloud lines and source verify its payout", async () => {
+    const client = await createClient();
+    const hotelId = `hotel-ota-legacy-${sequence}`;
+    const propertyId = "property-a";
+    const sourceId = "agoda-a";
+    await seedHotelAccess(hotelId, client.auth.currentUser!.uid);
+    await seedSource(hotelId, sourceId, propertyId);
+    const db = getFirestore(adminApp);
+    await db.doc(`hotels/${hotelId}/bookingSources/${sourceId}`).update({
+      commissionPercent: 20,
+      commissionGstPercent: 18,
+      tcsPercent: 0.1,
+      tdsPercent: 0.5,
+      fixedFee: 0,
+    });
+    await db.doc(`hotels/${hotelId}/bookings/legacy-booking`).set({
+      hotelRemoteId: hotelId,
+      propertyRemoteId: propertyId,
+      sourceRemoteId: sourceId,
+      sourceName: "Agoda",
+      sourceType: "OTA",
+      bookingStatus: "RESERVED",
+      grossCharges: 9_000,
+      isDeleted: false,
+      revision: 1,
+    });
+    for (let night = 1; night <= 3; night++) {
+      await db.doc(`hotels/${hotelId}/bookingFinancialLines/legacy-night-${night}`).set({
+        hotelRemoteId: hotelId,
+        bookingRemoteId: "legacy-booking",
+        grossAmount: 3_000,
+        taxableAmount: 3_000,
+        gstAmount: 0,
+        isDeleted: false,
+      });
+    }
+    const request = {
+      hotelId,
+      propertyRemoteId: propertyId,
+      sourceRemoteId: sourceId,
+      sourceName: "Agoda",
+      selections: [{ bookingRemoteId: "legacy-booking", expectedOutstanding: 6_822 }],
+    };
+
+    await expectFunctionError(client.call("recordOtaSettlementServer", {
+      ...request,
+      operationId: "ota_legacy_wrong_amount_001",
+      selections: [{ bookingRemoteId: "legacy-booking", expectedOutstanding: 6_823 }],
+    }), "aborted");
+    expect((await db.collection(`hotels/${hotelId}/bookingPayments`).get()).empty).toBe(true);
+
+    const result = await client.call("recordOtaSettlementServer", {
+      ...request,
+      operationId: "ota_legacy_verified_001",
+    });
+    expect(result.totalAmount).toBe(6_822);
+    expect((await db.collection(`hotels/${hotelId}/bookingPayments`).get()).size).toBe(1);
+  }, 30_000);
+
   test("stale client outstanding aborts the whole settlement before any new payment is written", async () => {
     const client = await createClient();
     const hotelId = `hotel-ota-stale-${sequence}`;
@@ -200,6 +259,53 @@ describe.sequential("Atomic OTA settlement", () => {
     expect(payments.size).toBe(1);
     const settlements = await db.collection(`hotels/${hotelId}/otaSettlements`).get();
     expect(settlements.empty).toBe(true);
+  }, 20_000);
+
+  test("unapplied credit does not falsely settle an OTA stay receivable", async () => {
+    const client = await createClient();
+    const hotelId = `hotel-ota-unapplied-${sequence}`;
+    const propertyId = "property-a";
+    const sourceId = "agoda-a";
+    await seedHotelAccess(hotelId, client.auth.currentUser!.uid);
+    await seedSource(hotelId, sourceId, propertyId);
+    await seedBooking(hotelId, "booking-unapplied", propertyId, sourceId, 5_000);
+
+    const db = getFirestore(adminApp);
+    await db.doc(`hotels/${hotelId}/bookingPayments/unapplied-credit`).set({
+      hotelRemoteId: hotelId,
+      bookingRemoteId: "booking-unapplied",
+      paymentType: "PAYMENT",
+      paymentCategory: "AUTO",
+      amount: 5_000,
+      allocatedStayAmount: 0,
+      allocatedFoodAmount: 0,
+      allocatedServiceAmount: 0,
+      allocatedDamageAmount: 0,
+      unappliedAmount: 5_000,
+      isDeleted: false,
+      revision: 1,
+    });
+
+    const request = {
+      hotelId,
+      operationId: "ota_unapplied_operation_001",
+      propertyRemoteId: propertyId,
+      sourceRemoteId: sourceId,
+      sourceName: "Agoda",
+      selections: [{ bookingRemoteId: "booking-unapplied", expectedOutstanding: 5_000 }],
+    };
+    const result = await client.call("recordOtaSettlementServer", request);
+    expect(result.totalAmount).toBe(5_000);
+    const payments = await db.collection(`hotels/${hotelId}/bookingPayments`).get();
+    expect(payments.size).toBe(2);
+    expect(payments.docs.find((doc) => doc.id === "unapplied-credit")?.get("unappliedAmount")).toBe(5_000);
+
+    await expectFunctionError(
+      client.call("recordOtaSettlementServer", { ...request, operationId: "ota_unapplied_operation_002" }),
+      "aborted"
+    );
+    const paymentsAfterRetry = await db.collection(`hotels/${hotelId}/bookingPayments`).get();
+    expect(paymentsAfterRetry.size).toBe(2);
   }, 20_000);
 
   test("cross-property booking rejects the entire batch", async () => {

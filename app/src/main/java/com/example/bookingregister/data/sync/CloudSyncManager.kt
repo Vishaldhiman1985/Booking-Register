@@ -50,6 +50,12 @@ data class RoomConflictServerState(
     val hasRejectedCreateAudit: Boolean
 )
 
+data class OtaSettlementServerSnapshot(
+    val bookings: List<BookingEntity>,
+    val payments: List<BookingPaymentEntity>,
+    val missingFinancialBookingIds: Set<String> = emptySet()
+)
+
 class CloudSyncManager(
     private val hotelRemoteId: String
 ) {
@@ -57,6 +63,41 @@ class CloudSyncManager(
     private val auth = FirebaseAuth.getInstance()
     private val functions = FirebaseFunctions.getInstance("asia-south1")
     private val hotelDoc = firestore.collection("hotels").document(hotelRemoteId)
+
+    suspend fun loadOtaSettlementServerSnapshot(
+        bookingRemoteIds: List<String>
+    ): OtaSettlementServerSnapshot {
+        val ids = bookingRemoteIds.map(String::trim).filter(String::isNotEmpty).distinct()
+        require(ids.isNotEmpty() && ids.size <= 100) {
+            "Select between 1 and 100 OTA bookings."
+        }
+
+        val bookings = mutableListOf<BookingEntity>()
+        val payments = mutableListOf<BookingPaymentEntity>()
+        val missingFinancialBookingIds = mutableSetOf<String>()
+        ids.chunked(30).forEach { batch ->
+            val bookingDocs = hotelDoc.collection("bookings")
+                .whereIn(FieldPath.documentId(), batch)
+                .get(Source.SERVER)
+                .await()
+            bookingDocs.documents.forEach { doc ->
+                doc.toBookingEntity()?.let { booking ->
+                    bookings += booking
+                    if (!doc.contains("expectedPayout") &&
+                        !doc.contains("receivable") && !doc.contains("rate")) {
+                        missingFinancialBookingIds += booking.remoteId
+                    }
+                }
+            }
+
+            val paymentDocs = hotelDoc.collection("bookingPayments")
+                .whereIn("bookingRemoteId", batch)
+                .get(Source.SERVER)
+                .await()
+            payments += paymentDocs.documents.mapNotNull { it.toBookingPaymentEntity() }
+        }
+        return OtaSettlementServerSnapshot(bookings, payments, missingFinancialBookingIds)
+    }
 
     private var roomsListener: ListenerRegistration? = null
     private var propertiesListener: ListenerRegistration? = null

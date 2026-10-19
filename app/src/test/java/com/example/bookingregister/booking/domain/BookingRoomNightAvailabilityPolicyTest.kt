@@ -1,6 +1,7 @@
 package com.example.bookingregister.booking.domain
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -42,5 +43,71 @@ class BookingRoomNightAvailabilityPolicyTest {
     }
     @Test fun checkoutDayIsFree() {
         assertFalse(BookingRoomNightAvailabilityPolicy.isOccupied("D1", day * 14, listOf(lalita)))
+    }
+
+    @Test fun simpleStayRejectsRoomOccupiedOnOnlyOneNightAndKeepsOwnRoomSelectable() {
+        val nisha = BookingRoomNightAvailabilityPolicy.Occupant(
+            "nisha", day * 17, day * 20, listOf("P1"), "PUSHPA"
+        )
+        val mutti = BookingRoomNightAvailabilityPolicy.Occupant(
+            "mutti", day * 17, day * 20, listOf("D2"), "DIMPY",
+            listOf(room(17, "D4"), room(18, "D2"), room(19, "D2"))
+        )
+
+        val occupied = BookingRoomNightAvailabilityPolicy.occupiedRoomIdsForStay(
+            listOf("P1", "P2", "D4"), day * 17, day * 20, listOf(nisha, mutti), "nisha"
+        )
+
+        assertEquals(setOf("D4"), occupied)
+        assertFalse("The booking's own P1 must remain checked and selectable", "P1" in occupied)
+    }
+
+    @Test fun simpleStayRejectsD4ForLaliEvenThoughItIsFreeOnSecondNight() {
+        val lali = BookingRoomNightAvailabilityPolicy.Occupant(
+            "lali", day * 17, day * 19, listOf("P3"), "PUSHPA"
+        )
+        val mutti = BookingRoomNightAvailabilityPolicy.Occupant(
+            "mutti", day * 17, day * 19, listOf("D4"), "DIMPY",
+            listOf(room(17, "D4"), room(18, "D2"))
+        )
+
+        val occupied = BookingRoomNightAvailabilityPolicy.occupiedRoomIdsForStay(
+            listOf("P3", "P4", "D4"), day * 17, day * 19, listOf(lali, mutti), "lali"
+        )
+
+        assertEquals(setOf("D4"), occupied)
+        assertTrue(BookingRoomNightAvailabilityPolicy.isOccupied("D4", day * 17, listOf(mutti)))
+        assertFalse(BookingRoomNightAvailabilityPolicy.isOccupied("D4", day * 18, listOf(mutti)))
+    }
+
+    @Test fun simpleStayUsesActualNightPlanRatherThanLegacyRooms() {
+        val moved = BookingRoomNightAvailabilityPolicy.Occupant(
+            "moved", day * 17, day * 19, listOf("D1"), "DIMPY",
+            listOf(room(17, "D2"), room(18, "D2"))
+        )
+
+        assertEquals(
+            setOf("D2"),
+            BookingRoomNightAvailabilityPolicy.occupiedRoomIdsForStay(
+                listOf("D1", "D2"), day * 17, day * 19, listOf(moved)
+            )
+        )
+    }
+
+    @Test fun simpleStayFailsClosedForIncompletePlansButNotAfterCheckout() {
+        val incomplete = lalita.copy(explicitAssignments = listOf(room(11, "D2")))
+
+        assertEquals(
+            setOf("D1", "D2"),
+            BookingRoomNightAvailabilityPolicy.occupiedRoomIdsForStay(
+                listOf("D1", "D2"), day * 11, day * 12, listOf(incomplete)
+            )
+        )
+        assertEquals(
+            emptySet<String>(),
+            BookingRoomNightAvailabilityPolicy.occupiedRoomIdsForStay(
+                listOf("D1", "D2"), day * 14, day * 15, listOf(incomplete)
+            )
+        )
     }
 }

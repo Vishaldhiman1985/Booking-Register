@@ -154,6 +154,37 @@ class PropertyBalanceReportBuilderTest {
         )
     }
 
+    @Test
+    fun unappliedOtaCreditDoesNotSettleStayReceivable() {
+        val ota = booking(
+            remoteId = "ota_unapplied",
+            sourceType = BookingSourceType.OTA,
+            receivable = 5_000.0,
+            expectedPayout = 5_000.0
+        )
+        val dataset = PropertyReportDataset(
+            scope = PropertyReportScope(
+                hotelRemoteId = "hotel_1",
+                propertyRemoteId = "property_a",
+                includeAllProperties = false,
+                startMillis = 0,
+                endMillis = 10_000
+            ),
+            properties = emptyList(),
+            rooms = emptyList(),
+            bookings = listOf(ota),
+            financialLines = emptyList(),
+            payments = listOf(
+                payment("unapplied", ota.remoteId, 5_000.0, BookingPaymentType.PAYMENT)
+                    .copy(unappliedAmount = 5_000.0)
+            )
+        )
+
+        val facts = builder.build(dataset)
+        assertEquals(5_000.0, facts.otaOutstanding, 0.001)
+        assertEquals(0.0, facts.bookings.single().received, 0.001)
+    }
+
     private fun booking(
         remoteId: String,
         sourceType: String,

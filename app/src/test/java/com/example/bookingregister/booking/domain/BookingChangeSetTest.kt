@@ -14,7 +14,10 @@ class BookingChangeSetTest {
         val requested = booking(3_200.0, listOf("H101", "H102"))
         val changeSet = BookingChangeSet.create(previous, requested, emptyList(), emptyList())
 
-        assertEquals(mapOf("grossCharges" to 3_200.0), changeSet.setFields)
+        assertEquals(
+            mapOf("grossCharges" to 3_200.0, "rate" to 3_200.0, "receivable" to 3_200.0),
+            changeSet.setFields
+        )
         assertEquals(listOf("H102"), changeSet.addRoomRemoteIds)
         assertTrue(changeSet.removeRoomRemoteIds.isEmpty())
         assertTrue(changeSet.rebuildFinancialLines)
@@ -243,6 +246,29 @@ class BookingChangeSetTest {
         val changeSet = BookingChangeSet.create(existing, existing, emptyList(), emptyList())
 
         assertFalse(changeSet.hasChanges)
+    }
+
+    @Test
+    fun `new OTA booking sends payout and deductions to cloud`() {
+        val requested = booking(9_000.0, listOf("P1")).copy(
+            sourceType = com.example.bookingregister.data.entities.BookingSourceType.OTA,
+            roomRevenue = 9_000.0,
+            commissionAmount = 1_800.0,
+            commissionTax = 324.0,
+            tcsAmount = 9.0,
+            tdsAmount = 45.0,
+            expectedPayout = 6_822.0,
+            rate = 6_822.0,
+            receivable = 6_822.0
+        )
+
+        val fields = BookingChangeSet.create(null, requested, emptyList(), emptyList()).setFields
+
+        assertEquals(6_822.0, fields["expectedPayout"])
+        assertEquals(6_822.0, fields["receivable"])
+        assertEquals(9_000.0, fields["roomRevenue"])
+        assertEquals(1_800.0, fields["commissionAmount"])
+        assertEquals(324.0, fields["commissionTax"])
     }
 
     private fun booking(total: Double, rooms: List<String>) = BookingEntity(

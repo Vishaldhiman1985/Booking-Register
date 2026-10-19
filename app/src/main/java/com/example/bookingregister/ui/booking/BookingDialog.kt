@@ -68,6 +68,7 @@ import com.example.bookingregister.tax.domain.HotelGstCalculator
 import com.example.bookingregister.ui.food.FoodBillingActivity
 import com.example.bookingregister.ui.service.ServiceBillingActivity
 import com.google.android.material.textfield.TextInputLayout
+import com.google.android.material.button.MaterialButton
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -95,6 +96,7 @@ class BookingDialog(
     private val roomRateLocked: Boolean = false,
     private val initialRoomPlanAssignments: List<BookingRoomNightAssignment>? = null,
     private val onRoomNightAvailabilityRequested: (Long, (Set<String>?) -> Unit) -> Unit,
+    private val onSimpleStayAvailabilityRequested: (Long, Long, (Set<String>?) -> Unit) -> Unit,
     private val onBookingSaved: (BookingEntity, List<BookingFinancialLineEntity>, List<BookingRoomNightAssignment>?, (SaveResult) -> Unit) -> Unit,
     private val onBookingDeleted: (BookingEntity, CancellationRequest, (SaveResult) -> Unit) -> Unit,
     private val onPaymentSaved: (BookingEntity, Double, String, String, String?, String?, (SaveResult) -> Unit) -> Unit,
@@ -423,44 +425,69 @@ class BookingDialog(
     }
 
     private fun showRoomAssignmentOptions() {
-        val planVaries = draftRoomPlanAssignments
-            ?.let(BookingRoomPlanPolicy::variesByDate)
-            ?: false
-
-        val simpleRoomNames = rooms
-            .filter { simpleRoomIdsForPicker().contains(it.remoteId) }
-            .joinToString(", ") { it.roomName }
-            .ifBlank { "Select rooms" }
-
-        val options = arrayOf(
-            "Same rooms for the complete stay\n$simpleRoomNames",
-            if (planVaries) {
-                "Different rooms or room counts by date\nDate-wise plan active"
-            } else {
-                "Different rooms or room counts by date\nUse only when one or more nights differ"
-            }
-        )
-
-        AlertDialog.Builder(context)
+        val spacing = (12 * context.resources.displayMetrics.density).toInt()
+        val buttonHeight = (52 * context.resources.displayMetrics.density).toInt()
+        val choices = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(spacing, spacing, spacing, spacing)
+        }
+        val dialog = AlertDialog.Builder(context)
             .setTitle("Rooms for this booking")
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> showSimpleRoomPicker()
-                    1 -> showRoomPlanPlannerDialog()
-                }
-            }
+            .setView(choices)
             .setNegativeButton("Cancel", null)
-            .show()
+            .create()
+
+        listOf(
+            "Simple Stay" to ::showSimpleRoomPicker,
+            "Dynamic Stay" to ::showRoomPlanPlannerDialog
+        ).forEachIndexed { index, (label, action) ->
+            choices.addView(MaterialButton(context).apply {
+                text = label
+                isAllCaps = false
+                setOnClickListener {
+                    dialog.dismiss()
+                    action()
+                }
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                buttonHeight
+            ).apply {
+                if (index > 0) topMargin = spacing
+            })
+        }
+        dialog.show()
     }
 
     private fun showSimpleRoomPicker() {
-        val availableRooms = getAvailableRoomsForSelectedDates()
-        if (availableRooms.isEmpty()) {
-            Toast.makeText(context, "No rooms available for selected dates", Toast.LENGTH_LONG).show()
+        val checkInMillis = parseDate(checkIn.text.toString().trim())
+        val checkOutMillis = parseDate(checkOut.text.toString().trim())
+        if (checkInMillis == null || checkOutMillis == null || checkOutMillis <= checkInMillis) {
+            Toast.makeText(context, "Select valid check-in and check-out dates.", Toast.LENGTH_LONG).show()
             return
         }
+        onSimpleStayAvailabilityRequested(checkInMillis, checkOutMillis) { occupiedRoomIds ->
+            if (!dialog.isShowing) return@onSimpleStayAvailabilityRequested
+            if (occupiedRoomIds == null) {
+                Toast.makeText(context, "Could not check room availability. Please try again.", Toast.LENGTH_LONG).show()
+                return@onSimpleStayAvailabilityRequested
+            }
+            val currentRoomIds = simpleRoomIdsForPicker().toSet()
+            val availableRooms = rooms.filter { room ->
+                !room.isDeleted && room.remoteId !in occupiedRoomIds &&
+                    (room.remoteId in currentRoomIds ||
+                        RoomLifecycleStatus.normalize(room.lifecycleStatus) == RoomLifecycleStatus.ACTIVE)
+            }
+            if (availableRooms.isEmpty()) {
+                Toast.makeText(context, "No rooms available for the complete stay.", Toast.LENGTH_LONG).show()
+                return@onSimpleStayAvailabilityRequested
+            }
+            showSimpleRoomChoices(availableRooms)
+        }
+    }
 
-        val selectedIds = simpleRoomIdsForPicker().toMutableSet()
+    private fun showSimpleRoomChoices(availableRooms: List<RoomEntity>) {
+        val availableIds = availableRooms.map { it.remoteId }.toSet()
+        val selectedIds = simpleRoomIdsForPicker().filterTo(mutableSetOf()) { it in availableIds }
         val roomNames = availableRooms.map { it.roomName }.toTypedArray()
         val checkedItems = BooleanArray(availableRooms.size) { index ->
             selectedIds.contains(availableRooms[index].remoteId)
@@ -471,7 +498,7 @@ class BookingDialog(
                 if (draftRoomPlanAssignments?.let(BookingRoomPlanPolicy::variesByDate) == true) {
                     "Replace plan with the same rooms every night?"
                 } else {
-                    "Same rooms for the complete stay"
+                    "Simple Stay"
                 }
             )
             .setMultiChoiceItems(roomNames, checkedItems) { picker, which, isChecked ->
@@ -598,7 +625,7 @@ class BookingDialog(
         }.toTypedArray()
 
         AlertDialog.Builder(context)
-            .setTitle("Different Rooms by Date")
+            .setTitle("Dynamic Stay")
             .setItems(labels) { _, which ->
                 showRoomPlanNightPicker(stayDates[which])
             }
@@ -2613,22 +2640,6 @@ class BookingDialog(
         balance.setText("0")
         paymentHistory.text = "Complimentary stay\nNo amount receivable. Inventory remains blocked."
         refreshPaymentActionVisibility()
-    }
-
-    private fun getAvailableRoomsForSelectedDates(): List<RoomEntity> {
-        val checkInMillis = parseDate(checkIn.text.toString().trim()) ?: selectedCheckInMillis
-        val checkOutMillis = parseDate(checkOut.text.toString().trim()) ?: (checkInMillis + DAY_MILLIS)
-        return rooms.filter { room ->
-            val isExistingRoom = existingBooking?.roomRemoteIds?.contains(room.remoteId) == true
-            (isExistingRoom || RoomLifecycleStatus.normalize(room.lifecycleStatus) == RoomLifecycleStatus.ACTIVE) &&
-            bookings.none { booking ->
-                !booking.isDeleted &&
-                        booking.remoteId != existingBooking?.remoteId &&
-                        booking.roomRemoteIds.contains(room.remoteId) &&
-                        booking.checkInMillis < checkOutMillis &&
-                        booking.checkOutMillis > checkInMillis
-            }
-        }
     }
 
     private fun defaultSource(): BookingSourceEntity {

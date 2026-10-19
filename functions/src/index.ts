@@ -1309,7 +1309,9 @@ function otaStayPaidFromPaymentDocs(paymentDocs: DocumentSnapshot[]): number {
       continue;
     }
 
-    if (paymentType === "ADJUSTMENT" && numberValue(payment.get("unappliedAmount")) > 0) {
+    // A payment explicitly held as unapplied credit is not OTA stay revenue.
+    // Match the Android folio policy for every payment type, not just corrections.
+    if (numberValue(payment.get("unappliedAmount")) > 0) {
       continue;
     }
 
@@ -1319,6 +1321,50 @@ function otaStayPaidFromPaymentDocs(paymentDocs: DocumentSnapshot[]): number {
     }
   }
   return Math.max(0, stayPaid);
+}
+
+function legacyOtaReceivableFromServerLines(
+  booking: DocumentSnapshot,
+  source: DocumentSnapshot,
+  financialLines: DocumentSnapshot[]
+): number {
+  if (!source.exists || financialLines.length === 0) {
+    throw new HttpsError(
+      "failed-precondition",
+      "This older OTA booking has no verifiable cloud payout. No payment was recorded."
+    );
+  }
+  const activeLines = financialLines.filter((line) =>
+    line.exists && !booleanValue(line.get("isDeleted"))
+  );
+  const roundMoney = (amount: number) => Math.round(amount * 100) / 100;
+  const gross = roundMoney(activeLines.reduce((sum, line) =>
+    sum + numberValue(line.get("grossAmount")), 0
+  ));
+  const roomRevenue = roundMoney(activeLines.reduce((sum, line) =>
+    sum + numberValue(line.get("taxableAmount")), 0
+  ));
+  const propertyTax = roundMoney(activeLines.reduce((sum, line) =>
+    sum + numberValue(line.get("gstAmount")), 0
+  ));
+  if (gross <= 0 || Math.abs(gross - numberValue(booking.get("grossCharges"))) > 0.02 ||
+      Math.abs(roomRevenue + propertyTax - gross) > 0.02) {
+    throw new HttpsError(
+      "failed-precondition",
+      "This older OTA booking's cloud room charges do not reconcile. No payment was recorded."
+    );
+  }
+  const percent = (base: number, field: string) =>
+    roundMoney(base * Math.max(0, numberValue(source.get(field))) / 100);
+  const commission = percent(roomRevenue, "commissionPercent");
+  const commissionTax = roundMoney(
+    commission * Math.max(0, numberValue(source.get("commissionGstPercent"))) / 100
+  );
+  return roundMoney(Math.max(0,
+    gross - commission - commissionTax -
+      Math.max(0, numberValue(source.get("fixedFee"))) -
+      percent(roomRevenue, "tcsPercent") - percent(roomRevenue, "tdsPercent")
+  ));
 }
 
 export const recordOtaSettlementServer = onCall({ invoker: "public" }, async (request) => {
@@ -1434,10 +1480,23 @@ export const recordOtaSettlementServer = onCall({ invoker: "public" }, async (re
 
     const bookingSnapshots = new Map<string, DocumentSnapshot>();
     const paymentSnapshots = new Map<string, DocumentSnapshot[]>();
+    const legacyFinancialLineSnapshots = new Map<string, DocumentSnapshot[]>();
 
     for (const selection of selections) {
       const booking = await tx.get(hotelRef.collection("bookings").doc(selection.bookingRemoteId));
       bookingSnapshots.set(selection.bookingRemoteId, booking);
+    }
+
+    for (const selection of selections) {
+      const booking = bookingSnapshots.get(selection.bookingRemoteId);
+      if (booking?.exists && booking.get("expectedPayout") == null &&
+          booking.get("receivable") == null && booking.get("rate") == null) {
+        const lines = await tx.get(
+          hotelRef.collection("bookingFinancialLines")
+            .where("bookingRemoteId", "==", selection.bookingRemoteId)
+        );
+        legacyFinancialLineSnapshots.set(selection.bookingRemoteId, lines.docs);
+      }
     }
 
     for (const selection of selections) {
@@ -1478,14 +1537,20 @@ export const recordOtaSettlementServer = onCall({ invoker: "public" }, async (re
         );
       }
 
-      const receivable = Math.max(
-        0,
-        numberValue(booking.get("expectedPayout")) > 0
-          ? numberValue(booking.get("expectedPayout"))
-          : numberValue(booking.get("receivable")) > 0
-            ? numberValue(booking.get("receivable"))
-            : numberValue(booking.get("rate"))
-      );
+      const missingFinancialFields = booking.get("expectedPayout") == null &&
+        booking.get("receivable") == null && booking.get("rate") == null;
+      const receivable = missingFinancialFields
+        ? legacyOtaReceivableFromServerLines(
+          booking, source, legacyFinancialLineSnapshots.get(selection.bookingRemoteId) || []
+        )
+        : Math.max(
+          0,
+          numberValue(booking.get("expectedPayout")) > 0
+            ? numberValue(booking.get("expectedPayout"))
+            : numberValue(booking.get("receivable")) > 0
+              ? numberValue(booking.get("receivable"))
+              : numberValue(booking.get("rate"))
+        );
       const received = otaStayPaidFromPaymentDocs(
         paymentSnapshots.get(selection.bookingRemoteId) || []
       );
