@@ -2,20 +2,23 @@ package com.example.bookingregister.ui.booking
 
 import android.content.Intent
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.os.Bundle
 import android.os.SystemClock
 import android.text.InputType
+import android.view.Gravity
 import android.view.View
 import android.widget.EditText
 import android.widget.ArrayAdapter
 import android.widget.LinearLayout
-import android.widget.PopupMenu
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
@@ -66,6 +69,9 @@ import com.example.bookingregister.ui.views.BookingDaysProvider
 import com.example.bookingregister.room.domain.RoomLifecycleStatus
 import com.example.bookingregister.source.domain.DefaultBookingSourceCatalog
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
@@ -542,35 +548,32 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             .start()
     }
 
-    private fun showMenu(anchor: android.view.View) {
-        PopupMenu(this, anchor).apply {
-            menu.add("Organization")
-            menu.add("Properties")
-            menu.add("Manage Orders")
-            menu.add("Bills")
-            menu.add("Users")
-            menu.add("Share Staff Sheet")
-            menu.add("Export Bookings")
-            menu.add("Booking Records")
-            menu.add("Logout")
-
-            setOnMenuItemClickListener { item ->
-                when (item.title.toString()) {
-                    "Organization" -> showHotelDialog()
-                    "Properties" -> showPropertiesDialog()
-                    "Manage Orders" -> openFoodBilling(FoodBillingActivity.MODE_ACTIVE_ORDERS)
-                    "Bills" -> openFoodBilling(FoodBillingActivity.MODE_BILLS_ARCHIVE)
-                    "Users" -> showUsersDialog()
-                    "Share Staff Sheet" -> shareStaffSheetImage()
-                    "Export Bookings" -> showExportOptionsDialog()
-                    "Booking Records" -> openBookingRecords()
-                    "Logout" -> logout()
-                }
-                true
-            }
-
-            show()
-        }
+    private fun showMenu(@Suppress("UNUSED_PARAMETER") anchor: android.view.View) {
+        showPropertyMenuDialog(
+            title = "Menu",
+            subtitle = "Manage your hotel",
+            actions = listOf(
+                PropertyMenuAction("Organization", "Hotel name and contact") { showHotelDialog() },
+                PropertyMenuAction("Properties", "Rooms, billing and settings") { showPropertiesDialog() },
+                PropertyMenuAction("Manage orders", "Restaurant orders") {
+                    openFoodBilling(FoodBillingActivity.MODE_ACTIVE_ORDERS)
+                },
+                PropertyMenuAction("Bills", "Food billing archive") {
+                    openFoodBilling(FoodBillingActivity.MODE_BILLS_ARCHIVE)
+                },
+                PropertyMenuAction("Users", "Staff access") { showUsersDialog() },
+                PropertyMenuAction("Share staff sheet", "Send today's room sheet") {
+                    shareStaffSheetImage()
+                },
+                PropertyMenuAction("Export bookings", "Download booking records") {
+                    showExportOptionsDialog()
+                },
+                PropertyMenuAction("Booking records", "Search all bookings") {
+                    openBookingRecords()
+                },
+                PropertyMenuAction("Logout", "Sign out of this device") { logout() }
+            )
+        )
     }
 
     private fun openFoodBilling(mode: String) {
@@ -600,41 +603,32 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             return
         }
 
-        val labels = mutableListOf("Add Service")
         val visibleServices = serviceMenuItems
             .filter { service -> property == null || service.propertyRemoteId == property.remoteId }
-        labels.addAll(visibleServices.map { service ->
-            buildString {
-                append(service.serviceName)
-                append(" - Rs ").append(formatPlainAmount(service.price))
-                append(" | GST ").append(formatPlainAmount(service.gstRatePercent)).append("%")
-                service.sacCode?.takeIf { it.isNotBlank() }?.let { append(" | SAC ").append(it) }
-            }
-        })
-
-        AlertDialog.Builder(this)
-            .setTitle(property?.let { "Other Services - ${it.propertyName}" } ?: "Services")
-            .setItems(labels.toTypedArray()) { _, index ->
-                if (index == 0) {
-                    showServiceEditorDialog(null, property)
-                } else {
-                    showServiceEditorDialog(visibleServices[index - 1], property)
-                }
-            }
-            .setNegativeButton("Back") { _, _ ->
-                property?.let { showPropertyOptionsDialog(it) }
-            }
-            .show()
+        showPropertyMenuDialog(
+            title = "Other services",
+            subtitle = property?.propertyName ?: "Hotel services",
+            primaryAction = PropertyMenuAction("+  Add service", "") {
+                showServiceEditorDialog(null, property)
+            },
+            actions = visibleServices.map { service ->
+                PropertyMenuAction(
+                    title = service.serviceName,
+                    detail = "₹${formatPlainAmount(service.price)}  ·  GST ${formatPlainAmount(service.gstRatePercent)}%" +
+                        service.sacCode?.takeIf(String::isNotBlank)?.let { "  ·  SAC $it" }.orEmpty(),
+                    onClick = { showServiceEditorDialog(service, property) }
+                )
+            },
+            emptyMessage = "No services added yet.",
+            onClose = property?.let { { showPropertyOptionsDialog(it) } }
+        )
     }
 
     private fun showServiceEditorDialog(
         service: ServiceMenuItemEntity?,
         lockedProperty: ManagedPropertyEntity? = null
     ) {
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(32, 12, 32, 0)
-        }
+        val layout = menuFormLayout()
 
         val serviceName = EditText(this).apply {
             hint = "Service name, e.g. Bonfire"
@@ -678,18 +672,30 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
             setSelection(if (service?.taxInclusive == false) 1 else 0)
         }
-        listOf(serviceName, price, gstRate, sacCode, unitLabel, categoryName, description)
-            .forEach { layout.addView(it) }
+        menuFormSection(layout, "Service")
+        menuFormField(layout, serviceName, "Service name")
+        menuFormField(layout, price)
+        menuFormSection(layout, "Tax")
+        menuFormField(layout, gstRate)
+        menuFormField(layout, sacCode)
         layout.addView(TextView(this).apply {
             text = "Tax setting"
-            setPadding(0, 18, 0, 4)
-            setTextColor(Color.parseColor("#666666"))
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, propertyDp(6), 0, propertyDp(4))
+            setTextColor(Color.parseColor("#5E43C8"))
         })
-        layout.addView(taxSpinner)
+        layout.addView(taxSpinner, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, propertyDp(52)
+        ))
+        menuFormSection(layout, "Details")
+        menuFormField(layout, unitLabel, "Unit")
+        menuFormField(layout, categoryName, "Category")
+        menuFormField(layout, description, "Description (optional)")
 
-        val dialog = AlertDialog.Builder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(if (service == null) "Add Service" else "Edit Service")
-            .setView(layout)
+            .setView(ScrollView(this).apply { addView(layout) })
             .setPositiveButton("Save", null)
             .setNegativeButton("Cancel") { _, _ ->
                 showServicesDialog(lockedProperty)
@@ -700,6 +706,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             .create()
 
         dialog.setOnShowListener {
+            styleMenuSaveButton(dialog)
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val cleanName = serviceName.text.toString().trim()
                 if (cleanName.isEmpty()) {
@@ -770,7 +777,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
 
                 val content = LinearLayout(this@BookingChartActivity).apply {
                     orientation = LinearLayout.VERTICAL
-                    setPadding(32, 12, 32, 12)
+                    setPadding(propertyDp(20), propertyDp(12), propertyDp(20), propertyDp(8))
                 }
 
                 if (result.users.isEmpty()) {
@@ -780,41 +787,42 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                         setPadding(0, 24, 0, 24)
                     })
                 } else {
-                    result.users.forEachIndexed { index, user ->
+                    result.users.forEach { user ->
                         val displayName = user.displayName.ifBlank {
                             user.email.ifBlank { "Unnamed user" }
                         }
                         val emailLine = user.email.takeIf { it.isNotBlank() }
                         val status = if (user.active) "Active" else "Inactive"
 
-                        content.addView(TextView(this@BookingChartActivity).apply {
-                            text = buildString {
-                                append(displayName)
-                                if (emailLine != null && emailLine != displayName) {
-                                    append("\n")
-                                    append(emailLine)
-                                }
-                                append("\nRole: ")
-                                append(user.role)
-                                append("   •   ")
-                                append(status)
-                            }
-                            textSize = 15f
-                            setTextColor(
-                                if (user.active) Color.parseColor("#222222")
-                                else Color.parseColor("#777777")
+                        content.addView(LinearLayout(this@BookingChartActivity).apply {
+                            orientation = LinearLayout.VERTICAL
+                            setPadding(propertyDp(14), propertyDp(12), propertyDp(14), propertyDp(12))
+                            background = propertyMenuBackground(
+                                Color.WHITE, Color.parseColor("#E5E0EC")
                             )
-                            setPadding(0, 18, 0, 18)
-                        })
-
-                        if (index < result.users.lastIndex) {
-                            content.addView(View(this@BookingChartActivity).apply {
-                                setBackgroundColor(Color.parseColor("#E0E0E0"))
-                            }, LinearLayout.LayoutParams(
-                                LinearLayout.LayoutParams.MATCH_PARENT,
-                                1
-                            ))
-                        }
+                            addView(TextView(this@BookingChartActivity).apply {
+                                text = displayName
+                                textSize = 16f
+                                setTypeface(typeface, Typeface.BOLD)
+                                setTextColor(Color.parseColor("#252333"))
+                            })
+                            if (emailLine != null && emailLine != displayName) {
+                                addView(TextView(this@BookingChartActivity).apply {
+                                    text = emailLine
+                                    textSize = 13f
+                                    setTextColor(Color.parseColor("#6E6A79"))
+                                })
+                            }
+                            addView(TextView(this@BookingChartActivity).apply {
+                                text = "${user.role}  ·  $status"
+                                textSize = 12f
+                                setTextColor(Color.parseColor("#5E43C8"))
+                                setPadding(0, propertyDp(6), 0, 0)
+                            })
+                        }, LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT
+                        ).apply { bottomMargin = propertyDp(8) })
                     }
                 }
 
@@ -822,14 +830,14 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                     addView(content)
                 }
 
-                AlertDialog.Builder(this@BookingChartActivity)
+                MaterialAlertDialogBuilder(this@BookingChartActivity)
                     .setTitle("Users (${result.users.size})")
                     .setView(scrollView)
                     .setPositiveButton("Add User") { _, _ ->
                         showAddUserDialog()
                     }
                     .setNegativeButton("Close", null)
-                    .show()
+                    .show().also(::styleMenuSaveButton)
             }.onFailure { error ->
                 if (isFinishing || isDestroyed) return@onFailure
 
@@ -842,10 +850,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         }
     }
     private fun showAddUserDialog() {
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(32, 12, 32, 0)
-        }
+        val layout = menuFormLayout()
 
         val displayNameInput = EditText(this).apply {
             hint = "Staff name"
@@ -873,14 +878,20 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             }
         }
 
-        layout.addView(displayNameInput)
-        layout.addView(emailInput)
-        layout.addView(passwordInput)
+        menuFormSection(layout, "Staff account")
+        menuFormField(layout, displayNameInput)
+        menuFormField(layout, emailInput)
+        menuFormField(layout, passwordInput)
         layout.addView(TextView(this).apply {
             text = "Role"
-            setPadding(0, 18, 0, 4)
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.parseColor("#5E43C8"))
+            setPadding(0, propertyDp(6), 0, propertyDp(4))
         })
-        layout.addView(roleSpinner)
+        layout.addView(roleSpinner, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, propertyDp(52)
+        ))
         layout.addView(TextView(this).apply {
             text = "Staff can manage bookings. Managers can also add users."
             setPadding(0, 18, 0, 0)
@@ -888,14 +899,15 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             setTextColor(Color.parseColor("#666666"))
         })
 
-        val dialog = AlertDialog.Builder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle("Add User")
-            .setView(layout)
+            .setView(ScrollView(this).apply { addView(layout) })
             .setPositiveButton("Add", null)
             .setNegativeButton("Cancel", null)
             .create()
 
         dialog.setOnShowListener {
+            styleMenuSaveButton(dialog)
             val addButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
             addButton.setOnClickListener {
                 val email = emailInput.text.toString().trim()
@@ -953,19 +965,17 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
     }
 
     private fun showRoomsMenu(property: ManagedPropertyEntity? = null) {
-        val options = arrayOf("Add Room", "Manage Rooms")
-        AlertDialog.Builder(this)
-            .setTitle(property?.let { "Rooms - ${it.propertyName}" } ?: "Rooms")
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> showAddRoomDialog(property)
-                    1 -> showManageRoomsDialog(property)
+        showPropertyMenuDialog(
+            title = "Rooms",
+            subtitle = property?.propertyName ?: "Room inventory",
+            primaryAction = PropertyMenuAction("+  Add room", "") { showAddRoomDialog(property) },
+            actions = listOf(
+                PropertyMenuAction("Manage rooms", "Edit, reorder or change status") {
+                    showManageRoomsDialog(property)
                 }
-            }
-            .setNegativeButton("Back") { _, _ ->
-                property?.let { showPropertyOptionsDialog(it) }
-            }
-            .show()
+            ),
+            onClose = property?.let { { showPropertyOptionsDialog(it) } }
+        )
     }
 
     private fun showSourcesDialog(property: ManagedPropertyEntity? = null) {
@@ -974,38 +984,27 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             .filter { source -> property == null || source.propertyRemoteId == property.remoteId }
             .sortedWith(compareBy<BookingSourceEntity> { it.sourceName.lowercase() })
 
-        val names = mutableListOf<String>()
-        if (canManageSources) {
-            names.add("Add Source")
-        }
-        names.addAll(visibleSources.map { "${it.sourceName} (${it.sourceType.displaySourceType()})" })
-
-        if (names.isEmpty()) {
-            names.add("No booking sources configured")
-        }
-
-        AlertDialog.Builder(this)
-            .setTitle(property?.let { "Booking Sources - ${it.propertyName}" } ?: "Sources")
-            .setItems(names.toTypedArray()) { _, index ->
-                if (!canManageSources) {
-                    Toast.makeText(
-                        this,
-                        "Only owner or manager can manage booking sources.",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    return@setItems
+        showPropertyMenuDialog(
+            title = "Booking sources",
+            subtitle = property?.propertyName ?: "Hotel channels",
+            primaryAction = if (canManageSources) {
+                PropertyMenuAction("+  Add source", "") { showSourceCatalogDialog(property) }
+            } else null,
+            actions = visibleSources.map { source ->
+                PropertyMenuAction(source.sourceName, source.sourceType.displaySourceType()) {
+                    if (canManageSources) {
+                        showSourceEditorDialog(source, property)
+                    } else {
+                        Toast.makeText(
+                            this, "Only owner or manager can manage booking sources.",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
                 }
-
-                if (index == 0) {
-                    showSourceCatalogDialog(property)
-                } else {
-                    showSourceEditorDialog(visibleSources[index - 1], property)
-                }
-            }
-            .setNegativeButton("Back") { _, _ ->
-                property?.let { showPropertyOptionsDialog(it) }
-            }
-            .show()
+            },
+            emptyMessage = "No booking sources configured.",
+            onClose = property?.let { { showPropertyOptionsDialog(it) } }
+        )
     }
 
     private fun showSourceCatalogDialog(property: ManagedPropertyEntity? = null) {
@@ -1026,31 +1025,25 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         val availableCatalogSources = DefaultBookingSourceCatalog.sources
             .filterNot { it.displayName.trim().lowercase(Locale.ROOT) in configuredNames }
 
-        val names = availableCatalogSources.map { it.displayName }.toMutableList()
-        names.add("Add New Source")
-
-        AlertDialog.Builder(this)
-            .setTitle("Choose Booking Source")
-            .setItems(names.toTypedArray()) { _, index ->
-                if (index < availableCatalogSources.size) {
-                    val selected = availableCatalogSources[index]
+        showPropertyMenuDialog(
+            title = "Choose booking source",
+            subtitle = "Select a channel or create your own",
+            primaryAction = PropertyMenuAction("+  Custom source", "") {
+                showSourceEditorDialog(source = null, lockedProperty = property)
+            },
+            actions = availableCatalogSources.map { selected ->
+                PropertyMenuAction(selected.displayName, selected.sourceType.displaySourceType()) {
                     showSourceEditorDialog(
                         source = null,
                         lockedProperty = property,
                         suggestedName = selected.displayName,
                         suggestedType = selected.sourceType
                     )
-                } else {
-                    showSourceEditorDialog(
-                        source = null,
-                        lockedProperty = property
-                    )
                 }
-            }
-            .setNegativeButton("Back") { _, _ ->
-                showSourcesDialog(property)
-            }
-            .show()
+            },
+            emptyMessage = "All standard sources are already configured.",
+            onClose = { showSourcesDialog(property) }
+        )
     }
     private fun showSourceEditorDialog(
         source: BookingSourceEntity?,
@@ -1066,10 +1059,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             ).show()
             return
         }
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(32, 12, 32, 0)
-        }
+        val layout = menuFormLayout()
         val nameInput = EditText(this).apply {
             hint = "Source name"
             setSingleLine(true)
@@ -1102,18 +1092,27 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             }
         }
 
-        layout.addView(nameInput)
         propertyLabel?.let { layout.addView(it) }
+        menuFormSection(layout, "Channel")
+        menuFormField(layout, nameInput, "Source name")
         layout.addView(TextView(this).apply {
             text = "Type"
-            setPadding(0, 18, 0, 4)
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.parseColor("#5E43C8"))
+            setPadding(0, propertyDp(6), 0, propertyDp(4))
         })
-        layout.addView(typeSpinner)
-        listOf(commission, commissionGst, tcs, tds, fee).forEach { layout.addView(it) }
+        layout.addView(typeSpinner, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, propertyDp(52)
+        ).apply { bottomMargin = propertyDp(12) })
+        menuFormSection(layout, "Fees & deductions")
+        listOf(commission, commissionGst, tcs, tds, fee).forEach {
+            menuFormField(layout, it)
+        }
 
-        val dialog = AlertDialog.Builder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(if (source == null) "Add Source" else "Edit Source")
-            .setView(layout)
+            .setView(ScrollView(this).apply { addView(layout) })
             .setPositiveButton("Save", null)
             .setNegativeButton("Cancel") { _, _ ->
                 showSourcesDialog(lockedProperty)
@@ -1129,6 +1128,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             .create()
 
         dialog.setOnShowListener {
+            styleMenuSaveButton(dialog)
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val name = nameInput.text.toString().trim()
                 if (name.isEmpty()) {
@@ -1191,7 +1191,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             address.setText(hotel.address.orEmpty())
         } ?: hotelName.setText("Booking Register")
 
-        val dialog = AlertDialog.Builder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle("Organization")
             .setView(dialogView)
             .setPositiveButton("Save", null)
@@ -1199,6 +1199,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             .create()
 
         dialog.setOnShowListener {
+            styleMenuSaveButton(dialog)
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 repository.saveHotel(
                     hotelName = hotelName.text.toString(),
@@ -1212,51 +1213,232 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         dialog.show()
     }
 
-    private fun showPropertiesDialog() {
-        val names = mutableListOf("Add Property")
-        names.addAll(managedProperties.map { property ->
-            val gst = property.gstNumber?.takeIf { it.isNotBlank() }?.let { " - GST $it" }.orEmpty()
-            "${property.propertyName}$gst"
+    private data class PropertyMenuAction(
+        val title: String,
+        val detail: String,
+        val onClick: () -> Unit
+    )
+
+    private fun propertyDp(value: Int): Int =
+        (value * resources.displayMetrics.density + 0.5f).toInt()
+
+    private fun menuFormLayout(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(propertyDp(20), propertyDp(12), propertyDp(20), propertyDp(8))
+    }
+
+    private fun menuFormSection(layout: LinearLayout, title: String) {
+        layout.addView(TextView(this).apply {
+            text = title.uppercase(Locale.ROOT)
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.parseColor("#5E43C8"))
+            setPadding(0, propertyDp(12), 0, propertyDp(10))
+        })
+    }
+
+    private fun menuFormField(
+        layout: LinearLayout,
+        input: EditText,
+        label: String = input.hint?.toString().orEmpty()
+    ): TextInputLayout {
+        input.hint = null
+        input.background = null
+        val wrapper = TextInputLayout(this).apply {
+            hint = label
+            boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+            boxBackgroundColor = Color.WHITE
+            setBoxCornerRadii(
+                propertyDp(12).toFloat(), propertyDp(12).toFloat(),
+                propertyDp(12).toFloat(), propertyDp(12).toFloat()
+            )
+            addView(input)
+        }
+        layout.addView(wrapper, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = propertyDp(10) })
+        return wrapper
+    }
+
+    private fun styleMenuSaveButton(dialog: AlertDialog) {
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.apply {
+            isAllCaps = false
+            backgroundTintList = ColorStateList.valueOf(Color.parseColor("#5E43C8"))
+            setTextColor(Color.WHITE)
+        }
+    }
+
+    private fun propertyMenuBackground(fill: Int, stroke: Int): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(fill)
+            cornerRadius = propertyDp(16).toFloat()
+            setStroke(propertyDp(1), stroke)
+        }
+
+    private fun showPropertyMenuDialog(
+        title: String,
+        subtitle: String,
+        actions: List<PropertyMenuAction>,
+        primaryAction: PropertyMenuAction? = null,
+        onClose: (() -> Unit)? = null,
+        emptyMessage: String? = null
+    ) {
+        val ink = Color.parseColor("#252333")
+        val muted = Color.parseColor("#6E6A79")
+        val purple = Color.parseColor("#5E43C8")
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(propertyDp(20), propertyDp(24), propertyDp(20), propertyDp(8))
+        }
+        root.addView(TextView(this).apply {
+            text = title
+            textSize = 23f
+            setTextColor(ink)
+            setTypeface(typeface, Typeface.BOLD)
+        })
+        root.addView(TextView(this).apply {
+            text = subtitle
+            textSize = 13f
+            setTextColor(muted)
+            setPadding(0, propertyDp(4), 0, propertyDp(18))
         })
 
-        AlertDialog.Builder(this)
-            .setTitle("Properties / GST Billing")
-            .setItems(names.toTypedArray()) { _, index ->
-                if (index == 0) {
-                    showPropertyEditorDialog(null)
-                } else {
-                    showPropertyOptionsDialog(managedProperties[index - 1])
+        var dialog: AlertDialog? = null
+        primaryAction?.let { action ->
+            root.addView(MaterialButton(this).apply {
+                text = action.title
+                isAllCaps = false
+                textSize = 15f
+                cornerRadius = propertyDp(14)
+                minHeight = propertyDp(52)
+                backgroundTintList = ColorStateList.valueOf(purple)
+                setTextColor(Color.WHITE)
+                setOnClickListener {
+                    dialog?.dismiss()
+                    action.onClick()
+                }
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = propertyDp(12) })
+        }
+
+        actions.forEachIndexed { index, action ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(propertyDp(14), propertyDp(10), propertyDp(14), propertyDp(10))
+                background = RippleDrawable(
+                    ColorStateList.valueOf(Color.parseColor("#E8E1FA")),
+                    propertyMenuBackground(Color.WHITE, Color.parseColor("#E5E0EC")),
+                    null
+                )
+                isClickable = true
+                isFocusable = true
+                contentDescription = action.title
+                setOnClickListener {
+                    dialog?.dismiss()
+                    action.onClick()
                 }
             }
-            .setNegativeButton("Close", null)
-            .show()
+            row.addView(TextView(this).apply {
+                text = "%02d".format(index + 1)
+                textSize = 12f
+                gravity = Gravity.CENTER
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(purple)
+                background = propertyMenuBackground(
+                    Color.parseColor("#F0ECFF"), Color.parseColor("#F0ECFF")
+                )
+            }, LinearLayout.LayoutParams(propertyDp(38), propertyDp(38)))
+            row.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(propertyDp(12), 0, propertyDp(6), 0)
+                addView(TextView(this@BookingChartActivity).apply {
+                    text = action.title
+                    textSize = 16f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(ink)
+                })
+                if (action.detail.isNotBlank()) {
+                    addView(TextView(this@BookingChartActivity).apply {
+                        text = action.detail
+                        textSize = 12f
+                        setTextColor(muted)
+                    })
+                }
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(TextView(this).apply {
+                text = "›"
+                textSize = 28f
+                setTextColor(purple)
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(propertyDp(24), propertyDp(38)))
+            root.addView(row, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = propertyDp(8) })
+        }
+
+        if (actions.isEmpty() && emptyMessage != null) {
+            root.addView(TextView(this).apply {
+                text = emptyMessage
+                textSize = 14f
+                setTextColor(muted)
+                setPadding(propertyDp(4), propertyDp(8), propertyDp(4), propertyDp(18))
+            })
+        }
+
+        dialog = MaterialAlertDialogBuilder(this)
+            .setView(ScrollView(this).apply {
+                isFillViewport = false
+                addView(root)
+            })
+            .setNegativeButton(if (onClose == null) "Close" else "Back") { _, _ ->
+                onClose?.invoke()
+            }
+            .create()
+        dialog.show()
+    }
+
+    private fun showPropertiesDialog() {
+        showPropertyMenuDialog(
+            title = "Properties",
+            subtitle = "Manage each property's rooms and billing profile",
+            primaryAction = PropertyMenuAction("+  Add property", "") {
+                showPropertyEditorDialog(null)
+            },
+            actions = managedProperties.map { property ->
+                PropertyMenuAction(
+                    title = property.propertyName,
+                    detail = property.gstNumber?.takeIf(String::isNotBlank)
+                        ?.let { "GSTIN  $it" } ?: "Property settings",
+                    onClick = { showPropertyOptionsDialog(property) }
+                )
+            }
+        )
     }
 
     private fun showPropertyOptionsDialog(property: ManagedPropertyEntity) {
-        val options = arrayOf(
-            "Property Details",
-            "Rooms",
-            "Food Menu",
-            "Room GST Slabs",
-            "Booking Sources",
-            "Other Services"
-        )
-
-
-        AlertDialog.Builder(this)
-            .setTitle(property.propertyName)
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> showPropertyEditorDialog(property)
-                    1 -> showRoomsMenu(property)
-                    2 -> openPropertyFoodMenu(property)
-                    3 -> showRoomGstSlabsDialog()
-                    4 -> showSourcesDialog(property)
-                    5 -> showServicesDialog(property)
+        showPropertyMenuDialog(
+            title = property.propertyName,
+            subtitle = "Property settings",
+            actions = listOf(
+                PropertyMenuAction("Property details", "Profile, contact and billing") {
+                    showPropertyEditorDialog(property)
+                },
+                PropertyMenuAction("Rooms", "Manage room inventory") { showRoomsMenu(property) },
+                PropertyMenuAction("Food menu", "Items and prices") { openPropertyFoodMenu(property) },
+                PropertyMenuAction("Room GST slabs", "Tax rates by tariff") { showRoomGstSlabsDialog() },
+                PropertyMenuAction("Booking sources", "Direct, OTA and agent channels") {
+                    showSourcesDialog(property)
+                },
+                PropertyMenuAction("Other services", "Additional charge items") {
+                    showServicesDialog(property)
                 }
-            }
-            .setNegativeButton("Close", null)
-            .show()
+            )
+        )
     }
 
     private fun showPropertyEditorDialog(property: ManagedPropertyEntity?) {
@@ -1279,76 +1461,118 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         var billingIdentityUnlocked = !billingLocked
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(32, 12, 32, 0)
+            setPadding(propertyDp(20), propertyDp(12), propertyDp(20), propertyDp(8))
         }
 
-        val propertyName = EditText(this).apply {
-            hint = "Property name"
-            setSingleLine(true)
-            setText(property?.propertyName.orEmpty())
-            setSelection(text.length)
+        fun section(title: String) {
+            layout.addView(TextView(this).apply {
+                text = title
+                textSize = 14f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(Color.parseColor("#5E43C8"))
+                setPadding(0, propertyDp(12), 0, propertyDp(10))
+            })
         }
-        val legalName = EditText(this).apply {
-            hint = "Legal / billing name (supplier on GST bill)"
-            setSingleLine(true)
-            setText(property?.legalName.orEmpty())
+
+        fun field(
+            label: String,
+            value: String,
+            type: Int = InputType.TYPE_CLASS_TEXT,
+            multiline: Boolean = false
+        ): Pair<TextInputLayout, TextInputEditText> {
+            val wrapper = TextInputLayout(this).apply {
+                hint = label
+                boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+                boxBackgroundColor = Color.WHITE
+                setBoxCornerRadii(
+                    propertyDp(12).toFloat(), propertyDp(12).toFloat(),
+                    propertyDp(12).toFloat(), propertyDp(12).toFloat()
+                )
+            }
+            val input = TextInputEditText(this).apply {
+                inputType = type
+                if (multiline) {
+                    minLines = 2
+                    maxLines = 4
+                    gravity = Gravity.TOP or Gravity.START
+                } else {
+                    setSingleLine(true)
+                }
+                setText(value)
+            }
+            wrapper.addView(input)
+            layout.addView(wrapper, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = propertyDp(10) })
+            return wrapper to input
         }
-        val gstNumber = EditText(this).apply {
-            hint = "GSTIN for this property"
-            setSingleLine(true)
-            setText(property?.gstNumber.orEmpty())
+
+        if (billingLocked) {
+            layout.addView(TextView(this).apply {
+                text = "Billing identity is locked because this property has issued bills. Unlock it only to change details for future bills."
+                textSize = 13f
+                setTextColor(Color.parseColor("#765006"))
+                setPadding(propertyDp(14), propertyDp(12), propertyDp(14), propertyDp(12))
+                background = propertyMenuBackground(
+                    Color.parseColor("#FFF8E9"), Color.parseColor("#F0DDAA")
+                )
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = propertyDp(12) })
         }
-        val phone = EditText(this).apply {
-            hint = "Phone"
-            setSingleLine(true)
-            inputType = InputType.TYPE_CLASS_PHONE
-            setText(property?.phone.orEmpty())
-        }
-        val email = EditText(this).apply {
-            hint = "Email"
-            setSingleLine(true)
-            inputType = InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
-            setText(property?.email.orEmpty())
-        }
-        val invoicePrefix = EditText(this).apply {
-            hint = "Invoice prefix"
-            setSingleLine(true)
-            setText(property?.invoicePrefix.orEmpty())
-        }
-        val state = EditText(this).apply {
-            hint = "State"
-            setSingleLine(true)
-            setText(property?.state.orEmpty())
-        }
-        val address = EditText(this).apply {
-            hint = "Address"
-            minLines = 2
-            setText(property?.address.orEmpty())
-        }
+
+        section("PROPERTY")
+        val (propertyNameLayout, propertyName) = field(
+            "Property name", property?.propertyName.orEmpty()
+        )
+        propertyName.setSelection(propertyName.text?.length ?: 0)
+
+        section("BILLING IDENTITY")
+        val (legalNameLayout, legalName) = field(
+            "Legal / billing name", property?.legalName.orEmpty()
+        )
+        val (gstNumberLayout, gstNumber) = field(
+            "GSTIN", property?.gstNumber.orEmpty()
+        )
+
+        section("CONTACT")
+        val (_, phone) = field(
+            "Phone number", property?.phone.orEmpty(), InputType.TYPE_CLASS_PHONE
+        )
+        val (_, email) = field(
+            "Email address", property?.email.orEmpty(),
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+        )
+
+        section("INVOICE DETAILS")
+        val (invoicePrefixLayout, invoicePrefix) = field(
+            "Invoice prefix", property?.invoicePrefix.orEmpty()
+        )
+        val (stateLayout, state) = field("State", property?.state.orEmpty())
+        val (addressLayout, address) = field(
+            "Billing address", property?.address.orEmpty(),
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE, multiline = true
+        )
 
         fun setBillingFieldsEditable(editable: Boolean) {
-            listOf(legalName, gstNumber, invoicePrefix, state, address).forEach { field ->
-                field.isEnabled = editable
-                field.alpha = if (editable) 1f else 0.72f
+            listOf(
+                legalNameLayout, gstNumberLayout, invoicePrefixLayout,
+                stateLayout, addressLayout
+            ).forEach { fieldLayout ->
+                fieldLayout.isEnabled = editable
+                fieldLayout.alpha = if (editable) 1f else 0.72f
             }
         }
 
         if (billingLocked) {
             setBillingFieldsEditable(false)
-            layout.addView(TextView(this).apply {
-                text = "Billing identity is locked because this property already has issued bills. Legal name, GSTIN, invoice prefix, state and billing address are preserved for invoice safety."
-                setPadding(0, 0, 0, 16)
-                textSize = 13f
-                setTextColor(Color.parseColor("#8A5A00"))
-            })
         }
 
-        listOf(propertyName, legalName, gstNumber, phone, email, invoicePrefix, state, address)
-            .forEach { layout.addView(it) }
-
-        val dialog = AlertDialog.Builder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(if (property == null) "Add Property Billing Profile" else "Edit Property Billing Profile")
-            .setView(layout)
+            .setView(ScrollView(this).apply { addView(layout) })
             .setPositiveButton("Save", null)
             .setNegativeButton("Cancel") { _, _ ->
                 if (property != null) {
@@ -1365,17 +1589,24 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             .create()
 
         dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).apply {
+                isAllCaps = false
+                backgroundTintList = ColorStateList.valueOf(Color.parseColor("#5E43C8"))
+                setTextColor(Color.WHITE)
+            }
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val name = propertyName.text.toString().trim()
                 if (name.isEmpty()) {
-                    propertyName.error = "Enter property name"
+                    propertyNameLayout.error = "Enter property name"
                     return@setOnClickListener
                 }
+                propertyNameLayout.error = null
                 val normalizedGstin = GstinValidator.normalize(gstNumber.text.toString())
                 if (!GstinValidator.isBlankOrValid(normalizedGstin)) {
-                    gstNumber.error = "Enter valid 15-character GSTIN or leave blank"
+                    gstNumberLayout.error = "Enter valid 15-character GSTIN or leave blank"
                     return@setOnClickListener
                 }
+                gstNumberLayout.error = null
                 repository.saveManagedProperty(
                     existing = property,
                     propertyName = name,
@@ -1478,7 +1709,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
     private fun showAddRoomDialog(property: ManagedPropertyEntity? = null) {
         val editor = createRoomEditor(null, property)
 
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle(property?.let { "Add Room - ${it.propertyName}" } ?: "Add Room")
             .setView(editor.view)
             .setPositiveButton("Save") { _, _ ->
@@ -1496,7 +1727,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             .setNegativeButton("Cancel") { _, _ ->
                 property?.let { showRoomsMenu(it) }
             }
-            .show()
+            .show().also(::styleMenuSaveButton)
     }
 
     private fun showRoomPlanDialog(booking: BookingEntity) {
@@ -2026,26 +2257,28 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
         val visibleRooms = rooms
             .filter { room -> property == null || room.propertyRemoteId == property.remoteId }
         if (visibleRooms.isEmpty()) {
-            Toast.makeText(this, "No rooms available", Toast.LENGTH_SHORT).show()
-            property?.let { showRoomsMenu(it) }
+            showPropertyMenuDialog(
+                title = "Manage rooms",
+                subtitle = property?.propertyName ?: "Room inventory",
+                actions = emptyList(),
+                emptyMessage = "No rooms available yet.",
+                onClose = { showRoomsMenu(property) }
+            )
             return
         }
 
-        val roomNames = visibleRooms.map { room ->
-            val status = RoomLifecycleStatus.normalize(room.lifecycleStatus)
-            if (status == RoomLifecycleStatus.ACTIVE) room.roomName else "${room.roomName}  [$status]"
-        }.toTypedArray()
-
-        AlertDialog.Builder(this)
-            .setTitle(property?.let { "Manage Rooms - ${it.propertyName}" } ?: "Manage Rooms")
-            .setItems(roomNames) { _, index ->
-                val selectedRoom = visibleRooms[index]
-                showRoomOptions(selectedRoom, property)
-            }
-            .setNegativeButton("Back") { _, _ ->
-                showRoomsMenu(property)
-            }
-            .show()
+        showPropertyMenuDialog(
+            title = "Manage rooms",
+            subtitle = property?.propertyName ?: "Room inventory",
+            actions = visibleRooms.map { room ->
+                PropertyMenuAction(
+                    room.roomName,
+                    RoomLifecycleStatus.normalize(room.lifecycleStatus).lowercase()
+                        .replaceFirstChar { it.uppercase() }
+                ) { showRoomOptions(room, property) }
+            },
+            onClose = { showRoomsMenu(property) }
+        )
     }
 
     private fun showRoomOptions(room: RoomEntity, property: ManagedPropertyEntity? = null) {
@@ -2056,10 +2289,12 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             else -> arrayOf("View retirement details")
         }
 
-        AlertDialog.Builder(this)
-            .setTitle(room.roomName)
-            .setItems(options) { _, which ->
-                when (status) {
+        showPropertyMenuDialog(
+            title = room.roomName,
+            subtitle = status.lowercase().replaceFirstChar { it.uppercase() },
+            actions = options.mapIndexed { which, option ->
+                PropertyMenuAction(option, "") {
+                    when (status) {
                     RoomLifecycleStatus.ACTIVE -> when (which) {
                         0 -> showEditRoomDialog(room, property)
                         1 -> {
@@ -2081,17 +2316,16 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
                         3 -> showRoomLifecycleDetails(room)
                     }
                     else -> showRoomLifecycleDetails(room)
+                    }
                 }
-            }
-            .setNegativeButton("Back") { _, _ ->
-                showManageRoomsDialog(property)
-            }
-            .show()
+            },
+            onClose = { showManageRoomsDialog(property) }
+        )
     }
     private fun showEditRoomDialog(room: RoomEntity, property: ManagedPropertyEntity? = null) {
         val editor = createRoomEditor(room, property)
 
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle(property?.let { "Edit Room - ${it.propertyName}" } ?: "Edit Room")
             .setView(editor.view)
             .setPositiveButton("Save") { _, _ ->
@@ -2107,17 +2341,14 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             .setNegativeButton("Cancel") { _, _ ->
                 showRoomOptions(room, property)
             }
-            .show()
+            .show().also(::styleMenuSaveButton)
     }
 
     private fun createRoomEditor(
         room: RoomEntity?,
         lockedProperty: ManagedPropertyEntity? = null
     ): RoomEditor {
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(32, 12, 32, 0)
-        }
+        val layout = menuFormLayout()
 
         val roomName = EditText(this).apply {
             hint = "Room name"
@@ -2126,7 +2357,8 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             setSelection(text.length)
         }
 
-        layout.addView(roomName)
+        menuFormSection(layout, "Room")
+        menuFormField(layout, roomName)
 
         return RoomEditor(
             view = layout,
@@ -2158,11 +2390,14 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             setSingleLine(false)
             minLines = 2
         }
+        val layout = menuFormLayout().apply {
+            menuFormField(this, reason)
+        }
         val action = if (targetStatus == RoomLifecycleStatus.RETIRED) "Retire" else "Disable"
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle("$action ${room.roomName}")
             .setMessage("Current and future bookings must first be moved, cancelled, or checked out.")
-            .setView(reason)
+            .setView(layout)
             .setPositiveButton(action) { _, _ ->
                 runRoomLifecycleAction(property) {
                     if (targetStatus == RoomLifecycleStatus.RETIRED) {
@@ -3136,22 +3371,21 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
     }
 
     private fun showExportOptionsDialog() {
-        val options = arrayOf(
-            "All Bookings",
-            "Today's Check-ins",
-            "Today's Check-outs"
-        )
-
-        AlertDialog.Builder(this)
-            .setTitle("Export Bookings")
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> exportBookingsCsv("all")
-                    1 -> exportBookingsCsv("today_checkins")
-                    2 -> exportBookingsCsv("today_checkouts")
+        showPropertyMenuDialog(
+            title = "Export bookings",
+            subtitle = "Choose which records to download",
+            actions = listOf(
+                PropertyMenuAction("All bookings", "Complete booking history") {
+                    exportBookingsCsv("all")
+                },
+                PropertyMenuAction("Today's check-ins", "Arrivals today") {
+                    exportBookingsCsv("today_checkins")
+                },
+                PropertyMenuAction("Today's check-outs", "Departures today") {
+                    exportBookingsCsv("today_checkouts")
                 }
-            }
-            .show()
+            )
+        )
     }
 
     private data class RoomEditor(
@@ -3172,32 +3406,26 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             .filter { !it.isDeleted }
             .sortedBy { it.minGrossAmount }
 
-        val labels = mutableListOf("Add Room GST Slab")
-        labels.addAll(
-            visibleSlabs.map { slab ->
+        showPropertyMenuDialog(
+            title = "Room GST slabs",
+            subtitle = "Tariff-based tax settings",
+            primaryAction = PropertyMenuAction("+  Add room GST slab", "") {
+                showRoomGstSlabEditorDialog(null)
+            },
+            actions = visibleSlabs.map { slab ->
                 val maxText = slab.maxGrossAmount?.let { formatPlainAmount(it) } ?: "No limit"
-                "${slab.slabName} | Rs ${formatPlainAmount(slab.minGrossAmount)} - $maxText | GST ${formatPlainAmount(slab.gstRatePercent)}% | HSN ${slab.hsnSacCode}"
-            }
+                PropertyMenuAction(
+                    title = slab.slabName,
+                    detail = "₹${formatPlainAmount(slab.minGrossAmount)}–$maxText  ·  GST ${formatPlainAmount(slab.gstRatePercent)}%  ·  HSN ${slab.hsnSacCode}",
+                    onClick = { showRoomGstSlabEditorDialog(slab) }
+                )
+            },
+            emptyMessage = "No room GST slabs configured."
         )
-
-        AlertDialog.Builder(this)
-            .setTitle("Room GST Slabs")
-            .setItems(labels.toTypedArray()) { _, index ->
-                if (index == 0) {
-                    showRoomGstSlabEditorDialog(null)
-                } else {
-                    showRoomGstSlabEditorDialog(visibleSlabs[index - 1])
-                }
-            }
-            .setNegativeButton("Close", null)
-            .show()
     }
 
     private fun showRoomGstSlabEditorDialog(slab: RoomGstSlabEntity?) {
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(32, 12, 32, 0)
-        }
+        val layout = menuFormLayout()
 
         val slabName = EditText(this).apply {
             hint = "Slab name"
@@ -3231,21 +3459,19 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             setText(slab?.notificationRef.orEmpty())
         }
 
-        listOf(
-            slabName,
-            minGross,
-            maxGross,
-            gstRate,
-            cgstRate,
-            sgstRate,
-            cessRate,
-            hsnSac,
-            notification
-        ).forEach { layout.addView(it) }
+        menuFormSection(layout, "Tariff range")
+        menuFormField(layout, slabName)
+        menuFormField(layout, minGross)
+        menuFormField(layout, maxGross, "Max gross room tariff (blank = no limit)")
+        menuFormSection(layout, "Tax rates")
+        listOf(gstRate, cgstRate, sgstRate, cessRate).forEach { menuFormField(layout, it) }
+        menuFormSection(layout, "Invoice details")
+        menuFormField(layout, hsnSac)
+        menuFormField(layout, notification, "Notification / reference (optional)")
 
-        val dialog = AlertDialog.Builder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(if (slab == null) "Add Room GST Slab" else "Edit Room GST Slab")
-            .setView(layout)
+            .setView(ScrollView(this).apply { addView(layout) })
             .setPositiveButton("Save", null)
             .setNegativeButton("Back") { _, _ -> showRoomGstSlabsDialog() }
             .apply {
@@ -3256,6 +3482,7 @@ class BookingChartActivity : AppCompatActivity(), BookingChartView.Listener {
             .create()
 
         dialog.setOnShowListener {
+            styleMenuSaveButton(dialog)
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val name = slabName.text.toString().trim()
                 val min = minGross.numberValue()

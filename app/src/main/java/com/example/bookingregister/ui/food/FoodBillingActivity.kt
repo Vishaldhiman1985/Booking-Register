@@ -1,9 +1,11 @@
 ﻿package com.example.bookingregister.ui.food
 
 import android.app.DatePickerDialog
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.content.Intent
 import android.graphics.Typeface
+import android.graphics.drawable.RippleDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.text.Editable
@@ -45,6 +47,9 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.textfield.TextInputLayout
 import com.example.bookingregister.R
 import com.example.bookingregister.booking.domain.BookingStatus
 import com.example.bookingregister.data.entities.BookingEntity
@@ -307,17 +312,7 @@ class FoodBillingActivity : AppCompatActivity() {
                 showBillsMoreMenu(it)
                 return@setOnClickListener
             }
-            AlertDialog.Builder(this)
-                .setTitle("Food Menu")
-                .setItems(arrayOf("Menu Items", "Food Item GST Categories", "Import Menu CSV", "Download Sample CSV")) { _, which ->
-                    when (which) {
-                        0 -> showMenuItemsManagerDialog()
-                        1 -> showFoodGstCategoriesDialog()
-                        2 -> importMenuCsvLauncher.launch(arrayOf("text/*", "text/csv", "application/csv", "application/vnd.ms-excel"))
-                        3 -> sampleMenuCsvLauncher.launch("food-menu-import-sample.csv")
-                    }
-                }
-                .show()
+            showFoodMenuOptionsDialog()
         }
 
         findViewById<TextView>(R.id.tabActiveOrders).setOnClickListener {
@@ -1173,6 +1168,109 @@ class FoodBillingActivity : AppCompatActivity() {
         return (value * resources.displayMetrics.density).toInt()
     }
 
+    private fun foodMenuField(layout: LinearLayout, input: EditText, label: String) {
+        input.hint = null
+        input.background = null
+        val wrapper = TextInputLayout(this).apply {
+            hint = label
+            boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+            boxBackgroundColor = Color.WHITE
+            setBoxCornerRadii(dp(12).toFloat(), dp(12).toFloat(), dp(12).toFloat(), dp(12).toFloat())
+            addView(input)
+        }
+        layout.addView(wrapper, LinearLayout.LayoutParams(-1, -2).apply {
+            bottomMargin = dp(10)
+        })
+    }
+
+    private fun foodMenuSection(layout: LinearLayout, title: String) {
+        layout.addView(TextView(this).apply {
+            text = title
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor(GREEN))
+            setPadding(0, dp(10), 0, dp(10))
+        })
+    }
+
+    private fun styleFoodMenuSave(dialog: AlertDialog) {
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.apply {
+            isAllCaps = false
+            backgroundTintList = ColorStateList.valueOf(Color.parseColor(GREEN))
+            setTextColor(Color.WHITE)
+        }
+    }
+
+    private fun showFoodMenuOptionsDialog() {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(20), dp(20), dp(8))
+        }
+        root.addView(TextView(this).apply {
+            text = "Food menu"
+            textSize = 23f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#252333"))
+        })
+        root.addView(TextView(this).apply {
+            text = "Items, tax categories and imports"
+            textSize = 13f
+            setTextColor(Color.DKGRAY)
+            setPadding(0, dp(4), 0, dp(16))
+        })
+        val actions = listOf(
+            Triple("Menu items", "Names, categories and prices", { showMenuItemsManagerDialog() }),
+            Triple("Food item GST categories", "GST and HSN/SAC", { showFoodGstCategoriesDialog() }),
+            Triple("Import menu CSV", "Add items from a file", {
+                importMenuCsvLauncher.launch(arrayOf("text/*", "text/csv", "application/csv", "application/vnd.ms-excel"))
+            }),
+            Triple("Download sample CSV", "Template for menu imports", {
+                sampleMenuCsvLauncher.launch("food-menu-import-sample.csv")
+            })
+        )
+        var dialog: AlertDialog? = null
+        actions.forEach { (title, detail, action) ->
+            root.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                background = RippleDrawable(
+                    ColorStateList.valueOf(Color.parseColor("#DDF7F2")),
+                    rounded(Color.WHITE, Color.parseColor("#DFEBE8"), 14f), null
+                )
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    dialog?.dismiss()
+                    action()
+                }
+                addView(LinearLayout(this@FoodBillingActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(TextView(this@FoodBillingActivity).apply {
+                        text = title
+                        textSize = 16f
+                        typeface = Typeface.DEFAULT_BOLD
+                    })
+                    addView(TextView(this@FoodBillingActivity).apply {
+                        text = detail
+                        textSize = 12f
+                        setTextColor(Color.DKGRAY)
+                    })
+                }, LinearLayout.LayoutParams(0, -2, 1f))
+                addView(TextView(this@FoodBillingActivity).apply {
+                    text = "›"
+                    textSize = 28f
+                    setTextColor(Color.parseColor(GREEN))
+                })
+            }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+        }
+        dialog = MaterialAlertDialogBuilder(this)
+            .setView(ScrollView(this).apply { addView(root) })
+            .setNegativeButton("Close", null)
+            .create()
+        dialog.show()
+    }
+
     private fun showMenuItemsManagerDialog() {
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1219,7 +1317,7 @@ class FoodBillingActivity : AppCompatActivity() {
                 }
             }
         }
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle("Menu Items")
             .setView(ScrollView(this).apply { addView(layout) })
             .setPositiveButton("Add Item") { _, _ -> showMenuItemDialog(null) }
@@ -1227,7 +1325,7 @@ class FoodBillingActivity : AppCompatActivity() {
                 importMenuCsvLauncher.launch(arrayOf("text/*", "text/csv", "application/csv", "application/vnd.ms-excel"))
             }
             .setNegativeButton("Back", null)
-            .show()
+            .show().also(::styleFoodMenuSave)
     }
 
     private fun showFoodGstCategoriesDialog() {
@@ -1243,9 +1341,11 @@ class FoodBillingActivity : AppCompatActivity() {
             setPadding(0, 0, 0, 12)
         })
 
-        layout.addView(Button(this).apply {
+        layout.addView(MaterialButton(this).apply {
             text = "Download Sample CSV"
             isAllCaps = false
+            backgroundTintList = ColorStateList.valueOf(Color.parseColor(GREEN))
+            setTextColor(Color.WHITE)
             setOnClickListener {
                 sampleFoodGstCsvLauncher.launch("food-item-gst-categories-sample.csv")
             }
@@ -1281,7 +1381,7 @@ class FoodBillingActivity : AppCompatActivity() {
             }
         }
 
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle("Food Item GST Categories")
             .setView(ScrollView(this).apply { addView(layout) })
             .setPositiveButton("Add Category") { _, _ -> showFoodGstCategoryEditDialog(null) }
@@ -1289,13 +1389,13 @@ class FoodBillingActivity : AppCompatActivity() {
                 importFoodGstCsvLauncher.launch(arrayOf("text/*", "text/csv", "application/csv", "application/vnd.ms-excel"))
             }
             .setNegativeButton("Back", null)
-            .show()
+            .show().also(::styleFoodMenuSave)
     }
 
     private fun showFoodGstCategoryEditDialog(existing: FoodGstCategoryEntity?) {
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(36, 16, 36, 0)
+            setPadding(dp(20), dp(12), dp(20), dp(8))
         }
 
         val nameInput = input("Category name", existing?.categoryName)
@@ -1305,9 +1405,14 @@ class FoodBillingActivity : AppCompatActivity() {
         val sgstInput = input("SGST %", existing?.sgstRatePercent?.let { money(it) }, numeric = true)
         val cessInput = input("CESS %", existing?.cessRatePercent?.let { money(it) }, numeric = true)
 
-        listOf(nameInput, hsnInput, gstInput, cgstInput, sgstInput, cessInput).forEach {
-            layout.addView(it)
-        }
+        foodMenuSection(layout, "Category")
+        foodMenuField(layout, nameInput, "Category name")
+        foodMenuField(layout, hsnInput, "HSN/SAC code")
+        foodMenuSection(layout, "Tax rates")
+        foodMenuField(layout, gstInput, "GST %")
+        foodMenuField(layout, cgstInput, "CGST %")
+        foodMenuField(layout, sgstInput, "SGST %")
+        foodMenuField(layout, cessInput, "CESS %")
 
         fun saveCategory() {
             val gst = gstInput.text.toString().toDoubleOrNull() ?: 0.0
@@ -1327,9 +1432,9 @@ class FoodBillingActivity : AppCompatActivity() {
             )
         }
 
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle(if (existing == null) "Add GST Category" else "Edit GST Category")
-            .setView(layout)
+            .setView(ScrollView(this).apply { addView(layout) })
             .setPositiveButton("Save", null)
             .setNegativeButton("Back", null)
             .apply {
@@ -1342,6 +1447,7 @@ class FoodBillingActivity : AppCompatActivity() {
             .create()
             .also { dialog ->
                 dialog.setOnShowListener {
+                    styleFoodMenuSave(dialog)
                     dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                         val gst = gstInput.text.toString().toDoubleOrNull() ?: 0.0
                         val cgst = cgstInput.text.toString().toDoubleOrNull() ?: (gst / 2.0)
@@ -1390,7 +1496,7 @@ class FoodBillingActivity : AppCompatActivity() {
     private fun showMenuItemDialog(existing: FoodMenuItemEntity?) {
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(36, 16, 36, 0)
+            setPadding(dp(20), dp(12), dp(20), dp(8))
         }
         val nameInput = input("Item name", existing?.itemName)
         val categoryInput = input("Category", existing?.categoryName)
@@ -1402,9 +1508,13 @@ class FoodBillingActivity : AppCompatActivity() {
             val selected = categoryChoices.indexOfFirst { it.remoteId == existing?.gstCategoryRemoteId }
             if (selected >= 0) setSelection(selected)
         }
-        listOf(nameInput, categoryInput, priceInput).forEach { layout.addView(it) }
-        layout.addView(label("GST Category"))
-        layout.addView(gstSpinner)
+        foodMenuSection(layout, "Menu item")
+        foodMenuField(layout, nameInput, "Item name")
+        foodMenuField(layout, categoryInput, "Category")
+        foodMenuField(layout, priceInput, "Price")
+        foodMenuSection(layout, "Tax")
+        layout.addView(label("GST category"))
+        layout.addView(gstSpinner, LinearLayout.LayoutParams(-1, dp(52)))
         layout.addView(TextView(this).apply {
             text = "GST rates and HSN/SAC codes are suggested defaults only. Please confirm the correct GST rate and HSN/SAC code with your CA or tax consultant before using them on invoices."
             textSize = 12f
@@ -1412,9 +1522,9 @@ class FoodBillingActivity : AppCompatActivity() {
             setPadding(0, 10, 0, 4)
         })
 
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle(if (existing == null) "Add Menu Item" else "Edit Menu Item")
-            .setView(layout)
+            .setView(ScrollView(this).apply { addView(layout) })
             .setPositiveButton("Save") { _, _ ->
                 val selectedCategory = categoryChoices.getOrNull(gstSpinner.selectedItemPosition)
                 val resolvedGstRate = selectedCategory?.gstRatePercent
@@ -1460,7 +1570,7 @@ class FoodBillingActivity : AppCompatActivity() {
                     }
                 }
             }
-            .show()
+            .show().also(::styleFoodMenuSave)
     }
 
     private fun showFoodOrderDialog(existing: FoodOrderEntity?) {
