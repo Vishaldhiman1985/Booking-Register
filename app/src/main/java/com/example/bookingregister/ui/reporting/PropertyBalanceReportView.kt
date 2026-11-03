@@ -620,6 +620,9 @@ class PropertyBalanceReportView(
     private fun money(
         amount: Double
     ): String {
+        if (amount > 0.001 && amount < 0.5) {
+            return "\u20B9" + String.format(Locale.getDefault(), "%,.2f", amount)
+        }
         return "\u20B9" +
             String.format(
                 Locale.getDefault(),

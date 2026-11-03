@@ -3,6 +3,7 @@ package com.example.bookingregister.reporting.property
 import com.example.bookingregister.booking.domain.BookingStatus
 import com.example.bookingregister.data.entities.BookingSourceType
 import com.example.bookingregister.folio.domain.FolioSnapshotBuilder
+import kotlin.math.roundToLong
 
 /**
  * Read-only property balance/receivables builder.
@@ -36,7 +37,7 @@ class PropertyBalanceReportBuilder(
                 bookingFinancialLines = bookingFinancialLines
             )
 
-            val receivable = when {
+            val storedReceivable = when {
                 booking.sourceType == BookingSourceType.OTA && booking.expectedPayout > 0.0 ->
                     booking.expectedPayout
                 booking.receivable > 0.0 ->
@@ -48,6 +49,21 @@ class PropertyBalanceReportBuilder(
             }.coerceAtLeast(0.0)
 
             val received = snapshot.room.paid.coerceAtLeast(0.0)
+            val roundingDifferencePaise =
+                (storedReceivable * 100).roundToLong() - (received * 100).roundToLong()
+            // The server's legacy OTA payout rounds each deduction before the
+            // final subtraction. Older device caches can be one or two paise
+            // higher. A completed server settlement is authoritative for this
+            // tiny difference; do not leave it selectable as an unpaid booking.
+            val receivable = if (
+                booking.sourceType == BookingSourceType.OTA &&
+                roundingDifferencePaise in 1..2 &&
+                bookingPayments.any { it.method.equals("OTA_SETTLEMENT", ignoreCase = true) }
+            ) {
+                received
+            } else {
+                storedReceivable
+            }
             val appliedReceived = received.coerceAtMost(receivable)
             val excessPayment = (received - receivable).coerceAtLeast(0.0)
             val outstanding = (receivable - appliedReceived).coerceAtLeast(0.0)

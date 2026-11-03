@@ -1260,6 +1260,9 @@ class RevenueReportActivity : AppCompatActivity() {
     }
 
     private fun money(amount: Double): String {
+        if (amount > 0.001 && amount < 0.5) {
+            return String.format(Locale.getDefault(), "%,.2f", amount)
+        }
         val value = amount.roundToInt()
         return String.format(Locale.getDefault(), "%,d", value)
     }

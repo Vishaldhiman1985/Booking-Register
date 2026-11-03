@@ -185,6 +185,54 @@ class PropertyBalanceReportBuilderTest {
         assertEquals(0.0, facts.bookings.single().received, 0.001)
     }
 
+    @Test
+    fun completedOtaSettlementDoesNotLeaveOnePaisaBookingsPending() {
+        fun ota(id: String, payout: Double) = booking(
+            remoteId = id,
+            sourceType = BookingSourceType.OTA,
+            receivable = payout,
+            expectedPayout = payout
+        ).copy(sourceName = "CT", sourceRemoteId = "ct_source")
+
+        val dataset = PropertyReportDataset(
+            scope = PropertyReportScope(
+                hotelRemoteId = "hotel_1",
+                propertyRemoteId = "property_a",
+                includeAllProperties = false,
+                startMillis = 0,
+                endMillis = 10_000
+            ),
+            properties = emptyList(),
+            rooms = emptyList(),
+            bookings = listOf(
+                ota("settled_one", 1_955.30),
+                ota("settled_two", 1_877.04),
+                ota("still_due", 100.03),
+                ota("not_settled", 50.01)
+            ),
+            financialLines = emptyList(),
+            payments = listOf(
+                payment("payment_one", "settled_one", 1_955.29, BookingPaymentType.PAYMENT)
+                    .copy(method = "OTA_SETTLEMENT", allocatedStayAmount = 1_955.29),
+                payment("payment_two", "settled_two", 1_877.03, BookingPaymentType.PAYMENT)
+                    .copy(method = "OTA_SETTLEMENT", allocatedStayAmount = 1_877.03),
+                payment("payment_three", "still_due", 100.0, BookingPaymentType.PAYMENT)
+                    .copy(method = "OTA_SETTLEMENT", allocatedStayAmount = 100.0),
+                payment("payment_four", "not_settled", 50.0, BookingPaymentType.PAYMENT)
+                    .copy(allocatedStayAmount = 50.0)
+            )
+        )
+
+        val facts = builder.build(dataset)
+        val pending = OtaReceivableGrouping.build(facts.bookings)
+
+        assertEquals(0.0, facts.bookings.first { it.bookingRemoteId == "settled_one" }.outstanding, 0.001)
+        assertEquals(0.0, facts.bookings.first { it.bookingRemoteId == "settled_two" }.outstanding, 0.001)
+        assertEquals(2, facts.openBookingCount)
+        assertEquals(2, pending.single().bookingCount)
+        assertEquals(0.04, pending.single().totalOutstanding, 0.001)
+    }
+
     private fun booking(
         remoteId: String,
         sourceType: String,
