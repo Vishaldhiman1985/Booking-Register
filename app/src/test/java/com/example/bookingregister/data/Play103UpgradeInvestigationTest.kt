@@ -24,6 +24,29 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class Play103UpgradeInvestigationTest {
     @Test
+    fun currentDatabaseDoesNotEnterLegacyRecovery() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val current = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        try {
+            val unexpectedCloudCall = object : LegacyRecordPresence {
+                override suspend fun existingLegacyRecordIds(
+                    collection: String, remoteIds: List<String>
+                ): Set<String> = error("Current installs must not query legacy recovery")
+            }
+            val result = runBlocking {
+                LegacyPlay103Recovery(current, unexpectedCloudCall, "hotel-test")
+                    .stageMissingRecords()
+            }
+            assertEquals(0, result.bookings)
+            assertEquals(0, result.payments)
+        } finally {
+            current.close()
+        }
+    }
+
+    @Test
     fun play103DatabaseMigratesTo42AndKeepsBookingsPaymentsAndSyncStates() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "play_103_upgrade_investigation.db"
