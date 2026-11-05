@@ -20,3 +20,10 @@ This branch starts from internal-test commit `c4886b6`. It has not been merged o
 6. If any tax-bearing booking or room conflict is flagged, compare the old phone, cloud and bills before deciding how to resolve it. Do not clear data or widen Firestore write rules.
 
 Production Firestore rules, Cloud Functions, the existing internal-test release and the `production` branch are untouched.
+
+## First device baseline (5 November 2026)
+
+- Test handset: Android 15; Play-installed `com.bookingregister.app` version 1.0.3, code 4.
+- Old app shows one test booking in room L1 for 8–9 November, with a ₹2,000 balance.
+- Its Sync Status reports `PERMISSION_DENIED` for that booking. The booking remains visible locally.
+- The public Play-installed APK uses Google's app-signing certificate, so the candidate must arrive through a Play testing track to verify an in-place update. A locally upload-key-signed APK is not the same install path.
