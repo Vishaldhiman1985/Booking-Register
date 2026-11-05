@@ -872,18 +872,6 @@ class BookingRepository(
                 onSyncError = { markRealtimeSyncError("Accounting charge", it) }
             )
             repairOtaBookingStatuses()
-            // Only databases upgraded from public Play 1.0.3 have these backup
-            // tables. A failed server read stages nothing and leaves local data.
-            try {
-                BookingSyncCoordinator.withHotelLock(hotelRemoteId) {
-                    LegacyPlay103Recovery(db, cloudSyncManager, hotelRemoteId)
-                        .stageMissingRecords()
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                logSyncFailure("legacyPlay103Recovery", error)
-            }
             retryFailedSync(force = true)
         }
     }
@@ -2611,6 +2599,17 @@ class BookingRepository(
         lastRetryAttemptAt = now
 
         try {
+            // Only an in-place Play 1.0.3 database has the backup tables. A
+            // failed server read leaves everything local and the next retry
+            // checks again, including after an offline upgrade.
+            try {
+                LegacyPlay103Recovery(db, cloudSyncManager, hotelRemoteId)
+                    .stageMissingRecords()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                logSyncFailure("legacyPlay103Recovery", error)
+            }
             hotelDao.getUnsyncedHotels().forEach { pushHotelAndMark(it) }
             managedPropertyDao.getUnsyncedProperties(hotelRemoteId).forEach { pushManagedPropertyAndMark(it) }
             bookingSourceDao.getUnsyncedSources(hotelRemoteId).forEach { source ->
