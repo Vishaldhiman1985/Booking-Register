@@ -42,6 +42,14 @@ android {
     }
 
     sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            System.getenv("ROBOLECTRIC_TEST_HOME")?.takeIf(String::isNotBlank)?.let { home ->
+                it.systemProperty("user.home", home)
+            }
+        }
+    }
 }
 
 dependencies {
@@ -67,6 +75,8 @@ dependencies {
     implementation("com.google.code.gson:gson:2.11.0")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("androidx.test:core:1.6.1")
+    testImplementation("org.robolectric:robolectric:4.17")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation("androidx.room:room-testing:2.7.2")

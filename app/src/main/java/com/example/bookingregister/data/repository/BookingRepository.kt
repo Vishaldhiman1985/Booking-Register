@@ -74,6 +74,7 @@ import com.example.bookingregister.data.sync.BookingOrphanReconciliationPolicy
 import com.example.bookingregister.data.sync.BookingFinancialLineOrphanReconciliationPolicy
 import com.example.bookingregister.data.sync.BookingRoomPlanOrphanReconciliationPolicy
 import com.example.bookingregister.data.sync.BookingSyncCoordinator
+import com.example.bookingregister.data.sync.LegacyPlay103Recovery
 import com.example.bookingregister.data.sync.shouldAcceptRemotePaymentEntity
 import com.example.bookingregister.data.withCalculatedPayment
 import com.example.bookingregister.tax.domain.FoodGstCalculator
@@ -871,6 +872,18 @@ class BookingRepository(
                 onSyncError = { markRealtimeSyncError("Accounting charge", it) }
             )
             repairOtaBookingStatuses()
+            // Only databases upgraded from public Play 1.0.3 have these backup
+            // tables. A failed server read stages nothing and leaves local data.
+            try {
+                BookingSyncCoordinator.withHotelLock(hotelRemoteId) {
+                    LegacyPlay103Recovery(db, cloudSyncManager, hotelRemoteId)
+                        .stageMissingRecords()
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                logSyncFailure("legacyPlay103Recovery", error)
+            }
             retryFailedSync(force = true)
         }
     }
