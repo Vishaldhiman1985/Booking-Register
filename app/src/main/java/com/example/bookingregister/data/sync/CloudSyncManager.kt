@@ -58,11 +58,27 @@ data class OtaSettlementServerSnapshot(
 
 class CloudSyncManager(
     private val hotelRemoteId: String
-) {
+) : LegacyRecordPresence {
     private val firestore = FirebaseFirestore.getInstance()
     private val auth = FirebaseAuth.getInstance()
     private val functions = FirebaseFunctions.getInstance("asia-south1")
     private val hotelDoc = firestore.collection("hotels").document(hotelRemoteId)
+
+    /** Server-only lookup: a cached empty result must never trigger legacy replay. */
+    override suspend fun existingLegacyRecordIds(collection: String, remoteIds: List<String>): Set<String> {
+        require(collection == "bookings" || collection == "bookingPayments")
+        val ids = remoteIds.filter(String::isNotBlank).distinct()
+        val existing = mutableSetOf<String>()
+        ids.chunked(30).forEach { batch ->
+            hotelDoc.collection(collection)
+                .whereIn(FieldPath.documentId(), batch)
+                .get(Source.SERVER)
+                .await()
+                .documents
+                .forEach { existing += it.id }
+        }
+        return existing
+    }
 
     suspend fun loadOtaSettlementServerSnapshot(
         bookingRemoteIds: List<String>

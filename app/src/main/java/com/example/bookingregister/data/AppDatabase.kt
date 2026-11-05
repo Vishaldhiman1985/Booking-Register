@@ -191,6 +191,23 @@ abstract class AppDatabase : RoomDatabase() {
         }
         private val MIGRATION_11_12 = object : Migration(11, 12) {
             override fun migrate(database: SupportSQLiteDatabase) {
+                // Keep the Play 1.0.3 data intact before later migrations and cloud
+                // listeners can change the working tables. These copies are local only.
+                // They are deliberately not Room entities, so current installations
+                // do not gain new tables and the release schema stays at version 42.
+                listOf(
+                    "hotels", "room_categories", "rooms", "bookings",
+                    "booking_payments", "booking_sources"
+                ).forEach { table ->
+                    database.execSQL(
+                        "CREATE TABLE IF NOT EXISTS legacy_v11_backup_$table AS SELECT * FROM $table"
+                    )
+                }
+                database.execSQL(
+                    "CREATE TABLE IF NOT EXISTS legacy_v11_recovery_stage (" +
+                        "kind TEXT NOT NULL, hotelRemoteId TEXT NOT NULL, remoteId TEXT NOT NULL, " +
+                        "PRIMARY KEY(kind, hotelRemoteId, remoteId))"
+                )
                 ensureCoreSchema(database)
                 ensureSyncColumns(database)
                 ensureRevisionColumns(database)
