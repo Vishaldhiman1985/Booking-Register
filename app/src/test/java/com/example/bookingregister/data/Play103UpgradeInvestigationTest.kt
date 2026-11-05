@@ -187,14 +187,16 @@ class Play103UpgradeInvestigationTest {
                 assertEquals(0, it.getInt(0))
             }
 
+            var serverReads = 0
             val cloud = object : LegacyRecordPresence {
                 override suspend fun existingLegacyRecordIds(
                     collection: String, remoteIds: List<String>
                 ): Set<String> = when (collection) {
+                    // A second recovery pass should use the durable stage markers.
                     "bookings" -> setOf("failed-upload")
                     "bookingPayments" -> setOf("payment-failed")
                     else -> error("Unexpected collection")
-                }
+                }.also { serverReads++ }
             }
             val recovery = LegacyPlay103Recovery(upgraded, cloud, "hotel-test")
             val first = runBlocking { recovery.stageMissingRecords() }
@@ -202,6 +204,7 @@ class Play103UpgradeInvestigationTest {
             assertEquals(1, first.payments)
             assertEquals(0, runBlocking { recovery.stageMissingRecords() }.bookings)
             assertEquals(0, runBlocking { recovery.stageMissingRecords() }.payments)
+            assertEquals(2, serverReads)
             db.query("SELECT bookingRemoteId FROM booking_sync_outbox ORDER BY bookingRemoteId").use {
                 assertEquals(2, it.count)
                 assertTrue(it.moveToFirst())

@@ -27,23 +27,34 @@ internal class LegacyPlay103Recovery(
         val paymentIds = backupIds("legacy_v11_backup_booking_payments")
         if (bookingIds.isEmpty() && paymentIds.isEmpty()) return StageResult(0, 0)
 
+        val processedBookings = stagedIds("booking") + stagedIds("booking_review") +
+            stagedIds("booking_present")
+        val processedPayments = stagedIds("payment") + stagedIds("payment_present")
+        val uncheckedBookings = bookingIds.filterNot(processedBookings::contains)
+        val uncheckedPayments = paymentIds.filterNot(processedPayments::contains)
+        if (uncheckedBookings.isEmpty() && uncheckedPayments.isEmpty()) return StageResult(0, 0)
+
         // Complete both server reads before changing any local sync state. A network
         // or permission failure leaves the preserved records exactly as they were.
-        val cloudBookings = cloud.existingLegacyRecordIds("bookings", bookingIds)
-        val cloudPayments = cloud.existingLegacyRecordIds("bookingPayments", paymentIds)
-        val missingBookings = bookingIds.filterNot(cloudBookings::contains)
-        val missingPayments = paymentIds.filterNot(cloudPayments::contains)
+        val cloudBookings = cloud.existingLegacyRecordIds(
+            "bookings", if (uncheckedPayments.isEmpty()) uncheckedBookings else bookingIds
+        )
+        val cloudPayments = cloud.existingLegacyRecordIds("bookingPayments", uncheckedPayments)
+        val missingBookings = uncheckedBookings.filterNot(cloudBookings::contains)
+        val missingPayments = uncheckedPayments.filterNot(cloudPayments::contains)
 
         var stagedBookings = 0
         var stagedPayments = 0
         db.withTransaction {
-            val alreadyStagedBookings = stagedIds("booking")
-            val alreadyStagedPayments = stagedIds("payment")
-            val alreadyFlaggedBookings = stagedIds("booking_review")
+            uncheckedBookings.filter(cloudBookings::contains).forEach {
+                markStaged("booking_present", it)
+            }
+            uncheckedPayments.filter(cloudPayments::contains).forEach {
+                markStaged("payment_present", it)
+            }
             val pendingBookingIds = db.bookingSyncOutboxDao().getPending(hotelRemoteId)
                 .mapTo(mutableSetOf()) { it.bookingRemoteId }
             missingBookings.forEach { bookingId ->
-                if (bookingId in alreadyStagedBookings || bookingId in alreadyFlaggedBookings) return@forEach
                 val booking = db.bookingDao().getByRemoteId(bookingId)
                     ?.takeIf { it.hotelRemoteId == hotelRemoteId && !it.isDeleted }
                     ?: return@forEach
@@ -89,7 +100,6 @@ internal class LegacyPlay103Recovery(
             }
 
             missingPayments.forEach { paymentId ->
-                if (paymentId in alreadyStagedPayments) return@forEach
                 val payment = db.bookingPaymentDao().getByRemoteId(paymentId)
                     ?.takeIf { it.hotelRemoteId == hotelRemoteId && !it.isDeleted }
                     ?: return@forEach
