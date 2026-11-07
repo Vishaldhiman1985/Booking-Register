@@ -24,4 +24,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "Booking Register"
 include(":app")
+include(":finance-domain")
  
