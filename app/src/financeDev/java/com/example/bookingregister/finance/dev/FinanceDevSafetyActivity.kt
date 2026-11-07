@@ -21,9 +21,11 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.bookingregister.R
-import com.google.firebase.FirebaseApp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -32,6 +34,8 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.UUID
+import java.text.NumberFormat
+import java.util.Locale
 
 /** Finance DEV offline preview. The production launcher and existing database are unchanged. */
 class FinanceDevSafetyActivity : AppCompatActivity() {
@@ -40,7 +44,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
     private val pageBackgroundColor = Color.rgb(247, 248, 250)
     private val ink = Color.rgb(32, 42, 56)
     private val muted = Color.rgb(94, 106, 120)
-    private val accent = Color.rgb(180, 25, 45)
+    private val accent = Color.rgb(7, 113, 49)
     private var expenseFilter = "All"
     private val expenseFilters = listOf("All", "Not paid", "Partially paid", "Paid")
 
@@ -58,6 +62,11 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = true
+        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars = true
         currentTab = savedInstanceState?.getString("finance_dev_tab")
             ?.takeIf { it in tabs } ?: "Dashboard"
         refresh()
@@ -109,145 +118,238 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         }
     }
 
+    private val forest = Color.rgb(0, 109, 43)
+    private val navy = Color.rgb(21, 36, 57)
+    private val red = Color.rgb(198, 42, 69)
+    private val blue = Color.rgb(29, 83, 174)
+    private val gold = Color.rgb(193, 132, 13)
+    private val purple = Color.rgb(113, 57, 211)
+
     private fun showScreen(snapshot: ScreenSnapshot) {
-        val page = LinearLayout(this).apply {
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(28), dp(16), dp(24))
-            setBackgroundColor(pageBackgroundColor)
+            setBackgroundColor(Color.WHITE)
         }
-        page.addView(label("FINANCE DEV", 27f, accent, true))
-        page.addView(label("Booking Register  •  Separate offline test app", 13f, muted, false))
-        page.addView(space(14))
-        page.addView(panel().apply {
-            addView(label("SYNTHETIC DATA ONLY  •  NOT POSTED", 13f, accent, true))
-            addView(label("Cloud access: LOCKED  |  Property: Demo Property 01", 12f, ink, false))
-            addView(
-                label(
-                    "Firebase config: " +
-                        FirebaseApp.getInstance().options.projectId.orEmpty() +
-                        " (network disabled)",
-                    11f,
-                    muted,
-                    false
-                )
-            )
-            addView(
-                label(
-                    "Use fictional values only. This workflow cannot create a ledger entry or payment.",
-                    12f,
-                    muted,
-                    false
-                )
-            )
-        })
-        page.addView(space(14))
-        val navRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        tabs.forEach { tab ->
-            navRow.addView(Button(this).apply {
-                text = tab
-                textSize = 11f
-                isAllCaps = false
-                minHeight = dp(45)
-                setTextColor(if (currentTab == tab) Color.WHITE else ink)
-                background = rounded(if (currentTab == tab) accent else Color.WHITE, 12f)
-                setOnClickListener {
-                    currentTab = tab
-                    refresh()
-                }
-            })
-            navRow.addView(spaceHorizontal(5))
+        // Respect Android edge-to-edge system bars on modern devices.
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
         }
-        page.addView(HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(navRow)
-        })
-        page.addView(space(20))
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(8), dp(16), dp(7))
+        }
+        header.addView(label("⌂", 26f, forest, true).apply { gravity = Gravity.CENTER },
+            LinearLayout.LayoutParams(dp(40), dp(42)))
+        header.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(label("Booking Register", 18f, Color.BLACK, true).apply { isSingleLine = true })
+            addView(label("Finance", 13f, ink, false))
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        header.addView(label("⋮", 25f, ink, true).apply { gravity = Gravity.CENTER },
+            LinearLayout.LayoutParams(dp(34), dp(42)))
+        root.addView(header)
+        val scroller = ScrollView(this).apply { isFillViewport = true }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(4), dp(14), dp(12))
+        }
         when (currentTab) {
-            "Dashboard" -> dashboard(page, snapshot)
-            "Expenses" -> expenses(page, snapshot)
-            "Payments" -> unavailable(
-                page,
-                "Payments",
-                "Payment posting, allocations and banking are not enabled. A draft payment status is descriptive only."
-            )
-            "Vendors" -> unavailable(
-                page,
-                "Vendors",
-                "Vendor masters, payables and advances are not enabled. Only fixed fictional names are available."
-            )
-            "Reports" -> unavailable(
-                page,
-                "Reports",
-                "Financial statements must use server-posted balanced journals. Drafts are not profit or tax liabilities."
-            )
+            "Dashboard" -> dashboard(content, snapshot)
+            "Expenses" -> expenses(content, snapshot)
+            "Payments" -> unavailable(content, "Payments", "Payment management is coming soon.")
+            "Vendors" -> unavailable(content, "Vendors", "Vendor management is coming soon.")
+            "Reports" -> unavailable(content, "Reports", "Financial reports are coming soon.")
         }
-        page.addView(space(20))
-        page.addView(
-            label(
-                "Local preview database only. No internet permission. No production data or posting.",
-                12f,
-                muted,
-                false
-            )
-        )
-        setContentView(ScrollView(this).apply {
-            isFillViewport = true
-            addView(page)
-        })
+        scroller.addView(content)
+        root.addView(scroller, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(bottomNavigation())
+        setContentView(root)
+        // The root must be attached to the window before requesting system insets.
+        // Otherwise Android 15 can render the header beneath the status bar and
+        // the navigation tabs beneath the gesture/navigation bar.
+        ViewCompat.requestApplyInsets(root)
+    }
+
+    private fun bottomNavigation(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        setPadding(dp(4), dp(4), dp(4), dp(4))
+        background = rounded(Color.rgb(250, 251, 252), 0f)
+        val symbols = listOf("⌂", "▤", "⇄", "♙", "▥")
+        tabs.forEachIndexed { index, tab ->
+            val selected = currentTab == tab
+            val item = LinearLayout(this@FinanceDevSafetyActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(dp(1), dp(3), dp(1), dp(3))
+                background = rounded(if (selected) Color.rgb(235, 248, 239) else Color.TRANSPARENT, 12f)
+                addView(label(symbols[index], 22f, if (selected) forest else Color.BLACK, true).apply {
+                    gravity = Gravity.CENTER
+                })
+                addView(label(tab, 11f, if (selected) forest else Color.BLACK, selected).apply {
+                    gravity = Gravity.CENTER
+                    maxLines = 1
+                })
+                setOnClickListener { if (currentTab != tab) { currentTab = tab; refresh() } }
+            }
+            addView(item, LinearLayout.LayoutParams(0, dp(54), 1f))
+        }
     }
 
     private fun dashboard(page: LinearLayout, snapshot: ScreenSnapshot) {
-        page.addView(label("Dashboard", 23f, ink, true))
-        page.addView(label("Demo Property 01  •  Offline workspace", 13f, muted, false))
-        page.addView(space(14))
-        page.addView(panel().apply {
-            addView(label("ACTIVE DRAFT AMOUNT — NOT POSTED EXPENSES", 12f, muted, true))
-            addView(space(8))
-            addView(label(FinanceDemoDraftPolicy.moneyText(snapshot.totalDraftPaise), 28f, ink, true))
-            addView(
-                label(
-                    "${snapshot.activeCount} active fictional drafts. No accounts affected.",
-                    12f,
-                    muted,
-                    false
-                )
-            )
-            if (snapshot.discardedCount > 0L) {
-                addView(
-                    label(
-                        "${snapshot.discardedCount} discarded drafts retained locally for change history.",
-                        12f,
-                        muted,
-                        false
-                    )
-                )
+        val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        controls.addView(selector("▦  Demo Property 01  ⌄"), LinearLayout.LayoutParams(0, dp(44), 1.5f))
+        controls.addView(spaceHorizontal(10))
+        controls.addView(selector("▣  ${LocalDate.now().format(DateTimeFormatter.ofPattern("MMM yyyy"))}  ⌄"),
+            LinearLayout.LayoutParams(0, dp(44), 1f))
+        page.addView(controls)
+        page.addView(space(9))
+        // Financial values remain unpopulated until a verified ledger exists.
+        metricPair(page, "▥", "Revenue", "—", forest, 0xFFEAF8ED.toInt(),
+            "▤", "Expenses", "—", red, 0xFFFFEEF1.toInt(), large = true)
+        page.addView(space(8))
+        metricPair(page, "▤", "Operating Profit", "—", forest, 0xFFE7FAED.toInt(),
+            "▢", "Cash / Bank", "—", blue, 0xFFEDF3FF.toInt(), large = true)
+        page.addView(space(9))
+        val wide = resources.configuration.screenWidthDp >= 700
+        if (wide) {
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            listOf(
+                Triple("♧", "Vendor Payables", purple),
+                Triple("♙", "Receivables", blue),
+                Triple("▤", "GST / TDS / TCS", gold),
+                Triple("▣", "Overdue", red)
+            ).forEachIndexed { i, triple ->
+                if (i > 0) row.addView(spaceHorizontal(7))
+                row.addView(metricCard(triple.first, triple.second, "—", triple.third,
+                    Color.rgb(251, 250, 255), false), LinearLayout.LayoutParams(0, dp(90), 1f))
             }
-        })
+            page.addView(row)
+        } else {
+            metricPair(page, "♧", "Vendor Payables", "—", purple, 0xFFF8F3FF.toInt(),
+                "♙", "Receivables", "—", blue, 0xFFF1F5FF.toInt(), large = false)
+            page.addView(space(8))
+            metricPair(page, "▤", "GST / TDS / TCS", "—", gold, 0xFFFFFAEE.toInt(),
+                "▣", "Overdue", "—", red, 0xFFFFF0F3.toInt(), large = false)
+        }
         page.addView(space(10))
-        page.addView(panel().apply {
-            addView(label("Live revenue", 15f, ink, true))
-            addView(label("Not connected", 17f, accent, true))
-            addView(
-                label(
-                    "Profit, bank balance and GST remain unavailable until approved server ledger integration.",
-                    12f,
-                    muted,
-                    false
-                )
-            )
-        })
+        if (wide) {
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            row.addView(departmentCard(), LinearLayout.LayoutParams(0, dp(278), 1f))
+            row.addView(spaceHorizontal(10))
+            row.addView(trendCard(), LinearLayout.LayoutParams(0, dp(278), 1f))
+            page.addView(row)
+        } else {
+            page.addView(departmentCard())
+            page.addView(space(10))
+            page.addView(trendCard())
+        }
+        page.addView(space(12))
+        val draftPanel = panel().apply {
+            background = rounded(0xFFEAF8ED.toInt(), 16f)
+            addView(label("Expense drafts", 14f, forest, true))
+            addView(space(5))
+            addView(label(formatRupees(snapshot.totalDraftPaise), 24f, navy, true))
+            addView(label("${snapshot.activeCount} active  •  ${snapshot.discardedCount} discarded", 12f, muted, false))
+            setOnClickListener { currentTab = "Expenses"; refresh() }
+        }
+        page.addView(draftPanel)
     }
+
+    private fun selector(title: String): TextView = label(title, 13f, navy, true).apply {
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(12), 0, dp(8), 0)
+        background = outlinedCard(Color.WHITE, 12f)
+        maxLines = 1
+        setOnClickListener {
+            Toast.makeText(this@FinanceDevSafetyActivity, "Selection will be available when property data is connected", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun metricPair(page: LinearLayout, li: String, lt: String, lv: String, lc: Int, lb: Int,
+                           ri: String, rt: String, rv: String, rc: Int, rb: Int, large: Boolean) {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        row.addView(metricCard(li, lt, lv, lc, lb, large), LinearLayout.LayoutParams(0, dp(if (large) 76 else 70), 1f))
+        row.addView(spaceHorizontal(9))
+        row.addView(metricCard(ri, rt, rv, rc, rb, large), LinearLayout.LayoutParams(0, dp(if (large) 76 else 70), 1f))
+        page.addView(row)
+    }
+
+    private fun metricCard(symbol: String, title: String, value: String, tint: Int,
+                           fill: Int, large: Boolean): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(8), dp(7), dp(5), dp(7))
+        background = outlinedCard(fill, 16f)
+        addView(label(symbol, if (large) 25f else 19f, tint, true).apply {
+            gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(dp(if (large) 34 else 27), -2))
+        addView(LinearLayout(this@FinanceDevSafetyActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(5), 0, 0, 0)
+            addView(label(title, if (large) 12f else 10.5f, Color.BLACK, false).apply { maxLines = 2 })
+            addView(space(2))
+            addView(label(value, if (large) 20f else 18f, Color.BLACK, true))
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+    }
+
+    private fun departmentCard(): LinearLayout = panel().apply {
+        background = outlinedCard(Color.WHITE, 16f)
+        addView(label("Departmental Profit     ›", 18f, Color.BLACK, true))
+        addView(space(6))
+        listOf(
+            Triple("▣", "Rooms", blue),
+            Triple("♜", "Kitchen (F&B)", Color.rgb(219, 110, 30)),
+            Triple("△", "Activities", gold),
+            Triple("◇", "Other / Services", purple)
+        ).forEachIndexed { i, (symbol, title, tint) ->
+            val line = LinearLayout(this@FinanceDevSafetyActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(5), 0, dp(5))
+                addView(label(symbol, 22f, tint, true), LinearLayout.LayoutParams(dp(35), -2))
+                addView(label(title, 13f, ink, false), LinearLayout.LayoutParams(0, -2, 1f))
+                addView(label("—", 16f, muted, true).apply { gravity = Gravity.END },
+                    LinearLayout.LayoutParams(dp(35), -2))
+            }
+            addView(line)
+            if (i < 3) addView(View(this@FinanceDevSafetyActivity).apply {
+                setBackgroundColor(0xFFE8EBF0.toInt())
+            }, LinearLayout.LayoutParams(-1, dp(1)))
+        }
+    }
+
+    private fun trendCard(): LinearLayout = panel().apply {
+        background = outlinedCard(Color.WHITE, 16f)
+        addView(label("Revenue vs Expenses     ›", 18f, Color.BLACK, true))
+        addView(space(8))
+        addView(LinearLayout(this@FinanceDevSafetyActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            addView(label("● Revenue", 12f, forest, true), LinearLayout.LayoutParams(0, -2, 1f))
+            addView(label("● Expenses", 12f, red, true), LinearLayout.LayoutParams(0, -2, 1f))
+        })
+        addView(space(12))
+        addView(label("Chart available when financial records are connected", 13f, muted, false).apply {
+            gravity = Gravity.CENTER
+            background = rounded(0xFFF8FAFC.toInt(), 10f)
+        }, LinearLayout.LayoutParams(-1, dp(112)))
+    }
+
+    private fun outlinedCard(fill: Int, radius: Float): GradientDrawable = rounded(fill, radius).apply {
+        setStroke(dp(1), 0xFFE1E5ED.toInt())
+    }
+
+    private fun formatRupees(paise: Long): String =
+        "₹" + NumberFormat.getNumberInstance(Locale.forLanguageTag("en-IN")).apply {
+            minimumFractionDigits = if (paise % 100L == 0L) 0 else 2
+            maximumFractionDigits = 2
+        }.format(paise / 100.0)
 
     private fun expenses(page: LinearLayout, snapshot: ScreenSnapshot) {
         page.addView(label("Expenses", 23f, ink, true))
-        page.addView(
-            label(
-                "Create and revise fictional offline drafts. Nothing here is a posted bill or payment.",
-                13f,
-                muted,
-                false
-            )
-        )
         page.addView(space(12))
         page.addView(Button(this).apply {
             text = getString(R.string.finance_dev_create_expense_draft)
@@ -257,7 +359,6 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             setOnClickListener { showExpenseForm(existing = null) }
         })
         page.addView(space(10))
-        page.addView(label("LOCAL DRAFTS  •  NO FINANCIAL POSTING", 11f, muted, true))
         val filterRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         expenseFilters.forEach { filter ->
             filterRow.addView(Button(this).apply {
