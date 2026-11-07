@@ -39,6 +39,13 @@ android {
             applicationIdSuffix = ".staging"
             versionNameSuffix = "-staging"
         }
+        create("financeDev") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".finance.dev"
+            versionNameSuffix = "-finance-dev"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("debug")
+        }
     }
 
     sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")

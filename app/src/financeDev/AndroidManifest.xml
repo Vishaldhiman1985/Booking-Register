@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+        Phase 0 is deliberately offline. Staging already contains shared data, so
+        this permission stays removed until a dedicated Finance tenant/namespace
+        and server-side authorization boundary have been approved and tested.
+    -->
+    <uses-permission
+        android:name="android.permission.INTERNET"
+        tools:node="remove" />
+
+    <application
+        android:name="com.example.bookingregister.finance.dev.FinanceDevApplication"
+        android:icon="@drawable/ic_finance_dev_launcher"
+        android:label="Booking Register Finance DEV"
+        android:roundIcon="@drawable/ic_finance_dev_launcher"
+        tools:replace="android:icon,android:label,android:roundIcon">
+
+        <activity
+            android:name="com.example.bookingregister.ui.login.LoginActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="com.example.bookingregister.finance.dev.FinanceDevSafetyActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
