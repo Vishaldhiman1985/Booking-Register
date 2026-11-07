@@ -10,6 +10,14 @@ android {
     namespace = "com.example.bookingregister"
     compileSdk = 36
 
+    // Default CI keeps testing the debug build. This opt-in property creates a
+    // Finance DEV instrumentation target without ever installing the production ID.
+    testBuildType = if (providers.gradleProperty("financeDevAndroidTest").isPresent) {
+        "financeDev"
+    } else {
+        "debug"
+    }
+
     defaultConfig {
         applicationId = "com.bookingregister.app"
         minSdk = 26

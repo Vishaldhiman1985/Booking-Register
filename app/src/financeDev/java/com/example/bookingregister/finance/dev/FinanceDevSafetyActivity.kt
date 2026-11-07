@@ -1,25 +1,33 @@
 package com.example.bookingregister.finance.dev
 
+import android.app.DatePickerDialog
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.text.InputType
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.EditText
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
-import androidx.room.Room
+import com.example.bookingregister.R
 import com.google.firebase.FirebaseApp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.time.LocalDate
 import java.util.UUID
 
 /** Finance DEV offline preview. The production launcher and existing database are unchanged. */
@@ -33,17 +41,15 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
 
     private data class ScreenSnapshot(
         val drafts: List<FinanceDemoDraftBill>,
-        val count: Long,
+        val activeCount: Long,
+        val discardedCount: Long,
         val totalDraftPaise: Long
     )
 
-    private val localDatabase by lazy {
-        Room.databaseBuilder(
-            applicationContext,
-            FinanceDemoDraftDatabase::class.java,
-            "finance_dev_synthetic_drafts_v1.db"
-        ).build()
+    private val localDatabaseDelegate = lazy {
+        FinanceDemoDraftDatabase.build(applicationContext)
     }
+    private val localDatabase by localDatabaseDelegate
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,22 +63,43 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         super.onSaveInstanceState(outState)
     }
 
+    override fun onDestroy() {
+        if (localDatabaseDelegate.isInitialized()) localDatabase.close()
+        super.onDestroy()
+    }
+
     private fun refresh() {
         lifecycleScope.launch {
             try {
                 val snapshot = withContext(Dispatchers.IO) {
                     val dao = localDatabase.drafts()
                     ScreenSnapshot(
-                        drafts = dao.recent(FinanceDemoDraftPolicy.TENANT, FinanceDemoDraftPolicy.PROPERTY),
-                        count = dao.count(FinanceDemoDraftPolicy.TENANT, FinanceDemoDraftPolicy.PROPERTY),
-                        totalDraftPaise = dao.totalDraftPaise(FinanceDemoDraftPolicy.TENANT, FinanceDemoDraftPolicy.PROPERTY)
+                        drafts = dao.recentActive(
+                            FinanceDemoDraftPolicy.TENANT,
+                            FinanceDemoDraftPolicy.PROPERTY,
+                            FinanceDemoDraftPolicy.STATUS_ACTIVE
+                        ),
+                        activeCount = dao.activeCount(
+                            FinanceDemoDraftPolicy.TENANT,
+                            FinanceDemoDraftPolicy.PROPERTY,
+                            FinanceDemoDraftPolicy.STATUS_ACTIVE
+                        ),
+                        discardedCount = dao.discardedCount(
+                            FinanceDemoDraftPolicy.TENANT,
+                            FinanceDemoDraftPolicy.PROPERTY,
+                            FinanceDemoDraftPolicy.STATUS_DISCARDED
+                        ),
+                        totalDraftPaise = dao.totalActiveDraftPaise(
+                            FinanceDemoDraftPolicy.TENANT,
+                            FinanceDemoDraftPolicy.PROPERTY,
+                            FinanceDemoDraftPolicy.STATUS_ACTIVE
+                        )
                     )
                 }
-                // Fail closed even for local preview data; never display foreign-scope rows.
                 snapshot.drafts.forEach(FinanceDemoDraftPolicy::validate)
                 showScreen(snapshot)
             } catch (error: Exception) {
-                showError(error)
+                showDatabaseError(error)
             }
         }
     }
@@ -89,8 +116,24 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         page.addView(panel().apply {
             addView(label("SYNTHETIC DATA ONLY  •  NOT POSTED", 13f, accent, true))
             addView(label("Cloud access: LOCKED  |  Property: Demo Property 01", 12f, ink, false))
-            addView(label("Firebase config: ${FirebaseApp.getInstance().options.projectId.orEmpty()} (network disabled)", 11f, muted, false))
-            addView(label("Real invoices, vendors and guest information are prohibited in this preview.", 12f, muted, false))
+            addView(
+                label(
+                    "Firebase config: " +
+                        FirebaseApp.getInstance().options.projectId.orEmpty() +
+                        " (network disabled)",
+                    11f,
+                    muted,
+                    false
+                )
+            )
+            addView(
+                label(
+                    "Use fictional values only. This workflow cannot create a ledger entry or payment.",
+                    12f,
+                    muted,
+                    false
+                )
+            )
         })
         page.addView(space(14))
         val navRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -102,7 +145,10 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                 minHeight = dp(45)
                 setTextColor(if (currentTab == tab) Color.WHITE else ink)
                 background = rounded(if (currentTab == tab) accent else Color.WHITE, 12f)
-                setOnClickListener { currentTab = tab; refresh() }
+                setOnClickListener {
+                    currentTab = tab
+                    refresh()
+                }
             })
             navRow.addView(spaceHorizontal(5))
         }
@@ -113,13 +159,32 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         page.addView(space(20))
         when (currentTab) {
             "Dashboard" -> dashboard(page, snapshot)
-            "Expenses" -> expenses(page, snapshot.drafts)
-            "Payments" -> unavailable(page, "Payments", "Payment posting, allocations and banking are not enabled. No payment has been made.")
-            "Vendors" -> unavailable(page, "Vendors", "Vendor masters, payables and advances are not enabled. Demo names exist only inside sample drafts.")
-            "Reports" -> unavailable(page, "Reports", "Financial statements must be based on server-posted, balanced journals. Drafts cannot be treated as profit or tax liabilities.")
+            "Expenses" -> expenses(page, snapshot)
+            "Payments" -> unavailable(
+                page,
+                "Payments",
+                "Payment posting, allocations and banking are not enabled. A draft payment status is descriptive only."
+            )
+            "Vendors" -> unavailable(
+                page,
+                "Vendors",
+                "Vendor masters, payables and advances are not enabled. Only fixed fictional names are available."
+            )
+            "Reports" -> unavailable(
+                page,
+                "Reports",
+                "Financial statements must use server-posted balanced journals. Drafts are not profit or tax liabilities."
+            )
         }
         page.addView(space(20))
-        page.addView(label("Local preview database only. No internet permission. No production data or posting.", 12f, muted, false))
+        page.addView(
+            label(
+                "Local preview database only. No internet permission. No production data or posting.",
+                12f,
+                muted,
+                false
+            )
+        )
         setContentView(ScrollView(this).apply {
             isFillViewport = true
             addView(page)
@@ -128,45 +193,135 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
 
     private fun dashboard(page: LinearLayout, snapshot: ScreenSnapshot) {
         page.addView(label("Dashboard", 23f, ink, true))
-        page.addView(label("Demo Property 01  •  November 2026", 13f, muted, false))
+        page.addView(label("Demo Property 01  •  Offline workspace", 13f, muted, false))
         page.addView(space(14))
         page.addView(panel().apply {
-            addView(label("Synthetic draft bills — NOT EXPENSES POSTED", 12f, muted, true))
+            addView(label("ACTIVE DRAFT AMOUNT — NOT POSTED EXPENSES", 12f, muted, true))
             addView(space(8))
             addView(label(FinanceDemoDraftPolicy.moneyText(snapshot.totalDraftPaise), 28f, ink, true))
-            addView(label("${snapshot.count} local example drafts. No accounts affected.", 12f, muted, false))
+            addView(
+                label(
+                    "${snapshot.activeCount} active fictional drafts. No accounts affected.",
+                    12f,
+                    muted,
+                    false
+                )
+            )
+            if (snapshot.discardedCount > 0L) {
+                addView(
+                    label(
+                        "${snapshot.discardedCount} discarded drafts retained locally for change history.",
+                        12f,
+                        muted,
+                        false
+                    )
+                )
+            }
         })
         page.addView(space(10))
         page.addView(panel().apply {
             addView(label("Live revenue", 15f, ink, true))
             addView(label("Not connected", 17f, accent, true))
-            addView(label("Profit, bank balance and GST remain unavailable until approved server ledger integration.", 12f, muted, false))
+            addView(
+                label(
+                    "Profit, bank balance and GST remain unavailable until approved server ledger integration.",
+                    12f,
+                    muted,
+                    false
+                )
+            )
         })
     }
 
-    private fun expenses(page: LinearLayout, drafts: List<FinanceDemoDraftBill>) {
+    private fun expenses(page: LinearLayout, snapshot: ScreenSnapshot) {
         page.addView(label("Expenses", 23f, ink, true))
-        page.addView(label("Local fictional examples only. These are not bills recorded in a ledger.", 13f, muted, false))
+        page.addView(
+            label(
+                "Create and revise fictional offline drafts. Nothing here is a posted bill or payment.",
+                13f,
+                muted,
+                false
+            )
+        )
         page.addView(space(12))
         page.addView(Button(this).apply {
-            text = "Add synthetic example draft"
+            text = getString(R.string.finance_dev_create_expense_draft)
             isAllCaps = false
             setTextColor(Color.WHITE)
             background = rounded(accent, 10f)
-            setOnClickListener { chooseFixture() }
+            setOnClickListener { showExpenseForm(existing = null) }
         })
-        if (drafts.isEmpty()) {
+        if (snapshot.drafts.isEmpty()) {
             page.addView(space(12))
-            page.addView(panel().apply { addView(label("No example drafts yet. Add a fictional sample to test offline persistence.", 14f, muted, false)) })
-        } else drafts.forEach { draft ->
-            page.addView(space(10))
             page.addView(panel().apply {
-                addView(label(draft.category, 17f, ink, true))
-                addView(label(FinanceDemoDraftPolicy.moneyText(draft.amountPaise), 20f, ink, true))
-                addView(label("Vendor: ${FinanceDemoDraftPolicy.fixtures.first { it.code == draft.vendorCode }.vendor}", 12f, muted, false))
-                addView(label("Month: ${draft.accountingPeriod}  |  LOCAL DRAFT — NOT POSTED", 12f, accent, true))
+                addView(
+                    label(
+                        "No active drafts. Add a fictional expense to test offline persistence.",
+                        14f,
+                        muted,
+                        false
+                    )
+                )
             })
+        } else {
+            snapshot.drafts.forEach { draft ->
+                page.addView(space(10))
+                page.addView(draftCard(draft))
+            }
         }
+        if (snapshot.discardedCount > 0L) {
+            page.addView(space(12))
+            page.addView(
+                label(
+                    "${snapshot.discardedCount} discarded drafts are hidden but retained in local history.",
+                    12f,
+                    muted,
+                    false
+                )
+            )
+        }
+    }
+
+    private fun draftCard(draft: FinanceDemoDraftBill): LinearLayout = panel().apply {
+        addView(label(draft.category, 17f, ink, true))
+        addView(label(FinanceDemoDraftPolicy.moneyText(draft.amountPaise), 20f, ink, true))
+        addView(
+            label(
+                "Vendor: ${FinanceDemoDraftPolicy.vendorName(draft.vendorCode)}",
+                12f,
+                muted,
+                false
+            )
+        )
+        addView(label("Invoice date: ${draft.invoiceDate}", 12f, muted, false))
+        val paidDescription = if (draft.amountPaidPaise > 0L) {
+            "  •  Marked paid ${FinanceDemoDraftPolicy.moneyText(draft.amountPaidPaise)}"
+        } else {
+            ""
+        }
+        addView(
+            label(
+                "Status: ${FinanceDemoDraftPolicy.paymentLabel(draft.paymentStatus)}$paidDescription",
+                12f,
+                muted,
+                false
+            )
+        )
+        addView(
+            label(
+                "Month: ${draft.accountingPeriod}  •  Revision ${draft.revision}  •  LOCAL DRAFT — NOT POSTED",
+                12f,
+                accent,
+                true
+            )
+        )
+        addView(space(10))
+        addView(LinearLayout(this@FinanceDevSafetyActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(actionButton("Edit", false) { showExpenseForm(draft) })
+            addView(spaceHorizontal(8))
+            addView(actionButton("Discard", true) { showDiscardDialog(draft) })
+        })
     }
 
     private fun unavailable(page: LinearLayout, title: String, description: String) {
@@ -179,40 +334,313 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         })
     }
 
-    private fun chooseFixture() {
-        val fixtures = FinanceDemoDraftPolicy.fixtures
-        AlertDialog.Builder(this)
-            .setTitle("Choose a fictional sample (NOT POSTED)")
+    private fun showExpenseForm(existing: FinanceDemoDraftBill?) {
+        val vendors = FinanceDemoDraftPolicy.vendors
+        val categories = FinanceDemoDraftPolicy.categories
+        val paymentStatuses = FinanceDemoDraftPolicy.PaymentStatus.entries
 
-            .setItems(fixtures.map { "${it.category} — ${FinanceDemoDraftPolicy.moneyText(it.paise)}" }.toTypedArray()) { _, index ->
-                lifecycleScope.launch {
-                    try {
-                        val draft = FinanceDemoDraftPolicy.create(
-                            code = fixtures[index].code,
-                            id = UUID.randomUUID().toString(),
-                            nowMillis = System.currentTimeMillis()
-                        )
-                        FinanceDemoDraftPolicy.validate(draft)
-                        withContext(Dispatchers.IO) { localDatabase.drafts().insert(draft) }
-                        refresh()
-                    } catch (error: Exception) {
-                        showError(error)
-                    }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+        }
+        form.addView(
+            label(
+                "Fictional local data only. Saving does not create an expense, payable or payment.",
+                12f,
+                accent,
+                true
+            )
+        )
+        form.addView(space(12))
+
+        val vendor = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@FinanceDevSafetyActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                vendors.map { it.name }
+            )
+            setSelection(vendors.indexOfFirst { it.code == existing?.vendorCode }.coerceAtLeast(0))
+        }
+        addFormField(form, "Vendor", vendor)
+
+        val category = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@FinanceDevSafetyActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                categories
+            )
+            setSelection(categories.indexOf(existing?.category).coerceAtLeast(0))
+        }
+        addFormField(form, "Expense category", category)
+
+        val amount = EditText(this).apply {
+            hint = "Example: 12500.00"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            existing?.let {
+                setText(FinanceDemoDraftPolicy.moneyText(it.amountPaise).removePrefix("₹"))
+            }
+        }
+        addFormField(form, "Total amount (₹)", amount)
+
+        val initialDate = existing?.invoiceDate?.let(LocalDate::parse) ?: LocalDate.now()
+        val invoiceDate = EditText(this).apply {
+            isFocusable = false
+            isClickable = true
+            setText(initialDate.toString())
+            setOnClickListener { showDatePicker(this) }
+        }
+        addFormField(form, "Invoice date", invoiceDate)
+
+        val paymentStatus = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@FinanceDevSafetyActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                paymentStatuses.map { it.label }
+            )
+            setSelection(
+                paymentStatuses.indexOfFirst { it.name == existing?.paymentStatus }.coerceAtLeast(0)
+            )
+        }
+        addFormField(form, "Payment status (draft description only)", paymentStatus)
+
+        val amountPaid = EditText(this).apply {
+            hint = "Amount marked paid"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(
+                existing?.let {
+                    FinanceDemoDraftPolicy.moneyText(it.amountPaidPaise).removePrefix("₹")
+                } ?: "0.00"
+            )
+        }
+        addFormField(form, "Amount marked paid (₹)", amountPaid)
+
+        val reason = if (existing != null) {
+            EditText(this).apply {
+                hint = "Why is this draft being changed?"
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                minLines = 2
+                maxLines = 4
+            }.also { addFormField(form, "Mandatory edit reason", it) }
+        } else {
+            null
+        }
+
+        fun applyPaymentMode(clearPartial: Boolean) {
+            when (paymentStatuses[paymentStatus.selectedItemPosition]) {
+                FinanceDemoDraftPolicy.PaymentStatus.NOT_PAID -> {
+                    amountPaid.setText(getString(R.string.finance_dev_zero_amount))
+                    amountPaid.isEnabled = false
+                }
+                FinanceDemoDraftPolicy.PaymentStatus.PAID -> {
+                    amountPaid.setText(
+                        amount.text.toString().ifBlank {
+                            getString(R.string.finance_dev_zero_amount)
+                        }
+                    )
+                    amountPaid.isEnabled = false
+                }
+                FinanceDemoDraftPolicy.PaymentStatus.PARTIALLY_PAID -> {
+                    amountPaid.isEnabled = true
+                    if (clearPartial) amountPaid.setText("")
                 }
             }
+        }
+        paymentStatus.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            private var firstSelection = true
+
+            override fun onItemSelected(
+                parent: AdapterView<*>?,
+                view: View?,
+                position: Int,
+                id: Long
+            ) {
+                applyPaymentMode(clearPartial = !firstSelection)
+                firstSelection = false
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+        }
+        applyPaymentMode(clearPartial = false)
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(if (existing == null) "New fictional expense draft" else "Edit fictional draft")
+            .setView(ScrollView(this).apply { addView(form) })
+            .setPositiveButton(if (existing == null) "Save draft" else "Save changes", null)
             .setNegativeButton("Cancel", null)
-            .show()
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                try {
+                    val totalPaise = FinanceDemoDraftPolicy.parseMoney(amount.text.toString())
+                    val selectedPayment = paymentStatuses[paymentStatus.selectedItemPosition]
+                    val paidPaise = when (selectedPayment) {
+                        FinanceDemoDraftPolicy.PaymentStatus.NOT_PAID -> 0L
+                        FinanceDemoDraftPolicy.PaymentStatus.PAID -> totalPaise
+                        FinanceDemoDraftPolicy.PaymentStatus.PARTIALLY_PAID ->
+                            FinanceDemoDraftPolicy.parseMoney(amountPaid.text.toString())
+                    }
+                    val input = FinanceDemoDraftPolicy.DraftInput(
+                        vendorCode = vendors[vendor.selectedItemPosition].code,
+                        category = categories[category.selectedItemPosition],
+                        invoiceDate = invoiceDate.text.toString(),
+                        amountPaise = totalPaise,
+                        paymentStatus = selectedPayment,
+                        amountPaidPaise = paidPaise
+                    )
+                    val now = System.currentTimeMillis()
+                    if (existing == null) {
+                        val row = FinanceDemoDraftPolicy.create(
+                            input = input,
+                            id = UUID.randomUUID().toString(),
+                            nowMillis = now
+                        )
+                        persistCreate(row)
+                    } else {
+                        val reasonText = reason?.text?.toString().orEmpty()
+                        val row = FinanceDemoDraftPolicy.edit(existing, input, reasonText, now)
+                        persistChange(row, FinanceDemoDraftPolicy.editedEvent(row, reasonText))
+                    }
+                    dialog.dismiss()
+                } catch (error: RuntimeException) {
+                    amount.error = error.message ?: "Check the draft details"
+                    Toast.makeText(
+                        this,
+                        error.message ?: "Check the draft details",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+        dialog.show()
     }
 
-    private fun showError(error: Exception) {
-        Toast.makeText(this, "Finance DEV local preview error. No posting occurred.", Toast.LENGTH_LONG).show()
+    private fun showDiscardDialog(draft: FinanceDemoDraftBill) {
+        val reason = EditText(this).apply {
+            hint = "Why is this draft being discarded?"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            minLines = 2
+            maxLines = 4
+            setPadding(dp(20), dp(12), dp(20), dp(12))
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Discard this local draft?")
+            .setMessage(
+                "The draft will disappear from the active list but remain in local change history. " +
+                    "No financial transaction will be deleted."
+            )
+            .setView(reason)
+            .setPositiveButton("Discard draft", null)
+            .setNegativeButton("Cancel", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                try {
+                    val reasonText = reason.text.toString()
+                    val row = FinanceDemoDraftPolicy.discard(
+                        original = draft,
+                        reason = reasonText,
+                        nowMillis = System.currentTimeMillis()
+                    )
+                    persistChange(row, FinanceDemoDraftPolicy.discardedEvent(row, reasonText))
+                    dialog.dismiss()
+                } catch (error: RuntimeException) {
+                    reason.error = error.message ?: "A reason is mandatory"
+                }
+            }
+        }
+        dialog.show()
+    }
+
+    private fun persistCreate(row: FinanceDemoDraftBill) {
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    localDatabase.drafts().createWithEvent(
+                        row,
+                        FinanceDemoDraftPolicy.createdEvent(row)
+                    )
+                }
+                Toast.makeText(
+                    this@FinanceDevSafetyActivity,
+                    "Fictional local draft saved — not posted",
+                    Toast.LENGTH_SHORT
+                ).show()
+                refresh()
+            } catch (error: Exception) {
+                showDatabaseError(error)
+            }
+        }
+    }
+
+    private fun persistChange(row: FinanceDemoDraftBill, event: FinanceDemoDraftEvent) {
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    localDatabase.drafts().replaceWithEvent(row, event)
+                }
+                Toast.makeText(
+                    this@FinanceDevSafetyActivity,
+                    "Local draft history updated — not posted",
+                    Toast.LENGTH_SHORT
+                ).show()
+                refresh()
+            } catch (error: Exception) {
+                showDatabaseError(error)
+            }
+        }
+    }
+
+    private fun showDatePicker(field: EditText) {
+        val date = runCatching { LocalDate.parse(field.text.toString()) }
+            .getOrElse { LocalDate.now() }
+        DatePickerDialog(
+            this,
+            { _, year, month, day ->
+                field.setText(LocalDate.of(year, month + 1, day).toString())
+            },
+            date.year,
+            date.monthValue - 1,
+            date.dayOfMonth
+        ).show()
+    }
+
+    private fun addFormField(container: LinearLayout, title: String, field: View) {
+        container.addView(label(title, 12f, muted, true))
+        container.addView(field)
+        container.addView(space(10))
+    }
+
+    private fun actionButton(
+        title: String,
+        destructive: Boolean,
+        action: () -> Unit
+    ): Button = Button(this).apply {
+        text = title
+        isAllCaps = false
+        setTextColor(if (destructive) accent else ink)
+        background = rounded(Color.rgb(242, 243, 246), 9f)
+        layoutParams = LinearLayout.LayoutParams(0, dp(42), 1f)
+        setOnClickListener { action() }
+    }
+
+    private fun showDatabaseError(error: Exception) {
+        Toast.makeText(this, "Finance DEV local draft error. No posting occurred.", Toast.LENGTH_LONG)
+            .show()
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(48), dp(24), dp(24))
             setBackgroundColor(pageBackgroundColor)
         }
         page.addView(label("FINANCE DEV — PREVIEW STOPPED", 22f, accent, true))
-        page.addView(label("Local draft data could not be validated or loaded. No data was posted.", 15f, ink, false))
+        page.addView(
+            label(
+                "Local draft data could not be validated or loaded. No data was posted.",
+                15f,
+                ink,
+                false
+            )
+        )
         page.addView(label("Error category: ${error.javaClass.simpleName}", 12f, muted, false))
         setContentView(page)
     }
@@ -223,13 +651,21 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         background = rounded(Color.WHITE, 15f)
     }
 
-    private fun label(value: String, size: Float, color: Int, bold: Boolean): TextView = TextView(this).apply {
+    private fun label(
+        value: String,
+        size: Float,
+        color: Int,
+        bold: Boolean
+    ): TextView = TextView(this).apply {
         text = value
         textSize = size
         setTextColor(color)
         gravity = Gravity.START
         if (bold) setTypeface(typeface, Typeface.BOLD)
-        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
     }
 
     private fun rounded(color: Int, radius: Float): GradientDrawable = GradientDrawable().apply {
@@ -237,7 +673,13 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         cornerRadius = dp(radius.toInt()).toFloat()
     }
 
-    private fun space(height: Int) = TextView(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(height)) }
-    private fun spaceHorizontal(width: Int) = TextView(this).apply { layoutParams = LinearLayout.LayoutParams(dp(width), 1) }
+    private fun space(height: Int) = TextView(this).apply {
+        layoutParams = LinearLayout.LayoutParams(1, dp(height))
+    }
+
+    private fun spaceHorizontal(width: Int) = TextView(this).apply {
+        layoutParams = LinearLayout.LayoutParams(dp(width), 1)
+    }
+
     private fun dp(value: Int) = (resources.displayMetrics.density * value).toInt()
 }
