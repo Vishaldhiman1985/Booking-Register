@@ -28,6 +28,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 /** Finance DEV offline preview. The production launcher and existing database are unchanged. */
@@ -38,6 +41,8 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
     private val ink = Color.rgb(32, 42, 56)
     private val muted = Color.rgb(94, 106, 120)
     private val accent = Color.rgb(180, 25, 45)
+    private var expenseFilter = "All"
+    private val expenseFilters = listOf("All", "Not paid", "Partially paid", "Paid")
 
     private data class ScreenSnapshot(
         val drafts: List<FinanceDemoDraftBill>,
@@ -251,12 +256,37 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             background = rounded(accent, 10f)
             setOnClickListener { showExpenseForm(existing = null) }
         })
-        if (snapshot.drafts.isEmpty()) {
+        page.addView(space(10))
+        page.addView(label("LOCAL DRAFTS  •  NO FINANCIAL POSTING", 11f, muted, true))
+        val filterRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        expenseFilters.forEach { filter ->
+            filterRow.addView(Button(this).apply {
+                text = filter
+                textSize = 11f
+                isAllCaps = false
+                setTextColor(if (expenseFilter == filter) Color.WHITE else ink)
+                background = rounded(if (expenseFilter == filter) accent else Color.WHITE, 10f)
+                setOnClickListener { expenseFilter = filter; refresh() }
+            })
+            filterRow.addView(spaceHorizontal(5))
+        }
+        page.addView(HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(filterRow)
+        })
+        val filteredDrafts = snapshot.drafts.filter { draft ->
+            expenseFilter == "All" ||
+                FinanceDemoDraftPolicy.paymentLabel(draft.paymentStatus) == expenseFilter
+        }
+        page.addView(space(8))
+        page.addView(label("Showing ${filteredDrafts.size} of ${snapshot.drafts.size} recent active drafts", 12f, muted, false))
+        if (filteredDrafts.isEmpty()) {
             page.addView(space(12))
             page.addView(panel().apply {
                 addView(
                     label(
-                        "No active drafts. Add a fictional expense to test offline persistence.",
+                        if (snapshot.drafts.isEmpty()) "No active drafts. Add a fictional expense to test offline persistence."
+                        else "No drafts match this filter.",
                         14f,
                         muted,
                         false
@@ -264,7 +294,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                 )
             })
         } else {
-            snapshot.drafts.forEach { draft ->
+            filteredDrafts.forEach { draft ->
                 page.addView(space(10))
                 page.addView(draftCard(draft))
             }
@@ -318,10 +348,46 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         addView(space(10))
         addView(LinearLayout(this@FinanceDevSafetyActivity).apply {
             orientation = LinearLayout.HORIZONTAL
+            addView(actionButton("History", false) { showDraftHistory(draft) })
+            addView(spaceHorizontal(8))
             addView(actionButton("Edit", false) { showExpenseForm(draft) })
             addView(spaceHorizontal(8))
             addView(actionButton("Discard", true) { showDiscardDialog(draft) })
         })
+    }
+
+    private fun showDraftHistory(draft: FinanceDemoDraftBill) {
+        lifecycleScope.launch {
+            try {
+                val events = withContext(Dispatchers.IO) {
+                    localDatabase.drafts().events(draft.draftId)
+                }
+                val content = LinearLayout(this@FinanceDevSafetyActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(20), dp(12), dp(20), dp(12))
+                }
+                content.addView(label("LOCAL HISTORY ONLY — NOT A FINANCIAL AUDIT LEDGER", 12f, accent, true))
+                content.addView(space(12))
+                val formatter = DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm")
+                events.forEach { event ->
+                    val date = Instant.ofEpochMilli(event.occurredAtMillis)
+                        .atZone(ZoneId.systemDefault()).format(formatter)
+                    content.addView(label("${event.eventType}  •  Revision ${event.resultingRevision}", 15f, ink, true))
+                    content.addView(label(date, 12f, muted, false))
+                    content.addView(label("Reason: ${event.reason}", 13f, ink, false))
+                    content.addView(space(14))
+                }
+                if (events.isEmpty()) content.addView(label("No history events found.", 13f, muted, false))
+                AlertDialog.Builder(this@FinanceDevSafetyActivity)
+                    .setTitle("Draft change history")
+                    .setView(ScrollView(this@FinanceDevSafetyActivity).apply { addView(content) })
+                    .setPositiveButton("Close", null)
+                    .show()
+            } catch (error: Exception) {
+                Toast.makeText(this@FinanceDevSafetyActivity,
+                    "Unable to load local draft history", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun unavailable(page: LinearLayout, title: String, description: String) {
