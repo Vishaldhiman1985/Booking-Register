@@ -44,7 +44,7 @@ import java.util.Locale
 
 /** Finance DEV offline preview. The production launcher and existing database are unchanged. */
 class FinanceDevSafetyActivity : AppCompatActivity() {
-    private val tabs = listOf("Dashboard", "Expenses", "Payments", "Vendors", "Reports")
+    private val tabs = listOf("Dashboard", "Expenses", "Payments", "Purchase", "Reports")
     private var currentTab = "Dashboard"
     private val pageBackgroundColor = Color.rgb(247, 248, 250)
     private val ink = Color.rgb(32, 42, 56)
@@ -198,7 +198,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             "Dashboard" -> dashboard(content, snapshot)
             "Expenses" -> expenses(content, snapshot)
             "Payments" -> if (paymentVendorIndex == null) payments(content, snapshot) else paymentDetails(content, snapshot, paymentVendorIndex!!)
-            "Vendors" -> HotelPurchaseVendorScreen(this).render(content)
+            "Purchase" -> HotelPurchaseOrderScreen(this).render(content)
             "Reports" -> unavailable(content, "Reports", "Financial reports are coming soon.")
         }
         scroller.addView(content, ViewGroup.LayoutParams(
@@ -1542,4 +1542,5 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
 
     private fun dp(value: Int) = (resources.displayMetrics.density * value).toInt()
 }
+
 

@@ -1,4 +1,4 @@
-﻿package com.example.bookingregister.finance.dev
+package com.example.bookingregister.finance.dev
 
 data class HotelPurchaseCategory(
     val id: String,
@@ -10,7 +10,8 @@ data class HotelPurchaseItem(
     val categoryId: String,
     val name: String,
     val unit: String,
-    val active: Boolean = true
+    val active: Boolean = true,
+    val synonyms: List<String> = emptyList()
 )
 
 data class HotelPurchaseVendor(

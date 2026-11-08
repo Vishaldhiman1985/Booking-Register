@@ -1,4 +1,4 @@
-﻿package com.example.bookingregister.finance.dev
+package com.example.bookingregister.finance.dev
 
 import android.app.Activity
 import android.app.AlertDialog
@@ -26,6 +26,13 @@ class HotelPurchaseVendorScreen(private val activity: Activity) {
         container.addView(title)
 
         container.addView(Button(activity).apply {
+            text = "Purchase Orders"
+            setOnClickListener {
+                HotelPurchaseOrderScreen(activity).show()
+            }
+        })
+
+        container.addView(Button(activity).apply {
             text = "+ Add Vendor"
             setOnClickListener { showVendorDialog(container) }
         })
@@ -42,11 +49,18 @@ class HotelPurchaseVendorScreen(private val activity: Activity) {
 
         vendors.forEach { vendor ->
             val categories = vendor.suppliedCategoryIds
-                .mapNotNull { HotelPurchaseCatalog.categoryById(it)?.name }
+                .mapNotNull { HotelPurchaseCategoryStore(activity).all().firstOrNull { category -> category.id == it }?.name }
 
             val availableItems = HotelPurchasePolicy.itemsForVendor(
                 vendor,
-                HotelPurchaseItems.items
+                HotelPurchaseItems.items +
+                    HotelPurchaseMasterCatalog.items.filter { master ->
+                        HotelPurchaseItems.items.none { original ->
+                            original.categoryId == master.categoryId &&
+                                original.name.equals(master.name, ignoreCase = true)
+                        }
+                    } +
+                    HotelPurchaseCustomItemStore(activity).all()
             )
 
             container.addView(TextView(activity).apply {
@@ -89,7 +103,7 @@ class HotelPurchaseVendorScreen(private val activity: Activity) {
             setPadding(0, 16, 0, 8)
         })
 
-        val checks = HotelPurchaseCatalog.categories.map { category ->
+        val checks = HotelPurchaseCategoryStore(activity).all().map { category ->
             CheckBox(activity).apply {
                 text = category.name
                 isChecked = category.id in
