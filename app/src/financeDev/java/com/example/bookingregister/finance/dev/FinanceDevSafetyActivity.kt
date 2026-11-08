@@ -198,7 +198,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             "Dashboard" -> dashboard(content, snapshot)
             "Expenses" -> expenses(content, snapshot)
             "Payments" -> if (paymentVendorIndex == null) payments(content, snapshot) else paymentDetails(content, snapshot, paymentVendorIndex!!)
-            "Vendors" -> unavailable(content, "Vendors", "Vendor management is coming soon.")
+            "Vendors" -> HotelPurchaseVendorScreen(this).render(content)
             "Reports" -> unavailable(content, "Reports", "Financial reports are coming soon.")
         }
         scroller.addView(content, ViewGroup.LayoutParams(
@@ -1542,3 +1542,4 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
 
     private fun dp(value: Int) = (resources.displayMetrics.density * value).toInt()
 }
+
