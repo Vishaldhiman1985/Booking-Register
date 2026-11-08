@@ -44,8 +44,14 @@ import java.util.Locale
 
 /** Finance DEV offline preview. The production launcher and existing database are unchanged. */
 class FinanceDevSafetyActivity : AppCompatActivity() {
+    @Deprecated("Handled for isolated Finance DEV purchasing navigation")
+    override fun onBackPressed() {
+        if (currentTab == "Purchase" && purchaseScreen?.navigateBack() == true) return
+        super.onBackPressed()
+    }
     private val tabs = listOf("Dashboard", "Expenses", "Payments", "Purchase", "Reports")
     private var currentTab = "Dashboard"
+    private var purchaseScreen: HotelPurchaseOrderScreen? = null
     private val pageBackgroundColor = Color.rgb(247, 248, 250)
     private val ink = Color.rgb(32, 42, 56)
     private val muted = Color.rgb(94, 106, 120)
@@ -135,6 +141,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
     private val purple = Color.rgb(113, 57, 211)
 
     private fun showScreen(snapshot: ScreenSnapshot) {
+        purchaseScreen = if (currentTab == "Purchase") HotelPurchaseOrderScreen(this) else null
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.WHITE)
@@ -180,8 +187,10 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                         }
                         show()
                     }
+                } else if (currentTab == "Purchase") {
+                    purchaseScreen?.showMenu(anchor)
                 } else {
-                    Toast.makeText(this@FinanceDevSafetyActivity, "Expense filters are available on the Expenses tab", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@FinanceDevSafetyActivity, "Menu options are on Expenses and Purchase tabs", Toast.LENGTH_SHORT).show()
                 }
             }
         }, LinearLayout.LayoutParams(dp(34), dp(42)))
@@ -198,14 +207,19 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             "Dashboard" -> dashboard(content, snapshot)
             "Expenses" -> expenses(content, snapshot)
             "Payments" -> if (paymentVendorIndex == null) payments(content, snapshot) else paymentDetails(content, snapshot, paymentVendorIndex!!)
-            "Purchase" -> HotelPurchaseOrderScreen(this).render(content)
+            "Purchase" -> purchaseScreen?.apply { bindToolbar(header); render(content) }
             "Reports" -> unavailable(content, "Reports", "Financial reports are coming soon.")
         }
-        scroller.addView(content, ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ))
         val contentArea = FrameLayout(this)
-        contentArea.addView(scroller, FrameLayout.LayoutParams(-1, -1))
+        if (currentTab == "Purchase") {
+            // Purchase has its own independent scrolling item list and fixed footer.
+            contentArea.addView(content, FrameLayout.LayoutParams(-1, -1))
+        } else {
+            scroller.addView(content, ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+            contentArea.addView(scroller, FrameLayout.LayoutParams(-1, -1))
+        }
         if (currentTab == "Expenses") {
             val addExpense = TextView(this).apply {
                 text = "+"

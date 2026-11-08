@@ -26,13 +26,6 @@ class HotelPurchaseVendorScreen(private val activity: Activity) {
         container.addView(title)
 
         container.addView(Button(activity).apply {
-            text = "Purchase Orders"
-            setOnClickListener {
-                HotelPurchaseOrderScreen(activity).show()
-            }
-        })
-
-        container.addView(Button(activity).apply {
             text = "+ Add Vendor"
             setOnClickListener { showVendorDialog(container) }
         })
