@@ -40,7 +40,11 @@ data class FinanceDemoDraftBill(
     @ColumnInfo(defaultValue = "0") val amountPaidPaise: Long = 0L,
     @ColumnInfo(defaultValue = "0") val updatedAtMillis: Long = 0L,
     val discardedAtMillis: Long? = null,
-    @ColumnInfo(defaultValue = "1") val revision: Long = 1L
+    @ColumnInfo(defaultValue = "1") val revision: Long = 1L,
+    // Nullable: all pre-2F drafts retain their original six-category classification.
+    val expenseCategoryCode: String? = null,
+    val expenseTypeCode: String? = null,
+    val expenseTypeLabel: String? = null
 )
 
 /** Append-only local history for draft edits and discards; it is not a financial audit ledger. */
@@ -56,6 +60,68 @@ data class FinanceDemoDraftEvent(
     val occurredAtMillis: Long,
     val resultingRevision: Long
 )
+
+/** A submitted mapping is NOT an approved rule. Finance DEV has no CA identity verification. */
+@Entity(
+    tableName = "finance_dev_accounting_rule_proposals",
+    indices = [Index(value = ["typeCode", "ruleKind", "revisionNumber"], unique = true)]
+)
+data class FinanceDemoAccountingRuleProposal(
+    @PrimaryKey val proposalId: String,
+    val typeCode: String,
+    val ruleKind: String,
+    val revisionNumber: Long,
+    val previousMappingHint: String,
+    val proposedValue: String,
+    val proposedGroup: String,
+    val effectiveFrom: String,
+    val sourceReference: String,
+    val reason: String,
+    val status: String,
+    val submittedAtMillis: Long
+)
+
+@Entity(
+    tableName = "finance_dev_accounting_rule_events",
+    indices = [Index(value = ["proposalId", "occurredAtMillis"])]
+)
+data class FinanceDemoAccountingRuleEvent(
+    @PrimaryKey val eventId: String,
+    val proposalId: String,
+    val eventType: String,
+    val occurredAtMillis: Long,
+    val description: String
+)
+
+@Dao
+abstract class FinanceDemoAccountingRuleDao {
+    @Query("""SELECT * FROM finance_dev_accounting_rule_proposals
+        ORDER BY submittedAtMillis DESC, proposalId DESC LIMIT 40""")
+    abstract suspend fun recentProposals(): List<FinanceDemoAccountingRuleProposal>
+
+    @Query("""SELECT COALESCE(MAX(revisionNumber), 0) FROM finance_dev_accounting_rule_proposals
+        WHERE typeCode = :typeCode AND ruleKind = :kind""")
+    protected abstract suspend fun lastRevision(typeCode: String, kind: String): Long
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    protected abstract suspend fun insertProposal(proposal: FinanceDemoAccountingRuleProposal)
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    protected abstract suspend fun insertEvent(event: FinanceDemoAccountingRuleEvent)
+
+    @Transaction
+    open suspend fun submitProposal(
+        proposal: FinanceDemoAccountingRuleProposal,
+        event: FinanceDemoAccountingRuleEvent
+    ) {
+        FinanceDemoAccountingRulePolicy.validate(proposal)
+        require(event.proposalId == proposal.proposalId && event.eventType == "SUBMITTED")
+        require(event.occurredAtMillis == proposal.submittedAtMillis)
+        val revision = Math.addExact(lastRevision(proposal.typeCode, proposal.ruleKind), 1L)
+        insertProposal(proposal.copy(revisionNumber = revision))
+        insertEvent(event)
+    }
+}
 
 @Dao
 abstract class FinanceDemoDraftDao {
@@ -137,14 +203,18 @@ abstract class FinanceDemoDraftDao {
     }
 }
 
-/** Version 2 evolves the isolated synthetic store without granting posting authority. */
+/** Version 3 adds canonical classification and pending rule proposals; no posting authority. */
 @Database(
-    entities = [FinanceDemoDraftBill::class, FinanceDemoDraftEvent::class],
-    version = 2,
+    entities = [
+        FinanceDemoDraftBill::class, FinanceDemoDraftEvent::class,
+        FinanceDemoAccountingRuleProposal::class, FinanceDemoAccountingRuleEvent::class
+    ],
+    version = 3,
     exportSchema = true
 )
 abstract class FinanceDemoDraftDatabase : RoomDatabase() {
     abstract fun drafts(): FinanceDemoDraftDao
+    abstract fun accountingRules(): FinanceDemoAccountingRuleDao
 
     companion object {
         // Keep the original filename so Phase 2A device drafts are migrated rather than abandoned.
@@ -202,9 +272,44 @@ abstract class FinanceDemoDraftDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE finance_demo_draft_bills ADD COLUMN expenseCategoryCode TEXT")
+                db.execSQL("ALTER TABLE finance_demo_draft_bills ADD COLUMN expenseTypeCode TEXT")
+                db.execSQL("ALTER TABLE finance_demo_draft_bills ADD COLUMN expenseTypeLabel TEXT")
+                db.execSQL("""CREATE TABLE IF NOT EXISTS finance_dev_accounting_rule_proposals (
+                    proposalId TEXT NOT NULL PRIMARY KEY,
+                    typeCode TEXT NOT NULL,
+                    ruleKind TEXT NOT NULL,
+                    revisionNumber INTEGER NOT NULL,
+                    previousMappingHint TEXT NOT NULL,
+                    proposedValue TEXT NOT NULL,
+                    proposedGroup TEXT NOT NULL,
+                    effectiveFrom TEXT NOT NULL,
+                    sourceReference TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    submittedAtMillis INTEGER NOT NULL
+                )""")
+                db.execSQL("""CREATE UNIQUE INDEX IF NOT EXISTS
+                    index_finance_dev_accounting_rule_proposals_typeCode_ruleKind_revisionNumber
+                    ON finance_dev_accounting_rule_proposals (typeCode, ruleKind, revisionNumber)""")
+                db.execSQL("""CREATE TABLE IF NOT EXISTS finance_dev_accounting_rule_events (
+                    eventId TEXT NOT NULL PRIMARY KEY,
+                    proposalId TEXT NOT NULL,
+                    eventType TEXT NOT NULL,
+                    occurredAtMillis INTEGER NOT NULL,
+                    description TEXT NOT NULL
+                )""")
+                db.execSQL("""CREATE INDEX IF NOT EXISTS
+                    index_finance_dev_accounting_rule_events_proposalId_occurredAtMillis
+                    ON finance_dev_accounting_rule_events (proposalId, occurredAtMillis)""")
+            }
+        }
+
         fun build(context: Context): FinanceDemoDraftDatabase =
             Room.databaseBuilder(context, FinanceDemoDraftDatabase::class.java, DATABASE_NAME)
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
     }
 }

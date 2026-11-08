@@ -1,0 +1,2038 @@
+{
+  "schema_version": "1.0.0-draft-for-ca-validation",
+  "purpose": "Booking Register Finance hospitality expense category/type seed master; not a substitute for a legal-entity-specific CA-approved chart of accounts",
+  "status": "proposed defaults for user review; statutory mappings require CA validation",
+  "standards_referenced": [
+    {
+      "name": "ICAI Technical Guide on Audit in Hotel Industry (2011)",
+      "url": "https://kb.icai.org/pdfs/PDFFile5b276eae677f51.18797778.pdf"
+    },
+    {
+      "name": "HFTP USALI 12th Edition overview (effective 2026)",
+      "url": "https://www.hftp.org/downloads/documents/usali/tfh24sp_usali12overview.pdf"
+    },
+    {
+      "name": "Schedule III Companies Act (Government reference)",
+      "url": "https://wm.incometaxindia.gov.in/w/schedule-iii"
+    }
+  ],
+  "design_rules": [
+    "Canonical codes are immutable; rename display labels only",
+    "Categories and types are seeded, not hardcoded into the expense entry screen",
+    "Visibility is per property; hidden types remain searchable to authorized users",
+    "Never delete used types; archive instead, preserving historical codes",
+    "Every expense carries legal entity, property, department, type, service period, gross amount, tax lines, vendor and payable/payment link",
+    "GST/TDS rules are separate, effective-dated, CA-configurable tax mappings; do not infer them from type alone",
+    "Payments, vendor advances, guest refunds, refundable deposits, loan principal and tax remittances are not expense types",
+    "Capital purchases, improvements and inventory movements use separate workflows",
+    "Accrual posting and cash settlement are distinct; no duplicate expense when paid",
+    "Default suggested classifications must be confirmed for ambiguous searches",
+    "Staff cannot create or remap accounting ledgers without approval",
+    "Statutory group and USALI departmental mapping are independent dimensions"
+  ],
+  "non_expense_transaction_examples": [
+    "Purchase fixed asset",
+    "Construction/capital improvement",
+    "Vendor advance",
+    "Refundable security deposit",
+    "Loan principal repayment",
+    "GST payment / TDS remittance",
+    "Guest booking refund",
+    "Guest advance receipt",
+    "Transfer between cash and bank",
+    "Stock purchase to inventory",
+    "Depreciation journal"
+  ],
+  "categories": [
+    {
+      "code": "HC01",
+      "name": "Staff & Employee Benefits",
+      "visible_in_small_hotel_preset": true,
+      "hotel_reporting_hint": "Department selected on transaction",
+      "types": [
+        {
+          "code": "HE0101",
+          "name": "Salaries & Wages",
+          "aliases": [
+            "salary",
+            "wages",
+            "staff pay",
+            "tankhwa",
+            "vetan",
+            "तनख्वाह",
+            "वेतन"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Employee benefits expense"
+        },
+        {
+          "code": "HE0102",
+          "name": "Casual Staff Wages",
+          "aliases": [
+            "daily labour",
+            "casual staff",
+            "daily wage staff",
+            "extra waiter",
+            "temporary hotel staff",
+            "दिहाड़ी स्टाफ"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Employee benefits expense"
+        },
+        {
+          "code": "HE0103",
+          "name": "Overtime",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Employee benefits expense"
+        },
+        {
+          "code": "HE0104",
+          "name": "Bonus & Incentives",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Employee benefits expense"
+        },
+        {
+          "code": "HE0105",
+          "name": "Employer PF Contribution",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Employee benefits expense"
+        },
+        {
+          "code": "HE0106",
+          "name": "Employer ESI Contribution",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Employee benefits expense"
+        },
+        {
+          "code": "HE0107",
+          "name": "Gratuity & Leave Benefits",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Employee benefits expense"
+        },
+        {
+          "code": "HE0108",
+          "name": "Staff Meals & Welfare",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Employee benefits expense"
+        },
+        {
+          "code": "HE0109",
+          "name": "Staff Accommodation",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Employee benefits expense"
+        },
+        {
+          "code": "HE0110",
+          "name": "Staff Uniforms",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Employee benefits expense"
+        },
+        {
+          "code": "HE0111",
+          "name": "Recruitment Fees",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Employee benefits expense"
+        },
+        {
+          "code": "HE0112",
+          "name": "Staff Training",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Employee benefits expense"
+        },
+        {
+          "code": "HE0113",
+          "name": "Staff Medical & Insurance",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Employee benefits expense"
+        }
+      ]
+    },
+    {
+      "code": "HC02",
+      "name": "Food & Beverage Cost",
+      "visible_in_small_hotel_preset": true,
+      "hotel_reporting_hint": "Food & Beverage",
+      "types": [
+        {
+          "code": "HE0201",
+          "name": "Food Ingredients",
+          "aliases": [
+            "sabzi",
+            "vegetables",
+            "milk",
+            "atta",
+            "rice",
+            "flour",
+            "grocery",
+            "ration",
+            "सब्जी",
+            "राशन"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Inventory / cost of materials consumed (subject to policy)"
+        },
+        {
+          "code": "HE0202",
+          "name": "Non-Alcoholic Beverages",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Inventory / cost of materials consumed (subject to policy)"
+        },
+        {
+          "code": "HE0203",
+          "name": "Alcoholic Beverages",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Inventory / cost of materials consumed (subject to policy)"
+        },
+        {
+          "code": "HE0204",
+          "name": "Packaged Food for Resale",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Inventory / cost of materials consumed (subject to policy)"
+        },
+        {
+          "code": "HE0205",
+          "name": "Outsourced Prepared Food",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Inventory / cost of materials consumed (subject to policy)"
+        },
+        {
+          "code": "HE0206",
+          "name": "Food Inventory Wastage Adjustment",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "accountant_only",
+          "statutory_mapping_hint": "Inventory adjustment / cost of consumption (CA review)"
+        },
+        {
+          "code": "HE0207",
+          "name": "Beverage Inventory Wastage Adjustment",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "accountant_only",
+          "statutory_mapping_hint": "Inventory adjustment / cost of consumption (CA review)"
+        }
+      ]
+    },
+    {
+      "code": "HC03",
+      "name": "Kitchen & Restaurant Operations",
+      "visible_in_small_hotel_preset": true,
+      "hotel_reporting_hint": "Food & Beverage",
+      "types": [
+        {
+          "code": "HE0301",
+          "name": "Kitchen Consumables",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0302",
+          "name": "Dishwashing & Kitchen Cleaning Supplies",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0303",
+          "name": "Packaging & Disposables",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0304",
+          "name": "Crockery & Cutlery Replacement",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses",
+          "review_if": "Significant improvement/new construction or above property capitalization threshold"
+        },
+        {
+          "code": "HE0305",
+          "name": "Restaurant Linen Laundry",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0306",
+          "name": "Food Delivery Platform Commission",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0307",
+          "name": "Restaurant Equipment Hire",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0309",
+          "name": "Menu Printing",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0310",
+          "name": "Restaurant Contract Services",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        }
+      ]
+    },
+    {
+      "code": "HC04",
+      "name": "Rooms & Guest Supplies",
+      "visible_in_small_hotel_preset": true,
+      "hotel_reporting_hint": "Rooms",
+      "types": [
+        {
+          "code": "HE0401",
+          "name": "Room Linen Laundry",
+          "aliases": [
+            "laundry",
+            "bedsheet washing",
+            "towel washing",
+            "dhobi",
+            "धोबी",
+            "चादर धुलाई"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0402",
+          "name": "Guest Toiletries & Amenities",
+          "aliases": [
+            "soap",
+            "shampoo",
+            "toiletries",
+            "dental kit",
+            "guest kit",
+            "साबुन"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0403",
+          "name": "Room Cleaning Supplies",
+          "aliases": [
+            "phenyl",
+            "mop",
+            "cleaner",
+            "room cleaning",
+            "झाड़ू",
+            "फिनाइल"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0404",
+          "name": "In-Room Tea Coffee & Water",
+          "aliases": [
+            "tea sachet",
+            "coffee sachet",
+            "room water bottle",
+            "mineral water room"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0405",
+          "name": "Linen & Towel Replacement",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses",
+          "review_if": "Significant improvement/new construction or above property capitalization threshold"
+        },
+        {
+          "code": "HE0406",
+          "name": "Outsourced Room Cleaning",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0407",
+          "name": "Guest Welcome Supplies",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0408",
+          "name": "Guest Newspapers & Magazines",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0409",
+          "name": "Room Keys & Access Consumables",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0410",
+          "name": "Guest Service Recovery Supplies",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0411",
+          "name": "Room Decoration & Flowers",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        }
+      ]
+    },
+    {
+      "code": "HC05",
+      "name": "Property Rent & Occupancy",
+      "visible_in_small_hotel_preset": true,
+      "hotel_reporting_hint": "Nonoperating / occupancy",
+      "types": [
+        {
+          "code": "HE0501",
+          "name": "Hotel Building Rent",
+          "aliases": [
+            "rent",
+            "hotel rent",
+            "property rent",
+            "kiraya",
+            "किराया"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": true,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / lease accounting review"
+        },
+        {
+          "code": "HE0502",
+          "name": "Land Lease Rent",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": true,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / lease accounting review"
+        },
+        {
+          "code": "HE0503",
+          "name": "Office & Store Rent",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / lease accounting review"
+        },
+        {
+          "code": "HE0504",
+          "name": "Common Area Maintenance Charges",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / lease accounting review"
+        },
+        {
+          "code": "HE0505",
+          "name": "Equipment Hire & Rent",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / lease accounting review"
+        },
+        {
+          "code": "HE0506",
+          "name": "Turnover-Linked Rent",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / lease accounting review"
+        }
+      ]
+    },
+    {
+      "code": "HC06",
+      "name": "Energy, Water & Waste",
+      "visible_in_small_hotel_preset": true,
+      "hotel_reporting_hint": "Energy, Water & Waste",
+      "types": [
+        {
+          "code": "HE0601",
+          "name": "Electricity",
+          "aliases": [
+            "bijli",
+            "light bill",
+            "power bill",
+            "electric bill",
+            "बिजली",
+            "bijlee"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0602",
+          "name": "Water Utility Bill",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0603",
+          "name": "Water Tanker Supply",
+          "aliases": [
+            "water tanker",
+            "tanker",
+            "pani tanker",
+            "पानी टैंकर"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0604",
+          "name": "Cooking LPG / PNG",
+          "aliases": [
+            "gas",
+            "gas cylinder",
+            "lpg",
+            "cylinder",
+            "kitchen gas",
+            "rasoi gas",
+            "गैस",
+            "सिलेंडर",
+            "silendar",
+            "sylinder",
+            "rasoi cylinder"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0605",
+          "name": "Generator Diesel",
+          "aliases": [
+            "diesel",
+            "dg set",
+            "generator fuel",
+            "genset diesel",
+            "जनरेटर डीजल"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0606",
+          "name": "Heating Fuel",
+          "aliases": [
+            "firewood",
+            "lakdi",
+            "coal",
+            "wood heating",
+            "अंगीठी",
+            "लकड़ी",
+            "koyla",
+            "koyala",
+            "kolla",
+            "koal",
+            "कोयला",
+            "कोयले"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0607",
+          "name": "Sewerage Charges",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0608",
+          "name": "Waste Collection & Disposal",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0609",
+          "name": "Recycling Charges",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0610",
+          "name": "Other Utility Fuel",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        }
+      ]
+    },
+    {
+      "code": "HC07",
+      "name": "Repairs, Maintenance & Grounds",
+      "visible_in_small_hotel_preset": true,
+      "hotel_reporting_hint": "Property Operation & Maintenance",
+      "types": [
+        {
+          "code": "HE0701",
+          "name": "Building Repairs",
+          "aliases": [
+            "mason",
+            "repair work",
+            "mistri",
+            "building maintenance",
+            "मिस्त्री"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / capitalization review",
+          "review_if": "Significant improvement/new construction or above property capitalization threshold"
+        },
+        {
+          "code": "HE0702",
+          "name": "Painting & Whitewashing",
+          "aliases": [
+            "painter",
+            "painting",
+            "paint labour",
+            "painter mazdoori",
+            "putai",
+            "whitewash",
+            "safedi",
+            "पुताई",
+            "पेंटर",
+            "रंगाई",
+            "putai mazdoor",
+            "paint mazdoori",
+            "pentar",
+            "पुताई मजदूर"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / capitalization review",
+          "review_if": "Significant improvement/new construction or above property capitalization threshold"
+        },
+        {
+          "code": "HE0703",
+          "name": "Plumbing Repairs",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / capitalization review"
+        },
+        {
+          "code": "HE0704",
+          "name": "Electrical Repairs",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / capitalization review"
+        },
+        {
+          "code": "HE0705",
+          "name": "Heating & HVAC Repairs",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / capitalization review"
+        },
+        {
+          "code": "HE0706",
+          "name": "Generator Repairs & Service",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / capitalization review"
+        },
+        {
+          "code": "HE0707",
+          "name": "Kitchen Equipment Repairs",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / capitalization review"
+        },
+        {
+          "code": "HE0708",
+          "name": "Swimming Pool Maintenance",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / capitalization review"
+        },
+        {
+          "code": "HE0709",
+          "name": "Gardening & Landscaping",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / capitalization review"
+        },
+        {
+          "code": "HE0710",
+          "name": "Pest Control (Property)",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / capitalization review"
+        },
+        {
+          "code": "HE0711",
+          "name": "Annual Maintenance Contracts",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / capitalization review"
+        },
+        {
+          "code": "HE0712",
+          "name": "Repair Spare Parts",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / capitalization review"
+        },
+        {
+          "code": "HE0713",
+          "name": "Furniture Repairs",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / capitalization review",
+          "review_if": "Significant improvement/new construction or above property capitalization threshold"
+        },
+        {
+          "code": "HE0714",
+          "name": "Carpentry & Glass Repairs",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / capitalization review"
+        },
+        {
+          "code": "HE0715",
+          "name": "Water Pump & Plumbing Equipment Service",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / capitalization review"
+        },
+        {
+          "code": "HE0716",
+          "name": "Minor Maintenance Materials",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / capitalization review"
+        }
+      ]
+    },
+    {
+      "code": "HC08",
+      "name": "Booking & Distribution",
+      "visible_in_small_hotel_preset": true,
+      "hotel_reporting_hint": "Rooms / Sales & Marketing (mapping configurable)",
+      "types": [
+        {
+          "code": "HE0801",
+          "name": "OTA Commission",
+          "aliases": [
+            "booking.com commission",
+            "makemytrip commission",
+            "goibibo commission",
+            "agoda commission",
+            "ota",
+            "commission"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0802",
+          "name": "Travel Agent Commission",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0803",
+          "name": "Corporate Booking Commission",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0804",
+          "name": "GDS & Reservation Network Fees",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0805",
+          "name": "Channel Manager Subscription",
+          "aliases": [
+            "channel manager",
+            "ota sync fee"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0806",
+          "name": "Booking Engine Subscription",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0807",
+          "name": "Reservation Service Charges",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0808",
+          "name": "Affiliate Booking Commission",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        }
+      ]
+    },
+    {
+      "code": "HC09",
+      "name": "Sales & Marketing",
+      "visible_in_small_hotel_preset": false,
+      "hotel_reporting_hint": "Sales & Marketing",
+      "types": [
+        {
+          "code": "HE0901",
+          "name": "Digital Advertising",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0902",
+          "name": "Social Media Advertising",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0903",
+          "name": "Print & Outdoor Advertising",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0904",
+          "name": "Photography & Videography",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0905",
+          "name": "Marketing Agency Fees",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0906",
+          "name": "Influencer & Creator Fees",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0907",
+          "name": "SEO & Content Marketing",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0908",
+          "name": "Promotional Printing & Materials",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0909",
+          "name": "Loyalty Program Costs",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0910",
+          "name": "Sales Events & Promotions",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE0911",
+          "name": "Market Research & Analytics",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        }
+      ]
+    },
+    {
+      "code": "HC10",
+      "name": "IT, Communications & TV",
+      "visible_in_small_hotel_preset": true,
+      "hotel_reporting_hint": "Information & Telecommunications Systems",
+      "types": [
+        {
+          "code": "HE1001",
+          "name": "Internet & Guest Wi-Fi",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1002",
+          "name": "Telephone & Mobile Recharge",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1003",
+          "name": "DTH / Cable TV Recharge",
+          "aliases": [
+            "dth",
+            "dish tv",
+            "tata play",
+            "dish recharge",
+            "tv recharge",
+            "cable",
+            "set top box",
+            "टीवी रिचार्ज",
+            "डिश",
+            "dish rechaarge",
+            "tv ka recharge",
+            "dth recharge"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1004",
+          "name": "Guest TV Streaming Subscription",
+          "aliases": [
+            "netflix",
+            "ott",
+            "hotstar",
+            "streaming tv"
+          ],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1005",
+          "name": "PMS Subscription",
+          "aliases": [
+            "booking register subscription",
+            "hotel software",
+            "pms fee"
+          ],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1006",
+          "name": "Other Software Subscriptions",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1007",
+          "name": "Website Domain & Hosting",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1008",
+          "name": "Cloud Storage & Services",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1009",
+          "name": "IT Equipment Repairs",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1010",
+          "name": "Cybersecurity Services",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1011",
+          "name": "Computer Consumables",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1012",
+          "name": "IT Support Contract",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        }
+      ]
+    },
+    {
+      "code": "HC11",
+      "name": "Administration & Professional Fees",
+      "visible_in_small_hotel_preset": true,
+      "hotel_reporting_hint": "Administrative & General",
+      "types": [
+        {
+          "code": "HE1101",
+          "name": "Accounting & Bookkeeping Fees",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1102",
+          "name": "Statutory Audit Fees",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1103",
+          "name": "Tax Advisory & Return Filing Fees",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1104",
+          "name": "Legal Fees",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1105",
+          "name": "Business Consultancy Fees",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1106",
+          "name": "Office Stationery",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1107",
+          "name": "Office Printing & Photocopying",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1108",
+          "name": "Courier & Postage",
+          "aliases": [],
+          "enabled_by_default": true,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1109",
+          "name": "Office Consumables",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1110",
+          "name": "Administrative Travel",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1111",
+          "name": "Professional Memberships",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1112",
+          "name": "Meeting & Office Refreshments",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        }
+      ]
+    },
+    {
+      "code": "HC12",
+      "name": "Licenses & Compliance",
+      "visible_in_small_hotel_preset": false,
+      "hotel_reporting_hint": "Administrative & General",
+      "types": [
+        {
+          "code": "HE1201",
+          "name": "Tourism Registration & Renewal",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1202",
+          "name": "Trade License & Renewal",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1203",
+          "name": "FSSAI License & Renewal",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1204",
+          "name": "Fire Safety Certification",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1205",
+          "name": "Pollution & Environment Consent",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1206",
+          "name": "Statutory Filing Fees",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1207",
+          "name": "Inspection & Certification Fees",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1208",
+          "name": "Other Operating Permits",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1209",
+          "name": "Compliance Testing & Certification",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        }
+      ]
+    },
+    {
+      "code": "HC13",
+      "name": "Insurance, Security & Property Levies",
+      "visible_in_small_hotel_preset": false,
+      "hotel_reporting_hint": "Nonoperating / Administrative & General",
+      "types": [
+        {
+          "code": "HE1301",
+          "name": "Property Insurance",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1302",
+          "name": "Public Liability Insurance",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1303",
+          "name": "Business Interruption Insurance",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1304",
+          "name": "Security Guard Services",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1305",
+          "name": "CCTV Monitoring & Security Services",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1306",
+          "name": "Fire Extinguisher Servicing",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1307",
+          "name": "Safety & First Aid Supplies",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1308",
+          "name": "Municipal Property Tax",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1309",
+          "name": "Other Municipal Levies",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1310",
+          "name": "Security Consumables",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        }
+      ]
+    },
+    {
+      "code": "HC14",
+      "name": "Transport & Logistics",
+      "visible_in_small_hotel_preset": false,
+      "hotel_reporting_hint": "Department selected on transaction",
+      "types": [
+        {
+          "code": "HE1401",
+          "name": "Guest Taxi & Transfers",
+          "aliases": [
+            "guest cab",
+            "guest taxi",
+            "guest pickup",
+            "drop"
+          ],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1402",
+          "name": "Staff Transportation",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1403",
+          "name": "Vehicle Fuel",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1404",
+          "name": "Vehicle Repairs & Maintenance",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1405",
+          "name": "Vehicle Hire",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1406",
+          "name": "Toll & Parking",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1407",
+          "name": "Goods Delivery & Logistics",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1408",
+          "name": "Vehicle Insurance",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        },
+        {
+          "code": "HE1409",
+          "name": "Driver Contract Services",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses"
+        }
+      ]
+    },
+    {
+      "code": "HC15",
+      "name": "Banking & Finance",
+      "visible_in_small_hotel_preset": false,
+      "hotel_reporting_hint": "Nonoperating / Administrative & General",
+      "types": [
+        {
+          "code": "HE1501",
+          "name": "Bank Service Charges",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses (bank/payment fees)"
+        },
+        {
+          "code": "HE1502",
+          "name": "Payment Gateway Charges",
+          "aliases": [
+            "razorpay fee",
+            "gateway fee",
+            "online transaction fee"
+          ],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses (bank/payment fees)"
+        },
+        {
+          "code": "HE1503",
+          "name": "Card Processing Charges",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses (bank/payment fees)"
+        },
+        {
+          "code": "HE1504",
+          "name": "Loan Interest",
+          "aliases": [
+            "loan byaj",
+            "interest on loan",
+            "emi interest",
+            "ब्याज"
+          ],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Finance costs"
+        },
+        {
+          "code": "HE1505",
+          "name": "Overdraft Interest",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Finance costs"
+        },
+        {
+          "code": "HE1506",
+          "name": "Loan Processing Fees",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Finance costs"
+        },
+        {
+          "code": "HE1507",
+          "name": "Other Borrowing Costs",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Finance costs"
+        },
+        {
+          "code": "HE1508",
+          "name": "Foreign Exchange Bank Charges",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses (bank/payment fees)"
+        }
+      ]
+    },
+    {
+      "code": "HC16",
+      "name": "Management & Brand Fees",
+      "visible_in_small_hotel_preset": false,
+      "hotel_reporting_hint": "Management Fees / Brand Costs",
+      "types": [
+        {
+          "code": "HE1601",
+          "name": "Base Hotel Management Fee",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / intercompany review"
+        },
+        {
+          "code": "HE1602",
+          "name": "Incentive Management Fee",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / intercompany review"
+        },
+        {
+          "code": "HE1603",
+          "name": "Franchise Royalty",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / intercompany review"
+        },
+        {
+          "code": "HE1604",
+          "name": "Brand Service Fee",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / intercompany review"
+        },
+        {
+          "code": "HE1605",
+          "name": "Central Management Services",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / intercompany review"
+        },
+        {
+          "code": "HE1606",
+          "name": "Brand Reservation Assessment",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / intercompany review"
+        },
+        {
+          "code": "HE1607",
+          "name": "Brand Marketing Assessment",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / intercompany review"
+        },
+        {
+          "code": "HE1608",
+          "name": "Shared Services Charge",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / intercompany review"
+        }
+      ]
+    },
+    {
+      "code": "HC17",
+      "name": "Recreation, Spa & Events",
+      "visible_in_small_hotel_preset": false,
+      "hotel_reporting_hint": "Other Operated Departments",
+      "types": [
+        {
+          "code": "HE1701",
+          "name": "Spa Consumables",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / inventory review"
+        },
+        {
+          "code": "HE1702",
+          "name": "Spa Contract Therapist Fees",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / inventory review"
+        },
+        {
+          "code": "HE1703",
+          "name": "Banquet & Event Supplies",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / inventory review"
+        },
+        {
+          "code": "HE1704",
+          "name": "Event Vendor Services",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / inventory review"
+        },
+        {
+          "code": "HE1705",
+          "name": "Guest Entertainment Artists",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / inventory review"
+        },
+        {
+          "code": "HE1706",
+          "name": "Adventure & Activity Operator Fees",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / inventory review"
+        },
+        {
+          "code": "HE1707",
+          "name": "Recreation Equipment Hire",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / inventory review"
+        },
+        {
+          "code": "HE1708",
+          "name": "Minibar Merchandise",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / inventory review"
+        },
+        {
+          "code": "HE1709",
+          "name": "Parking Operation Expenses",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / inventory review"
+        },
+        {
+          "code": "HE1710",
+          "name": "Event Equipment Hire",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": false,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / inventory review"
+        }
+      ]
+    },
+    {
+      "code": "HC18",
+      "name": "Other & Controlled Adjustments",
+      "visible_in_small_hotel_preset": false,
+      "hotel_reporting_hint": "Administrative & General / review",
+      "types": [
+        {
+          "code": "HE1801",
+          "name": "Other Approved Operating Expense",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / CA review"
+        },
+        {
+          "code": "HE1802",
+          "name": "Penalties & Fines",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "staff_with_approval_if_flagged",
+          "statutory_mapping_hint": "Other expenses / CA review"
+        },
+        {
+          "code": "HE1803",
+          "name": "Bad Debt Expense",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "accountant_only",
+          "statutory_mapping_hint": "Impairment / other expenses (CA review)"
+        },
+        {
+          "code": "HE1804",
+          "name": "Inventory Shrinkage Adjustment",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "accountant_only",
+          "statutory_mapping_hint": "Inventory adjustment / cost of consumption (CA review)"
+        },
+        {
+          "code": "HE1805",
+          "name": "Exceptional Expense",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "accountant_only",
+          "statutory_mapping_hint": "Other expenses / CA review"
+        },
+        {
+          "code": "HE1806",
+          "name": "Prior-Period Adjustment",
+          "aliases": [],
+          "enabled_by_default": false,
+          "requires_accountant_review": true,
+          "entry_role": "accountant_only",
+          "statutory_mapping_hint": "Other expenses / CA review"
+        }
+      ]
+    }
+  ],
+  "small_hotel_preset": {
+    "visible_category_codes": [
+      "HC01",
+      "HC02",
+      "HC03",
+      "HC04",
+      "HC05",
+      "HC06",
+      "HC07",
+      "HC08",
+      "HC10",
+      "HC11"
+    ],
+    "enabled_type_count": 53,
+    "note": "Admins may enable any additional category or type. Hidden types remain available for admin search and historical records."
+  },
+  "search_disambiguation": [
+    {
+      "query": "gas",
+      "choices": [
+        {
+          "label": "Kitchen gas cylinder / LPG",
+          "type_code": "HE0604"
+        },
+        {
+          "label": "Generator fuel / diesel",
+          "type_code": "HE0605"
+        },
+        {
+          "label": "Heating fuel / wood",
+          "type_code": "HE0606"
+        }
+      ]
+    },
+    {
+      "query": "labour / labor / mazdoori",
+      "choices": [
+        {
+          "label": "Temporary hotel staff",
+          "type_code": "HE0102"
+        },
+        {
+          "label": "Painter or building repair worker",
+          "type_code": "HE0702"
+        }
+      ]
+    },
+    {
+      "query": "recharge",
+      "choices": [
+        {
+          "label": "TV / DTH recharge",
+          "type_code": "HE1003"
+        },
+        {
+          "label": "Mobile recharge",
+          "type_code": "HE1002"
+        },
+        {
+          "label": "Guest internet / Wi-Fi",
+          "type_code": "HE1001"
+        }
+      ]
+    },
+    {
+      "query": "rent",
+      "choices": [
+        {
+          "label": "Hotel building rent",
+          "type_code": "HE0501"
+        },
+        {
+          "label": "Land lease rent",
+          "type_code": "HE0502"
+        }
+      ]
+    },
+    {
+      "query": "coal / koyla / kolla / koal / koyala / कोयला / कोयले",
+      "choices": [
+        {
+          "label": "Coal for room heating",
+          "type_code": "HE0606"
+        },
+        {
+          "label": "Coal for kitchen / tandoor (review)",
+          "type_code": "HE0610"
+        }
+      ]
+    }
+  ],
+  "accounting_approval_notes": [
+    "Type-level statutory groups are indicative; a CA must validate against legal entity and applicable AS/Ind AS",
+    "Some food purchases are inventory, not immediate consumption; use inventory workflow when stock is tracked",
+    "Hotel leases may be recognized differently depending on accounting framework; the rent category is operational input, not automatic statutory expense",
+    "USALI 12th treats in-room TV/entertainment costs under Information & Telecommunications Systems; Indian ledger presentation may differ",
+    "Expense master is not a substitute for double-entry general ledger, inventory, fixed asset register, payroll or statutory tax ledgers"
+  ]
+}

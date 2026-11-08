@@ -156,20 +156,76 @@ class FinanceDemoDraftPolicyTest {
         assertFails { FinanceDemoDraftPolicy.parseMoney("1e6") }
     }
 
+    @Test
+    fun smartSearchSelectionPersistsCanonicalCodesInLocalDraft() {
+        val row = FinanceDemoDraftPolicy.create(
+            input(
+                category = "IT, Communications & TV",
+                expenseCategoryCode = "HC10",
+                expenseTypeCode = "HE1003",
+                expenseTypeLabel = "DTH / Cable TV Recharge"
+            ), "canonical-dth", 1_000L
+        )
+        assertEquals("HC10", row.expenseCategoryCode)
+        assertEquals("HE1003", row.expenseTypeCode)
+        assertEquals("DTH / Cable TV Recharge", row.expenseTypeLabel)
+        assertEquals("IT, Communications & TV", row.category)
+        FinanceDemoDraftPolicy.validate(row)
+    }
+
+    @Test
+    fun legacyDraftCanBeEditedWithoutLosingItsOriginalClassification() {
+        val old = FinanceDemoDraftPolicy.create("demo-laundry", "legacy", 1_000L)
+        val edited = FinanceDemoDraftPolicy.edit(
+            old,
+            input(category = old.category),
+            "Corrected fictional invoice", 2_000L
+        )
+        assertEquals("Laundry", edited.category)
+        assertNull(edited.expenseCategoryCode)
+        assertNull(edited.expenseTypeCode)
+        assertNull(edited.expenseTypeLabel)
+        assertEquals(2L, edited.revision)
+    }
+
+    @Test
+    fun rejectsPartialOrMismatchedCanonicalClassification() {
+        assertFails {
+            FinanceDemoDraftPolicy.create(
+                input(category = "IT, Communications & TV", expenseTypeCode = "HE1003"),
+                "missing-category", 1_000L
+            )
+        }
+        assertFails {
+            FinanceDemoDraftPolicy.create(
+                input(
+                    category = "Rooms", expenseCategoryCode = "HC04",
+                    expenseTypeCode = "HE1003", expenseTypeLabel = "DTH"
+                ), "mismatch", 1_000L
+            )
+        }
+    }
+
     private fun input(
         vendorCode: String = "demo-maintenance",
         category: String = "Maintenance",
         amountPaise: Long = 1_000_000L,
         paymentStatus: FinanceDemoDraftPolicy.PaymentStatus =
             FinanceDemoDraftPolicy.PaymentStatus.NOT_PAID,
-        amountPaidPaise: Long = 0L
+        amountPaidPaise: Long = 0L,
+        expenseCategoryCode: String? = null,
+        expenseTypeCode: String? = null,
+        expenseTypeLabel: String? = null
     ) = FinanceDemoDraftPolicy.DraftInput(
         vendorCode = vendorCode,
         category = category,
         invoiceDate = "2026-12-15",
         amountPaise = amountPaise,
         paymentStatus = paymentStatus,
-        amountPaidPaise = amountPaidPaise
+        amountPaidPaise = amountPaidPaise,
+        expenseCategoryCode = expenseCategoryCode,
+        expenseTypeCode = expenseTypeCode,
+        expenseTypeLabel = expenseTypeLabel
     )
 
     private fun assertFails(block: () -> Unit) {

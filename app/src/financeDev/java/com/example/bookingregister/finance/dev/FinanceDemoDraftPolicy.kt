@@ -38,7 +38,10 @@ internal object FinanceDemoDraftPolicy {
         val invoiceDate: String,
         val amountPaise: Long,
         val paymentStatus: PaymentStatus,
-        val amountPaidPaise: Long
+        val amountPaidPaise: Long,
+        val expenseCategoryCode: String? = null,
+        val expenseTypeCode: String? = null,
+        val expenseTypeLabel: String? = null
     )
 
     val vendors: List<VendorOption> = listOf(
@@ -46,7 +49,8 @@ internal object FinanceDemoDraftPolicy {
         VendorOption("demo-rent", "Demo Landlord"),
         VendorOption("demo-maintenance", "Demo Maintenance Vendor"),
         VendorOption("demo-utilities", "Demo Utility Provider"),
-        VendorOption("demo-housekeeping", "Demo Housekeeping Supplier")
+        VendorOption("demo-housekeeping", "Demo Housekeeping Supplier"),
+        VendorOption("demo-general", "Demo General Supplier")
     )
 
     val categories: List<String> = listOf(
@@ -88,7 +92,10 @@ internal object FinanceDemoDraftPolicy {
             amountPaidPaise = input.amountPaidPaise,
             updatedAtMillis = nowMillis,
             discardedAtMillis = null,
-            revision = 1L
+            revision = 1L,
+            expenseCategoryCode = input.expenseCategoryCode,
+            expenseTypeCode = input.expenseTypeCode,
+            expenseTypeLabel = input.expenseTypeLabel
         ).also(::validate)
     }
 
@@ -129,6 +136,9 @@ internal object FinanceDemoDraftPolicy {
             amountPaise = input.amountPaise,
             paymentStatus = input.paymentStatus.name,
             amountPaidPaise = input.amountPaidPaise,
+            expenseCategoryCode = input.expenseCategoryCode,
+            expenseTypeCode = input.expenseTypeCode,
+            expenseTypeLabel = input.expenseTypeLabel,
             updatedAtMillis = nowMillis,
             revision = Math.addExact(original.revision, 1L)
         ).also(::validate)
@@ -174,7 +184,24 @@ internal object FinanceDemoDraftPolicy {
         ) { "Not a synthetic Finance DEV record" }
         require(row.currencyCode == CurrencyCode.INR.name) { "Unknown draft currency" }
         require(row.vendorCode in vendors.map { it.code }) { "Unknown fictional vendor" }
-        require(row.category in categories) { "Unknown expense category" }
+        if (row.expenseTypeCode == null) {
+            require(row.expenseCategoryCode == null && row.expenseTypeLabel == null) {
+                "Legacy draft cannot contain partial canonical classification"
+            }
+            require(row.category in categories) { "Unknown legacy expense category" }
+        } else {
+            val categoryCode = row.expenseCategoryCode
+            require(categoryCode != null && Regex("HC[0-9]{2}").matches(categoryCode)) {
+                "Missing canonical category code"
+            }
+            require(Regex("HE[0-9]{4}").matches(row.expenseTypeCode) &&
+                row.expenseTypeCode.substring(2, 4) == categoryCode.substring(2, 4)) {
+                "Canonical type does not belong to category"
+            }
+            require(row.category.isNotBlank() && !row.expenseTypeLabel.isNullOrBlank()) {
+                "Missing classification display snapshot"
+            }
+        }
         require(row.amountPaise > 0L) { "Expense amount must be positive" }
         require(row.createdAtMillis > 0L && row.updatedAtMillis >= row.createdAtMillis) {
             "Invalid draft timestamps"

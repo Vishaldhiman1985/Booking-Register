@@ -1,0 +1,375 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 3,
+    "identityHash": "081082f19561e2897c8a0908330b77a7",
+    "entities": [
+      {
+        "tableName": "finance_demo_draft_bills",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`draftId` TEXT NOT NULL, `environment` TEXT NOT NULL, `tenantId` TEXT NOT NULL, `hotelId` TEXT NOT NULL, `propertyId` TEXT NOT NULL, `vendorCode` TEXT NOT NULL, `category` TEXT NOT NULL, `invoiceDate` TEXT NOT NULL, `accountingPeriod` TEXT NOT NULL, `currencyCode` TEXT NOT NULL, `amountPaise` INTEGER NOT NULL, `status` TEXT NOT NULL, `createdAtMillis` INTEGER NOT NULL, `paymentStatus` TEXT NOT NULL DEFAULT 'NOT_PAID', `amountPaidPaise` INTEGER NOT NULL DEFAULT 0, `updatedAtMillis` INTEGER NOT NULL DEFAULT 0, `discardedAtMillis` INTEGER, `revision` INTEGER NOT NULL DEFAULT 1, `expenseCategoryCode` TEXT, `expenseTypeCode` TEXT, `expenseTypeLabel` TEXT, PRIMARY KEY(`draftId`))",
+        "fields": [
+          {
+            "fieldPath": "draftId",
+            "columnName": "draftId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "environment",
+            "columnName": "environment",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tenantId",
+            "columnName": "tenantId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hotelId",
+            "columnName": "hotelId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "propertyId",
+            "columnName": "propertyId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "vendorCode",
+            "columnName": "vendorCode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "category",
+            "columnName": "category",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "invoiceDate",
+            "columnName": "invoiceDate",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accountingPeriod",
+            "columnName": "accountingPeriod",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currencyCode",
+            "columnName": "currencyCode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "amountPaise",
+            "columnName": "amountPaise",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMillis",
+            "columnName": "createdAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "paymentStatus",
+            "columnName": "paymentStatus",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'NOT_PAID'"
+          },
+          {
+            "fieldPath": "amountPaidPaise",
+            "columnName": "amountPaidPaise",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "updatedAtMillis",
+            "columnName": "updatedAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "discardedAtMillis",
+            "columnName": "discardedAtMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "1"
+          },
+          {
+            "fieldPath": "expenseCategoryCode",
+            "columnName": "expenseCategoryCode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "expenseTypeCode",
+            "columnName": "expenseTypeCode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "expenseTypeLabel",
+            "columnName": "expenseTypeLabel",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "draftId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_finance_demo_draft_bills_tenantId_propertyId_createdAtMillis",
+            "unique": false,
+            "columnNames": [
+              "tenantId",
+              "propertyId",
+              "createdAtMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_finance_demo_draft_bills_tenantId_propertyId_createdAtMillis` ON `${TABLE_NAME}` (`tenantId`, `propertyId`, `createdAtMillis`)"
+          }
+        ]
+      },
+      {
+        "tableName": "finance_demo_draft_events",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`eventId` TEXT NOT NULL, `draftId` TEXT NOT NULL, `eventType` TEXT NOT NULL, `reason` TEXT NOT NULL, `occurredAtMillis` INTEGER NOT NULL, `resultingRevision` INTEGER NOT NULL, PRIMARY KEY(`eventId`))",
+        "fields": [
+          {
+            "fieldPath": "eventId",
+            "columnName": "eventId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "draftId",
+            "columnName": "draftId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventType",
+            "columnName": "eventType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reason",
+            "columnName": "reason",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "occurredAtMillis",
+            "columnName": "occurredAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "resultingRevision",
+            "columnName": "resultingRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "eventId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_finance_demo_draft_events_draftId_occurredAtMillis",
+            "unique": false,
+            "columnNames": [
+              "draftId",
+              "occurredAtMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_finance_demo_draft_events_draftId_occurredAtMillis` ON `${TABLE_NAME}` (`draftId`, `occurredAtMillis`)"
+          }
+        ]
+      },
+      {
+        "tableName": "finance_dev_accounting_rule_proposals",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`proposalId` TEXT NOT NULL, `typeCode` TEXT NOT NULL, `ruleKind` TEXT NOT NULL, `revisionNumber` INTEGER NOT NULL, `previousMappingHint` TEXT NOT NULL, `proposedValue` TEXT NOT NULL, `proposedGroup` TEXT NOT NULL, `effectiveFrom` TEXT NOT NULL, `sourceReference` TEXT NOT NULL, `reason` TEXT NOT NULL, `status` TEXT NOT NULL, `submittedAtMillis` INTEGER NOT NULL, PRIMARY KEY(`proposalId`))",
+        "fields": [
+          {
+            "fieldPath": "proposalId",
+            "columnName": "proposalId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "typeCode",
+            "columnName": "typeCode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ruleKind",
+            "columnName": "ruleKind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "revisionNumber",
+            "columnName": "revisionNumber",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "previousMappingHint",
+            "columnName": "previousMappingHint",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "proposedValue",
+            "columnName": "proposedValue",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "proposedGroup",
+            "columnName": "proposedGroup",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "effectiveFrom",
+            "columnName": "effectiveFrom",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceReference",
+            "columnName": "sourceReference",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reason",
+            "columnName": "reason",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "submittedAtMillis",
+            "columnName": "submittedAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "proposalId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_finance_dev_accounting_rule_proposals_typeCode_ruleKind_revisionNumber",
+            "unique": true,
+            "columnNames": [
+              "typeCode",
+              "ruleKind",
+              "revisionNumber"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_finance_dev_accounting_rule_proposals_typeCode_ruleKind_revisionNumber` ON `${TABLE_NAME}` (`typeCode`, `ruleKind`, `revisionNumber`)"
+          }
+        ]
+      },
+      {
+        "tableName": "finance_dev_accounting_rule_events",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`eventId` TEXT NOT NULL, `proposalId` TEXT NOT NULL, `eventType` TEXT NOT NULL, `occurredAtMillis` INTEGER NOT NULL, `description` TEXT NOT NULL, PRIMARY KEY(`eventId`))",
+        "fields": [
+          {
+            "fieldPath": "eventId",
+            "columnName": "eventId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "proposalId",
+            "columnName": "proposalId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventType",
+            "columnName": "eventType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "occurredAtMillis",
+            "columnName": "occurredAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "description",
+            "columnName": "description",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "eventId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_finance_dev_accounting_rule_events_proposalId_occurredAtMillis",
+            "unique": false,
+            "columnNames": [
+              "proposalId",
+              "occurredAtMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_finance_dev_accounting_rule_events_proposalId_occurredAtMillis` ON `${TABLE_NAME}` (`proposalId`, `occurredAtMillis`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '081082f19561e2897c8a0908330b77a7')"
+    ]
+  }
+}
