@@ -1,4 +1,4 @@
-﻿package com.example.bookingregister.finance.dev
+package com.example.bookingregister.finance.dev
 
 import android.content.Context
 import org.json.JSONArray
@@ -38,9 +38,10 @@ class HotelPurchaseOrderStore(context: Context) {
     }
 
     fun save(order: HotelPurchaseOrder) {
-        HotelPurchaseOrderPolicy.validate(order)
+        val previousOrders = all()
+        HotelPurchaseOrderPolicy.validateUpdate(previousOrders.firstOrNull { it.id == order.id }, order)
 
-        val orders = all().filterNot { it.id == order.id } + order
+        val orders = previousOrders.filterNot { it.id == order.id } + order
         val array = JSONArray()
 
         orders.forEach { entry ->

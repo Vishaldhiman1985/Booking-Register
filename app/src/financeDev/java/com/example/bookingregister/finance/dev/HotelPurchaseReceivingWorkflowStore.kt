@@ -61,6 +61,7 @@ class HotelPurchaseReceivingWorkflowStore(context: Context) {
         val current = get(order.id)
         require(!current.archived) { "Order already approved" }
         require(receipts.isNotEmpty()) { "Record the delivery before approving" }
+        HotelPurchaseGoodsReceiptPolicy.validateHistory(order, receipts)
         require(order.status == "PLACED") { "Only placed orders can be approved" }
         require(invoiceEvidence.isVerified(order.id)) { "Verify the supplier invoice before approving" }
         val remaining = HotelPurchaseGoodsReceiptPolicy.remaining(order, receipts)

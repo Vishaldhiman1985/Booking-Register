@@ -1,4 +1,4 @@
-﻿package com.example.bookingregister.finance.dev
+package com.example.bookingregister.finance.dev
 
 data class HotelPurchaseOrderLine(
     val itemId: String,
@@ -18,6 +18,15 @@ data class HotelPurchaseOrder(
 
 object HotelPurchaseOrderPolicy {
 
+    /** Allowed transitions for the Finance DEV purchase draft store. */
+    fun validateUpdate(previous: HotelPurchaseOrder?, next: HotelPurchaseOrder) {
+        validate(next)
+        if (previous == null) return
+        require(previous.id == next.id) { "Purchase order ID cannot change" }
+        require(previous.status == "DRAFT") { "Placed orders cannot be edited" }
+        require(next.createdAtMillis == previous.createdAtMillis) { "Creation date cannot change" }
+    }
+
     fun validate(order: HotelPurchaseOrder) {
         require(order.id.isNotBlank()) {
             "Purchase order ID is required"
@@ -28,8 +37,16 @@ object HotelPurchaseOrderPolicy {
         require(order.lines.isNotEmpty()) {
             "Select at least one item"
         }
+        require(order.status == "DRAFT" || order.status == "PLACED") {
+            "Unknown purchase order status"
+        }
+        require(order.lines.map { it.itemId }.distinct().size == order.lines.size) {
+            "Duplicate item in purchase order"
+        }
         require(order.lines.all {
             it.itemId.isNotBlank() &&
+                it.itemName.isNotBlank() &&
+                it.unit.isNotBlank() &&
                 it.quantity.isFinite() &&
                 it.quantity > 0
         }) {

@@ -26,6 +26,14 @@ data class HotelPurchaseInvoiceVerification(
     val note: String
 )
 
+/** Procurement document policy; not an accounting or GST eligibility decision. */
+object HotelPurchaseInvoicePolicy {
+    fun canVerify(documents: List<HotelPurchaseInvoiceDocument>): Boolean =
+        documents.any { it.kind == "INVOICE" && it.amount.isFinite() && it.amount > 0.0 } &&
+            documents.all { (it.kind == "INVOICE" || it.kind == "CREDIT_NOTE") && it.amount.isFinite() && it.amount > 0.0 } &&
+            documents.sumOf { if (it.kind == "CREDIT_NOTE") -it.amount else it.amount } > 0.0
+}
+
 class HotelPurchaseInvoiceStore(context: Context) {
     private val prefs = context.getSharedPreferences("finance_dev_po_invoice_evidence_v1", Context.MODE_PRIVATE)
 
@@ -50,7 +58,8 @@ class HotelPurchaseInvoiceStore(context: Context) {
         return HotelPurchaseInvoiceVerification(orderId, match.getLong("verifiedAtMillis"), match.getString("note"))
     }
 
-    fun isVerified(orderId: String): Boolean = verification(orderId) != null && forOrder(orderId).isNotEmpty()
+    fun isVerified(orderId: String): Boolean =
+        verification(orderId) != null && HotelPurchaseInvoicePolicy.canVerify(forOrder(orderId))
 
     fun netAmount(orderId: String): Double = forOrder(orderId).sumOf {
         if (it.kind == "CREDIT_NOTE") -it.amount else it.amount
@@ -88,7 +97,9 @@ class HotelPurchaseInvoiceStore(context: Context) {
 
     fun verify(order: HotelPurchaseOrder, note: String) {
         require(order.status == "PLACED") { "Only placed orders can be verified" }
-        require(forOrder(order.id).isNotEmpty()) { "Record at least one supplier invoice first" }
+        require(HotelPurchaseInvoicePolicy.canVerify(forOrder(order.id))) {
+            "Record a valid supplier invoice with a positive net amount before verification"
+        }
         require(note.trim().length >= 5) { "Enter the verification note or invoice reference" }
         val verifications = JSONObject(prefs.getString("verifications", "{}") ?: "{}")
         verifications.put(order.id, JSONObject().apply {

@@ -24,6 +24,18 @@ data class HotelPurchaseGoodsReceipt(
 object HotelPurchaseGoodsReceiptPolicy {
     private const val EPSILON = 0.000001
 
+    /** Re-check persisted receipt history before approving an order. No writes occur here. */
+    fun validateHistory(order: HotelPurchaseOrder, receipts: List<HotelPurchaseGoodsReceipt>) {
+        HotelPurchaseOrderPolicy.validate(order)
+        require(order.status == "PLACED") { "Only placed orders may be received" }
+        require(receipts.map { it.id }.distinct().size == receipts.size) { "Duplicate goods receipt ID" }
+        val accepted = mutableListOf<HotelPurchaseGoodsReceipt>()
+        receipts.forEach { receipt ->
+            validate(order, accepted, receipt)
+            accepted.add(receipt)
+        }
+    }
+
     fun remaining(
         order: HotelPurchaseOrder,
         receipts: List<HotelPurchaseGoodsReceipt>
@@ -43,6 +55,9 @@ object HotelPurchaseGoodsReceiptPolicy {
         existing: List<HotelPurchaseGoodsReceipt>,
         receipt: HotelPurchaseGoodsReceipt
     ) {
+        require(order.status == "PLACED") { "Only placed orders may be received" }
+        HotelPurchaseOrderPolicy.validate(order)
+        require(existing.none { it.id == receipt.id }) { "Duplicate goods receipt ID" }
         require(receipt.id.isNotBlank()) { "Receipt ID is required" }
         require(receipt.orderId == order.id) { "Receipt belongs to a different order" }
         require(receipt.receivedAtMillis > 0) { "Invalid receipt date" }
