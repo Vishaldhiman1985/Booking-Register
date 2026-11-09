@@ -490,22 +490,48 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
         root.addView(text("Archived Orders", 19f, true))
         val archived = orders.all().filter(::isArchived)
         if (archived.isEmpty()) root.addView(text("No completed orders yet"))
-        archived.forEach { order ->
-            val verified = workflows.get(order.id).archived
-            val tag = if (verified) "Completed & approved" else "Previously archived (unverified)"
-            root.addView(button("${order.vendorName} • ${order.lines.size} items • $tag") {
-                val message = buildString {
-                    appendLine(tag)
-                    appendLine("Vendor: ${order.vendorName}")
-                    appendLine("Deliveries: ${receipts.forOrder(order.id).size}")
-                    appendLine()
-                    order.lines.forEach { appendLine("${it.itemName}: ${formatQty(it.quantity)} ${it.unit}") }
-                }
-                AlertDialog.Builder(activity).setTitle("Archived Order")
-                    .setMessage(message)
-                    .setNegativeButton("Close", null)
-                    .setPositiveButton("Share") { _, _ -> share(order) }.show()
-            })
+        val invoiceStore = HotelPurchaseInvoiceStore(activity)
+        archived.groupBy { it.vendorId }.forEach { (_, vendorOrders) ->
+            val name = vendors.all().firstOrNull { it.id == vendorOrders.first().vendorId }?.name
+                ?: vendorOrders.first().vendorName
+            root.addView(space(10))
+            root.addView(text("$name  â€¢  ${vendorOrders.size} archived orders", 17f, true))
+            vendorOrders.forEach { order ->
+                val verified = workflows.get(order.id).archived
+                val tag = if (verified) "Completed & approved" else "Previously archived (unverified)"
+                root.addView(button("PO ${order.id.take(8)}  â€¢  ${order.lines.size} items  â€¢  $tag") {
+                    val orderReceipts = receipts.forOrder(order.id)
+                    val remaining = HotelPurchaseGoodsReceiptPolicy.remaining(order, orderReceipts)
+                    val invoiceDocs = invoiceStore.forOrder(order.id)
+                    val audit = workflows.get(order.id)
+                    val message = buildString {
+                        appendLine("Vendor: $name")
+                        appendLine("PO: ${order.id.take(8)}")
+                        appendLine("Status: $tag")
+                        appendLine("Deliveries: ${orderReceipts.size}")
+                        appendLine()
+                        appendLine("ORDER AND RECEIPT")
+                        order.lines.forEach { item ->
+                            appendLine("${item.itemName}: ${formatQty(item.quantity)} ${item.unit} ordered, " +
+                                "${formatQty(item.quantity - (remaining[item.itemId] ?: 0.0))} received")
+                        }
+                        appendLine()
+                        appendLine("SUPPLIER DOCUMENTS (${invoiceDocs.size})")
+                        invoiceDocs.forEach { doc ->
+                            appendLine("${doc.kind}: ${doc.invoiceNumber}, ${doc.invoiceDate}, Rs ${doc.amount}")
+                        }
+                        appendLine("Net documented: Rs ${invoiceStore.netAmount(order.id)}")
+                        appendLine("Invoice verified: ${if (invoiceStore.isVerified(order.id)) "Yes" else "No / historical"}")
+                        appendLine()
+                        appendLine("DELIVERY / APPROVAL HISTORY")
+                        audit.events.forEach { event -> appendLine("${event.action}: ${event.note}") }
+                    }
+                    AlertDialog.Builder(activity).setTitle("$name â€¢ Archived Purchase Order")
+                        .setMessage(message)
+                        .setNegativeButton("Close", null)
+                        .setPositiveButton("Share PO") { _, _ -> share(order) }.show()
+                })
+            }
         }
     }
     fun showMenu(anchor: View, onChanged: () -> Unit = {}) {

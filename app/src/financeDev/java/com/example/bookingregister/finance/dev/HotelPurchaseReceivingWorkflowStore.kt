@@ -23,6 +23,7 @@ data class HotelPurchaseReceivingWorkflow(
 
 class HotelPurchaseReceivingWorkflowStore(context: Context) {
     private val prefs = context.getSharedPreferences("finance_dev_po_workflow_v1", Context.MODE_PRIVATE)
+    private val invoiceEvidence = HotelPurchaseInvoiceStore(context)
 
     fun all(): List<HotelPurchaseReceivingWorkflow> {
         val data = JSONArray(prefs.getString("records", "[]") ?: "[]")
@@ -60,6 +61,8 @@ class HotelPurchaseReceivingWorkflowStore(context: Context) {
         val current = get(order.id)
         require(!current.archived) { "Order already approved" }
         require(receipts.isNotEmpty()) { "Record the delivery before approving" }
+        require(order.status == "PLACED") { "Only placed orders can be approved" }
+        require(invoiceEvidence.isVerified(order.id)) { "Verify the supplier invoice before approving" }
         val remaining = HotelPurchaseGoodsReceiptPolicy.remaining(order, receipts)
         val shortage = remaining.values.any { it > 0.000001 }
         if (shortage) {
@@ -69,7 +72,7 @@ class HotelPurchaseReceivingWorkflowStore(context: Context) {
         }
         save(current.copy(
             approvedAtMillis = System.currentTimeMillis(),
-            events = current.events + HotelPurchaseIssueEvent(System.currentTimeMillis(), "APPROVED", "Goods receipt approved; accounting remains manual")
+            events = current.events + HotelPurchaseIssueEvent(System.currentTimeMillis(), "APPROVED", "Goods receipt and supplier invoice verified; accounting remains manual")
         ))
     }
 
