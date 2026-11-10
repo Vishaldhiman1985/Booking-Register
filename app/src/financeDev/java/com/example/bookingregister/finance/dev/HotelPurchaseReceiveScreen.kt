@@ -17,7 +17,135 @@ class HotelPurchaseReceiveScreen(private val activity: Activity) {
     private fun fmt(q: Double) = if (q == q.toLong().toDouble()) q.toLong().toString() else q.toString()
     private fun toast(s: String) = Toast.makeText(activity, s, Toast.LENGTH_LONG).show()
 
+    /** Procurement-only shortage resolution. No cancellation is recorded as goods received. */
+    fun showShortageOptions(order: HotelPurchaseOrder, onChanged: () -> Unit = {}) {
+        if (workflows.get(order.id).archived) { review(order, onChanged); return }
+        val existing = receipts.forOrder(order.id)
+        if (existing.isEmpty()) { show(order, onChanged); return }
+        val balances = HotelPurchaseGoodsReceiptPolicy.remaining(order, existing)
+        val missing = order.lines.filter { (balances[it.itemId] ?: 0.0) > 0.000001 }
+        if (missing.isEmpty() || workflows.get(order.id).resolution == "CANCELLED_BALANCE") {
+            review(order, onChanged)
+            return
+        }
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(12), dp(20), dp(20))
+        }
+        root.addView(heading("Outstanding items", 19f))
+        root.addView(subtitle("${order.vendorName}  •  PO ${order.id.take(8)}"))
+        missing.forEach { line ->
+            root.addView(itemCard("${line.itemName}", "${fmt(balances[line.itemId] ?: 0.0)} ${line.unit} outstanding"))
+        }
+        root.addView(subtitle("Choose how to resolve the remaining items."))
+        val dialog = AlertDialog.Builder(activity).setTitle("Resolve Shortage")
+            .setView(ScrollView(activity).apply { isFillViewport = true; addView(root) })
+            .setNegativeButton("Close", null).create()
+        fun addAction(label: String, detail: String, action: () -> Unit) {
+            root.addView(Button(activity).apply {
+                text = label
+                isAllCaps = false
+                setOnClickListener { dialog.dismiss(); action() }
+            })
+            root.addView(subtitle(detail))
+        }
+        addAction("Receive remaining items", "Tick only the goods physically delivered.") {
+            showRemainingGoods(order, onChanged)
+        }
+        addAction("Mark unavailable / buy elsewhere", "Cancel the remaining undelivered items. Keep the original PO and receipts.") {
+            resolveUnavailable(order, false, onChanged)
+        }
+        addAction("Revised invoice / credit note", "Use when the vendor originally billed for goods they did not deliver.") {
+            resolveUnavailable(order, true, onChanged)
+        }
+        dialog.show()
+        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+    }
+
+    private fun dp(value: Int): Int = (value * activity.resources.displayMetrics.density + 0.5f).toInt()
+    private fun heading(value: String, size: Float): TextView = TextView(activity).apply {
+        text = value; textSize = size
+        setTextColor(android.graphics.Color.rgb(27, 44, 54))
+        setTypeface(null, android.graphics.Typeface.BOLD)
+        setPadding(0, dp(8), 0, dp(8))
+    }
+    private fun subtitle(value: String): TextView = TextView(activity).apply {
+        text = value; textSize = 13f
+        setTextColor(android.graphics.Color.rgb(96, 109, 118))
+        setPadding(0, dp(6), 0, dp(12))
+    }
+    private fun itemCard(name: String, detail: String): LinearLayout = LinearLayout(activity).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(12), dp(8), dp(12), dp(8))
+        background = android.graphics.drawable.GradientDrawable().apply {
+            cornerRadius = dp(12).toFloat()
+            setColor(android.graphics.Color.rgb(243, 248, 246))
+        }
+        addView(heading(name, 15f))
+        addView(subtitle(detail))
+    }
+
+    private fun resolveUnavailable(order: HotelPurchaseOrder, revisedRequired: Boolean, onChanged: () -> Unit) {
+        val existing = receipts.forOrder(order.id)
+        val missing = HotelPurchaseGoodsReceiptPolicy.remaining(order, existing)
+        if (missing.values.none { it > 0.000001 }) { review(order, onChanged); return }
+        val root = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20),dp(12),dp(20),dp(18)) }
+        root.addView(subtitle(if (revisedRequired)
+            "The original invoice included goods that were not supplied. Record the corrected invoice or credit note afterward."
+        else "The vendor cannot supply the outstanding items. They will NOT be treated as received."))
+        val reason = EditText(activity).apply {
+            hint = "Reason / supplier confirmation (required)"
+            minLines = 2
+        }
+        root.addView(reason)
+        val originalInvoiceIncludesMissing = CheckBox(activity).apply {
+            text = "The original invoice billed the missing items (correction required)"
+            isChecked = revisedRequired
+        }
+        root.addView(originalInvoiceIncludesMissing)
+        val confirmation = CheckBox(activity).apply {
+            text = if (revisedRequired)
+                "I confirm the original supplier invoice included the undelivered items"
+            else "I confirm the vendor will not deliver the remaining items"
+        }
+        root.addView(confirmation)
+        root.addView(subtitle("The final supplier invoice must cover only accepted goods. If the original invoice overbilled, updated invoice or credit-note evidence is mandatory before verification."))
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle(if (revisedRequired) "Revised invoice required" else "Mark items unavailable")
+            .setView(ScrollView(activity).apply { addView(root) })
+            .setNegativeButton("Back", null).setPositiveButton("Confirm cancellation", null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                try {
+                    require(confirmation.isChecked) { "Please confirm the supplier's position" }
+                    val note = reason.text.toString().trim()
+                    require(note.length >= 5) { "Enter a meaningful reason (at least 5 characters)" }
+                    // Recheck the active PO; never cancel quantities already received.
+                    val latest = HotelPurchaseGoodsReceiptPolicy.remaining(order, receipts.forOrder(order.id))
+                    require(latest == missing) { "Delivery changed. Reopen the shortage to refresh quantities." }
+                    val summary = order.lines.filter { (latest[it.itemId] ?: 0.0) > 0.000001 }
+                        .joinToString("; ") { "${it.itemName}: ${fmt(latest[it.itemId] ?: 0.0)} ${it.unit}" }
+                    val needsCorrection = revisedRequired || originalInvoiceIncludesMissing.isChecked
+                    workflows.append(order.id,
+                        if (needsCorrection) "REVISED_DOCUMENT_REQUIRED" else "UNAVAILABLE_BALANCE_CANCELLED",
+                        "$summary. Reason: $note", "CANCELLED_BALANCE")
+                    dialog.dismiss(); onChanged()
+                    if (needsCorrection) {
+                        AlertDialog.Builder(activity).setTitle("Record corrected invoice")
+                            .setMessage("Shortage cancelled, but manager approval is blocked until you add a new supplier invoice or credit note and verify the documents.")
+                            .setPositiveButton("Add document") { _, _ -> addInvoice(order, onChanged) }
+                            .setNegativeButton("Later", null).show()
+                    } else {
+                        review(order, onChanged)
+                    }
+                } catch (e: Exception) { toast(e.message ?: "Unable to cancel outstanding items") }
+            }
+        }
+        dialog.show()
+    }
+
     fun show(order: HotelPurchaseOrder, onChanged: () -> Unit = {}) {
+        if (workflows.get(order.id).resolution == "CANCELLED_BALANCE") { review(order, onChanged); return }
         if (workflows.get(order.id).archived) { review(order, onChanged); return }
         val prior = receipts.forOrder(order.id)
         val remaining = HotelPurchaseGoodsReceiptPolicy.remaining(order, prior)
@@ -49,7 +177,7 @@ class HotelPurchaseReceiveScreen(private val activity: Activity) {
 
         fun updateItems() {
             results.removeAllViews()
-            issueSummary.text = "${unresolved.size} outstanding items â€¢ ${exceptions.size} marked short / missing"
+            issueSummary.text = "${unresolved.size} outstanding items - ${exceptions.size} marked short / missing"
             val query = search.text.toString().trim()
             val visible = unresolved.filter { query.isEmpty() || it.itemName.contains(query, ignoreCase = true) }
             if (visible.isEmpty()) {
@@ -72,7 +200,7 @@ class HotelPurchaseReceiveScreen(private val activity: Activity) {
                     textSize = 14f
                 }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 row.addView(Button(activity).apply {
-                    text = if (flagged) "Short / Missing âœ“" else "Mark Short"
+                    text = if (flagged) "Short / Missing (selected)" else "Mark Short"
                     isAllCaps = false
                     textSize = 12f
                     if (flagged) backgroundTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.rgb(255, 225, 187))
@@ -124,6 +252,11 @@ class HotelPurchaseReceiveScreen(private val activity: Activity) {
         updateItems()
         val note = EditText(activity).apply { hint = "Optional note for vendor"; minLines = 2 }
         root.addView(note)
+        root.addView(Button(activity).apply {
+            text = "Nothing delivered / delivery failed"
+            isAllCaps = false
+            setOnClickListener { failedDelivery(order, onChanged) }
+        })
         val dialog = AlertDialog.Builder(activity)
             .setTitle("Receive Goods")
             .setView(ScrollView(activity).apply { addView(root) })
@@ -179,7 +312,145 @@ class HotelPurchaseReceiveScreen(private val activity: Activity) {
             }
         }
         dialog.show()
+        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT,
+            (activity.resources.displayMetrics.heightPixels * 0.84f).toInt())
         dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+    }
+
+    /** Receive previously missing goods without rewriting any prior goods receipt. */
+    fun showRemainingGoods(order: HotelPurchaseOrder, onChanged: () -> Unit = {}) {
+        if (workflows.get(order.id).resolution == "CANCELLED_BALANCE") { review(order, onChanged); return }
+        if (workflows.get(order.id).archived) { review(order, onChanged); return }
+        val prior = receipts.forOrder(order.id)
+        val outstanding = try {
+            HotelPurchaseRemainingGoodsPolicy.outstanding(order, prior)
+        } catch (e: Exception) {
+            toast(e.message ?: "Cannot load outstanding goods"); return
+        }
+        if (outstanding.isEmpty()) { review(order, onChanged); return }
+        val balances = HotelPurchaseGoodsReceiptPolicy.remaining(order, prior)
+        val selected = linkedSetOf<String>()
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(28, 14, 28, 14)
+        }
+        root.addView(TextView(activity).apply {
+            text = "${order.vendorName} • PO ${order.id.take(8)}"
+            textSize = 16f
+        })
+        root.addView(TextView(activity).apply {
+            text = "Tick only the items physically received now. Each tick records the full remaining quantity shown below. Unticked items stay pending."
+            textSize = 13f
+            setPadding(0, 10, 0, 14)
+        })
+        val checks = outstanding.map { item ->
+            CheckBox(activity).apply {
+                text = "${item.itemName}  •  ${fmt(balances[item.itemId] ?: 0.0)} ${item.unit}"
+                textSize = 15f
+                setPadding(0, 6, 0, 6)
+                setOnCheckedChangeListener { _, checked ->
+                    if (checked) selected.add(item.itemId) else selected.remove(item.itemId)
+                }
+                root.addView(this)
+            }
+        }
+        root.addView(Button(activity).apply {
+            text = "Select all outstanding items"
+            isAllCaps = false
+            setOnClickListener { checks.forEach { it.isChecked = true } }
+        })
+        val note = EditText(activity).apply {
+            hint = "Optional delivery note / challan number"
+            minLines = 2
+        }
+        root.addView(note)
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle("Receive Remaining Goods")
+            .setView(ScrollView(activity).apply { addView(root) })
+            .setNegativeButton("Back", null)
+            .setPositiveButton("Record Received", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                try {
+                    // Re-read at save time to reject stale quantities or new receipts.
+                    val current = receipts.forOrder(order.id)
+                    val receipt = HotelPurchaseRemainingGoodsPolicy.createSupplementaryReceipt(
+                        order, current, selected.toSet(), UUID.randomUUID().toString(),
+                        System.currentTimeMillis(), note.text.toString()
+                    )
+                    val linesSummary = receipt.lines.joinToString("\n") {
+                        "${it.itemName}: ${fmt(it.receivedQuantity)} ${it.unit}"
+                    }
+                    AlertDialog.Builder(activity)
+                        .setTitle("Confirm physical receipt")
+                        .setMessage("Record only these received quantities?\n\n$linesSummary\n\nEarlier deliveries will not change.")
+                        .setNegativeButton("Back", null)
+                        .setPositiveButton("Confirm Received") { _, _ ->
+                            try {
+                                // Goods first. If audit append fails the receipt is still preserved;
+                                // its own immutable timestamp and contents remain in receipt history.
+                                receipts.add(order, receipt)
+                                val newHistory = receipts.forOrder(order.id)
+                                val fullyReceived = HotelPurchaseRemainingGoodsPolicy.isFullyDelivered(order, newHistory)
+                                try {
+                                    workflows.append(order.id, "REMAINING_GOODS_RECEIVED", linesSummary.replace("\n", "; "))
+                                    if (fullyReceived) {
+                                        workflows.append(order.id, "DELIVERY_COMPLETED", "All ordered quantities have been physically received", "OPEN")
+                                    }
+                                } catch (auditError: Exception) {
+                                    toast("Receipt saved; activity timeline update needs attention")
+                                }
+                                dialog.dismiss()
+                                onChanged()
+                                if (fullyReceived) {
+                                    AlertDialog.Builder(activity)
+                                        .setTitle("Delivery complete")
+                                        .setMessage("All goods received. Supplier invoice verification and manager approval are still required before archiving.")
+                                        .setPositiveButton("Manager Review") { _, _ -> review(order, onChanged) }
+                                        .setNegativeButton("Later", null)
+                                        .show()
+                                } else {
+                                    toast("Received items recorded. Other shortages remain pending.")
+                                }
+                            } catch (e: Exception) {
+                                toast(e.message ?: "Unable to record supplementary delivery")
+                            }
+                        }.show()
+                } catch (e: Exception) { toast(e.message ?: "Check selected items") }
+            }
+        }
+        dialog.show()
+        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT,
+            (activity.resources.displayMetrics.heightPixels * 0.84f).toInt())
+        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+    }
+
+    private fun failedDelivery(order: HotelPurchaseOrder, onChanged: () -> Unit) {
+        val reason = EditText(activity).apply {
+            hint = "Why was nothing delivered? (required)"
+            minLines = 2
+        }
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle("Record failed delivery attempt")
+            .setMessage("This records an issue only. No goods receipt, stock or expense will be created.")
+            .setView(reason)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Record attempt", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                try {
+                    require(order.status == "PLACED") { "Only placed orders can record a failed delivery" }
+                    require(reason.text.toString().trim().length >= 5) { "Enter a meaningful reason" }
+                    workflows.append(order.id, "DELIVERY_ATTEMPT_FAILED", reason.text.toString().trim())
+                    dialog.dismiss()
+                    toast("Failed delivery recorded. No goods were received.")
+                    onChanged()
+                } catch (e: Exception) { toast(e.message ?: "Could not record failed delivery") }
+            }
+        }
+        dialog.show()
     }
 
     private fun offerIssue(order: HotelPurchaseOrder, missing: List<String>, note: String, onChanged: () -> Unit) {
@@ -211,7 +482,7 @@ class HotelPurchaseReceiveScreen(private val activity: Activity) {
             if (q > 0.000001) "${line.itemName}: ${fmt(q)} ${line.unit}" else null
         }
         val workflow = workflows.get(order.id)
-        val history = workflow.events.joinToString("\n") { "${it.action}: ${it.note}" }
+        val history = workflow.events.joinToString("\n") { "${when (it.action) { "SHORTAGE_RECORDED" -> "Shortage recorded"; "REMAINING_GOODS_RECEIVED" -> "Remaining goods received"; "DELIVERY_COMPLETED" -> "Delivery completed"; "MESSAGE_PREPARED" -> "Vendor message prepared"; "DELIVERY_ATTEMPT_FAILED" -> "Delivery failed"; "INVOICE_RECORDED" -> "Supplier document added"; "INVOICE_VERIFIED" -> "Invoice verified"; "APPROVED" -> "Approved"; else -> it.action.replace('_', ' ').lowercase().replaceFirstChar { c -> c.uppercase() } }}: ${it.note}" }
         val overview = "${order.vendorName}\n${prior.size} delivery record(s)\n\n" +
             (if (missing.isEmpty()) "All quantities received" else "Pending shortages:\n${missing.joinToString("\n")}") +
             (if (history.isBlank()) "" else "\n\nIssue history:\n$history")
@@ -224,47 +495,70 @@ class HotelPurchaseReceiveScreen(private val activity: Activity) {
             appendLine("\nINVOICES (${docs.size})")
             if (docs.isEmpty()) appendLine("No invoice documents recorded")
             docs.forEach { document ->
-                appendLine("${document.kind.replace('_', ' ')} ${document.invoiceNumber} â€¢ ${document.invoiceDate} â€¢ Rs ${document.amount}")
+                appendLine("${document.kind.replace('_', ' ')} ${document.invoiceNumber} - ${document.invoiceDate} - Rs ${document.amount}")
             }
             appendLine("Net documented: Rs ${invoices.netAmount(order.id)}")
-            appendLine(if (invoices.isVerified(order.id)) "Invoice manually verified" else "Invoice NOT verified")
+            appendLine(if (invoices.isVerifiedFor(order.id, prior)) "Invoice manually reconciled (not automated price matching)" else "Invoice reconciliation required")
             appendLine("Invoice entries are evidence only: no expense, GST or payable has been posted.")
         }
-        val canApprove = invoices.isVerified(order.id) &&
+        val correctionEvidenceReady = runCatching {
+            HotelPurchaseShortageInvoicePolicy.requireCurrentDocuments(workflow, docs)
+        }.isSuccess
+        val canApprove = correctionEvidenceReady && invoices.isVerifiedFor(order.id, prior) &&
             (missing.isEmpty() || (workflow.resolution == "CANCELLED_BALANCE" && workflow.resolutionNote.isNotBlank()))
         val options = mutableListOf("Add supplier invoice / credit note", "Verify invoice")
         if (missing.isNotEmpty()) {
-            options.add("Record vendor response / corrected invoice")
+            options.add("Resolve shortage: unavailable or revised invoice")
             options.add("Receive remaining goods")
         }
         if (canApprove) options.add("Approve & Archive")
         options.add("Close")
-        AlertDialog.Builder(activity).setTitle("Manager review")
-            .setMessage(overview + invoiceSummary + if (canApprove) "\nReady for approval." else "\nApproval locked until receipt issues and invoice verification are resolved.")
-            .setItems(options.toTypedArray()) { _, which ->
-                when (options[which]) {
-                    "Add supplier invoice / credit note" -> addInvoice(order, onChanged)
-                    "Verify invoice" -> verifyInvoice(order, onChanged)
-                    "Record vendor response / corrected invoice" -> resolve(order, onChanged)
-                    "Receive remaining goods" -> show(order, onChanged)
-                    "Approve & Archive" -> approve(order, onChanged)
-                }
-            }.show()
-    }
-
-    private fun resolve(order: HotelPurchaseOrder, onChanged: () -> Unit) {
-        val note = EditText(activity).apply { hint = "E.g. Vendor agreed to replace invoice #123, shortage cancelled"; minLines = 2 }
-        AlertDialog.Builder(activity).setTitle("Vendor confirmed corrected invoice")
-            .setMessage("Record the vendor's response and why the remaining quantity is cancelled. Original order and delivery records are preserved.")
-            .setView(note).setNegativeButton("Back", null)
-            .setPositiveButton("Record resolution") { _, _ ->
-                val reason = note.text.toString().trim()
-                if (reason.isBlank()) { toast("Write the vendor response / invoice reference"); return@setPositiveButton }
-                try {
-                    workflows.append(order.id, "CORRECTED_INVOICE_OR_CANCELLED_BALANCE", reason, "CANCELLED_BALANCE")
-                    onChanged(); review(order, onChanged)
-                } catch (e: Exception) { toast(e.message ?: "Unable to record") }
-            }.show()
+        // A single scrollable panel prevents Android AlertDialog's list/message layout
+        // from clipping the manager actions on smaller phones.
+        val panel = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), dp(18))
+        }
+        panel.addView(heading("Delivery & invoice", 18f))
+        val shortSummary = if (missing.isEmpty()) "Goods delivery accounted for" else
+            "Outstanding: ${missing.joinToString("; ")}"
+        panel.addView(itemCard(order.vendorName, shortSummary))
+        panel.addView(subtitle("${prior.size} physical delivery record(s)  •  ${docs.size} supplier document(s)"))
+        panel.addView(heading(if (canApprove) "Ready for approval" else "Needs reconciliation", 16f))
+        panel.addView(subtitle(if (canApprove) "All current checks passed. You may archive the order." else
+            "Resolve remaining quantity differences and verify supplier documents before approval."))
+        panel.addView(heading("Activity", 16f))
+        if (workflow.events.isEmpty()) panel.addView(subtitle("No activity recorded yet"))
+        else workflow.events.takeLast(12).forEach { e ->
+            val label = e.action.replace('_', ' ').lowercase()
+                .replaceFirstChar { it.uppercase() }
+            panel.addView(subtitle("$label  •  ${e.note.take(110)}"))
+        }
+        panel.addView(heading("Supplier documents", 16f))
+        panel.addView(subtitle(if (docs.isEmpty()) "No invoice recorded" else
+            docs.joinToString("\n") { "${it.kind.replace('_',' ')} ${it.invoiceNumber}  •  Rs ${it.amount}" }))
+        panel.addView(subtitle("Net documented: Rs ${invoices.netAmount(order.id)}. Amount verification is manual, not automatic."))
+        panel.addView(heading("Next action", 16f))
+        val dialog = AlertDialog.Builder(activity).setTitle("Manager review")
+            .setView(ScrollView(activity).apply { addView(panel); isFillViewport = false })
+            .setNegativeButton("Close", null).create()
+        fun action(label: String, operation: () -> Unit) {
+            panel.addView(Button(activity).apply {
+                text = label
+                isAllCaps = false
+                textSize = 14f
+                setOnClickListener { dialog.dismiss(); operation() }
+            })
+        }
+        action("Add invoice / credit note") { addInvoice(order, onChanged) }
+        action("Verify supplier invoice") { verifyInvoice(order, onChanged) }
+        if (missing.isNotEmpty() && workflow.resolution != "CANCELLED_BALANCE") {
+            action("Resolve shortage") { showShortageOptions(order, onChanged) }
+        }
+        if (canApprove) action("Approve and archive") { approve(order, onChanged) }
+        dialog.show()
+        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT,
+            (activity.resources.displayMetrics.heightPixels * 0.84f).toInt())
     }
 
     private fun addInvoice(order: HotelPurchaseOrder, onChanged: () -> Unit) {
@@ -311,23 +605,43 @@ class HotelPurchaseReceiveScreen(private val activity: Activity) {
             setPadding(32, 12, 32, 12)
         }
         root.addView(TextView(activity).apply {
-            text = "Documents: ${invoices.forOrder(order.id).size}\nNet documented amount: Rs ${invoices.netAmount(order.id)}\nVerify invoice/credit notes against accepted goods and supplier documents. This is a manual check."
+            text = "Documents: ${invoices.forOrder(order.id).size}\nNet documented amount: Rs ${invoices.netAmount(order.id)}\nManually reconcile accepted goods, supplier documents and amounts. Purchase orders do not yet contain prices, so amount matching is NOT automatic."
         })
-        val checked = CheckBox(activity).apply {
-            text = "I verified supplier document numbers, amounts and accepted goods."
+        val goodsChecked = CheckBox(activity).apply {
+            text = "Accepted quantities match goods-receipt records; shortages are resolved"
+        }
+        val amountsChecked = CheckBox(activity).apply {
+            text = "I compared supplier invoice amounts with the actual supplier documents"
+        }
+        val documentsChecked = CheckBox(activity).apply {
+            text = "Supplier name, invoice numbers, dates and credit notes are correct"
         }
         val note = EditText(activity).apply {
             hint = "Verification note / invoice reference"
             minLines = 2
         }
-        root.addView(checked); root.addView(note)
+        root.addView(goodsChecked)
+        root.addView(amountsChecked)
+        root.addView(documentsChecked)
+        root.addView(note)
         val dialog = AlertDialog.Builder(activity).setTitle("Verify supplier invoice")
             .setView(root).setNegativeButton("Cancel", null).setPositiveButton("Confirm verification", null).create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 try {
-                    require(checked.isChecked) { "Confirm manual invoice checks" }
-                    invoices.verify(order, note.text.toString())
+                    val priorReceipts = receipts.forOrder(order.id)
+                    val remaining = HotelPurchaseGoodsReceiptPolicy.remaining(order, priorReceipts)
+                    val workflow = workflows.get(order.id)
+                    val shortageResolved = workflow.resolution == "CANCELLED_BALANCE" && workflow.resolutionNote.isNotBlank()
+                    HotelPurchaseShortageInvoicePolicy.requireCurrentDocuments(workflow, invoices.forOrder(order.id))
+                    require(remaining.values.all { it <= 0.000001 } || shortageResolved) {
+                        "Resolve shortages before verifying this invoice"
+                    }
+                    invoices.verify(
+                        order, note.text.toString(), priorReceipts,
+                        goodsChecked.isChecked, amountsChecked.isChecked,
+                        documentsChecked.isChecked, shortageResolved
+                    )
                     workflows.append(order.id, "INVOICE_VERIFIED", note.text.toString().trim())
                     dialog.dismiss(); onChanged(); review(order, onChanged)
                 } catch (e: Exception) { toast(e.message ?: "Verification failed") }

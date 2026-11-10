@@ -63,7 +63,8 @@ class HotelPurchaseReceivingWorkflowStore(context: Context) {
         require(receipts.isNotEmpty()) { "Record the delivery before approving" }
         HotelPurchaseGoodsReceiptPolicy.validateHistory(order, receipts)
         require(order.status == "PLACED") { "Only placed orders can be approved" }
-        require(invoiceEvidence.isVerified(order.id)) { "Verify the supplier invoice before approving" }
+        require(invoiceEvidence.isVerifiedFor(order.id, receipts)) { "Verify the supplier invoice after the latest goods receipt before approving" }
+        HotelPurchaseShortageInvoicePolicy.requireCurrentDocuments(current, invoiceEvidence.forOrder(order.id))
         val remaining = HotelPurchaseGoodsReceiptPolicy.remaining(order, receipts)
         val shortage = remaining.values.any { it > 0.000001 }
         if (shortage) {

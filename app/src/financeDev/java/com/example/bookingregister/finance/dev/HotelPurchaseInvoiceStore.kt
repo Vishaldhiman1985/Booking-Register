@@ -23,8 +23,39 @@ data class HotelPurchaseInvoiceDocument(
 data class HotelPurchaseInvoiceVerification(
     val orderId: String,
     val verifiedAtMillis: Long,
-    val note: String
+    val note: String,
+    val goodsChecked: Boolean = false,
+    val amountsChecked: Boolean = false,
+    val documentsChecked: Boolean = false
 )
+
+/** Explicit manual procurement reconciliation; PO has no price lines, so this is NOT automated 3-way matching. */
+object HotelPurchaseManualMatchPolicy {
+    fun validate(
+        order: HotelPurchaseOrder,
+        receipts: List<HotelPurchaseGoodsReceipt>,
+        documents: List<HotelPurchaseInvoiceDocument>,
+        note: String,
+        goodsChecked: Boolean,
+        amountsChecked: Boolean,
+        documentsChecked: Boolean,
+        unresolvedQuantityResolved: Boolean
+    ) {
+        require(order.status == "PLACED") { "Only placed orders can be verified" }
+        require(receipts.isNotEmpty()) { "Record accepted goods before verifying invoice" }
+        HotelPurchaseGoodsReceiptPolicy.validateHistory(order, receipts)
+        require(HotelPurchaseInvoicePolicy.canVerify(documents)) { "Record a valid supplier invoice with positive net value" }
+        require(documents.all { it.orderId == order.id && it.vendorId == order.vendorId }) { "Supplier document belongs to another order or vendor" }
+        val outstanding = HotelPurchaseGoodsReceiptPolicy.remaining(order, receipts)
+        require(outstanding.values.all { it <= 0.000001 } || unresolvedQuantityResolved) {
+            "Resolve outstanding goods before invoice verification"
+        }
+        require(goodsChecked && amountsChecked && documentsChecked) {
+            "Confirm goods, document amounts and supplier details separately"
+        }
+        require(note.trim().length >= 5) { "Add a verification note (minimum 5 characters)" }
+    }
+}
 
 /** Procurement document policy; not an accounting or GST eligibility decision. */
 object HotelPurchaseInvoicePolicy {
@@ -55,11 +86,27 @@ class HotelPurchaseInvoiceStore(context: Context) {
     fun verification(orderId: String): HotelPurchaseInvoiceVerification? {
         val obj = JSONObject(prefs.getString("verifications", "{}") ?: "{}")
         val match = obj.optJSONObject(orderId) ?: return null
-        return HotelPurchaseInvoiceVerification(orderId, match.getLong("verifiedAtMillis"), match.getString("note"))
+        return HotelPurchaseInvoiceVerification(
+            orderId, match.getLong("verifiedAtMillis"), match.getString("note"),
+            match.optBoolean("goodsChecked", false),
+            match.optBoolean("amountsChecked", false),
+            match.optBoolean("documentsChecked", false)
+        )
     }
 
     fun isVerified(orderId: String): Boolean =
-        verification(orderId) != null && HotelPurchaseInvoicePolicy.canVerify(forOrder(orderId))
+        verification(orderId)?.let { verification ->
+            verification.goodsChecked && verification.amountsChecked && verification.documentsChecked &&
+                HotelPurchaseInvoicePolicy.canVerify(forOrder(orderId))
+        } == true
+
+    /** A newer delivery requires a new manual match; older verification is no longer current. */
+    fun isVerifiedFor(orderId: String, receipts: List<HotelPurchaseGoodsReceipt>): Boolean {
+        val evidence = verification(orderId) ?: return false
+        return isVerified(orderId) && receipts.isNotEmpty() &&
+            receipts.all { it.orderId == orderId } &&
+            receipts.none { it.receivedAtMillis > evidence.verifiedAtMillis }
+    }
 
     fun netAmount(orderId: String): Double = forOrder(orderId).sumOf {
         if (it.kind == "CREDIT_NOTE") -it.amount else it.amount
@@ -95,16 +142,26 @@ class HotelPurchaseInvoiceStore(context: Context) {
             .putString("verifications", verifications.toString()).commit()) { "Unable to save invoice evidence" }
     }
 
-    fun verify(order: HotelPurchaseOrder, note: String) {
-        require(order.status == "PLACED") { "Only placed orders can be verified" }
-        require(HotelPurchaseInvoicePolicy.canVerify(forOrder(order.id))) {
-            "Record a valid supplier invoice with a positive net amount before verification"
-        }
-        require(note.trim().length >= 5) { "Enter the verification note or invoice reference" }
+    fun verify(
+        order: HotelPurchaseOrder,
+        note: String,
+        receipts: List<HotelPurchaseGoodsReceipt>,
+        goodsChecked: Boolean,
+        amountsChecked: Boolean,
+        documentsChecked: Boolean,
+        unresolvedQuantityResolved: Boolean
+    ) {
+        HotelPurchaseManualMatchPolicy.validate(
+            order, receipts, forOrder(order.id), note,
+            goodsChecked, amountsChecked, documentsChecked, unresolvedQuantityResolved
+        )
         val verifications = JSONObject(prefs.getString("verifications", "{}") ?: "{}")
         verifications.put(order.id, JSONObject().apply {
             put("verifiedAtMillis", System.currentTimeMillis())
             put("note", note.trim())
+            put("goodsChecked", goodsChecked)
+            put("amountsChecked", amountsChecked)
+            put("documentsChecked", documentsChecked)
         })
         check(prefs.edit().putString("verifications", verifications.toString()).commit()) {
             "Unable to save invoice verification"

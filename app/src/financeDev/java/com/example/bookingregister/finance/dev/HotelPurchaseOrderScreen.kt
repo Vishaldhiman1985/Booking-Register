@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
@@ -22,6 +23,7 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
     private val orders = HotelPurchaseOrderStore(activity)
     private val receipts = HotelPurchaseGoodsReceiptStore(activity)
     private val workflows = HotelPurchaseReceivingWorkflowStore(activity)
+    private val closures = HotelPurchaseSimpleClosureStore(activity)
     private val customItems = HotelPurchaseCustomItemStore(activity)
     private val categories = HotelPurchaseCategoryStore(activity)
     private var host: LinearLayout? = null
@@ -40,6 +42,19 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
     private val dark = Color.rgb(31, 42, 59)
     private val pale = Color.rgb(227, 247, 238)
     private val light = Color.rgb(247, 247, 251)
+    private val pageBackground = Color.WHITE
+    private val neutralCard = Color.rgb(251, 251, 253)
+    private val neutralStroke = Color.rgb(224, 226, 232)
+    private val blue = Color.rgb(28, 102, 225)
+    private val blueCard = Color.rgb(245, 249, 255)
+    private val blueStroke = Color.rgb(201, 221, 255)
+    private val orange = Color.rgb(245, 124, 0)
+    private val orangeCard = Color.rgb(255, 249, 244)
+    private val orangeStroke = Color.rgb(255, 224, 196)
+    private val red = Color.rgb(214, 48, 49)
+    private val redBadge = Color.rgb(255, 230, 226)
+    private val greenCard = Color.rgb(244, 252, 246)
+    private val greenStroke = Color.rgb(205, 236, 213)
 
     private fun text(label: String, size: Float = 15f, bold: Boolean = false): TextView = TextView(activity).apply {
         text = label
@@ -51,11 +66,125 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
     private fun button(label: String, onClick: () -> Unit): Button = Button(activity).apply {
         text = label
         isAllCaps = false
+        textSize = 13f
+        minHeight = dp(48)
+        setTextColor(dark)
+        backgroundTintList = android.content.res.ColorStateList.valueOf(pale)
         setOnClickListener { onClick() }
     }
     private fun space(px: Int) = Space(activity).apply { minimumHeight = dp(px) }
     private fun line(parent: LinearLayout) {
         parent.addView(View(activity).apply { setBackgroundColor(Color.rgb(230, 233, 237)) }, LinearLayout.LayoutParams(-1, dp(1)))
+    }
+    private fun rounded(fill: Int, stroke: Int? = null, radiusDp: Int = 24): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(radiusDp).toFloat()
+            setColor(fill)
+            if (stroke != null) setStroke(dp(1), stroke)
+        }
+
+    private fun homeCard(
+        title: String,
+        subtitle: String,
+        count: Int,
+        cardColor: Int,
+        borderColor: Int,
+        accentColor: Int,
+        badgeColor: Int,
+        iconGlyph: String,
+        onClick: () -> Unit
+    ): View = LinearLayout(activity).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        background = rounded(cardColor, borderColor, 22)
+        elevation = dp(2).toFloat()
+        setPadding(dp(18), dp(18), dp(18), dp(18))
+        isClickable = true
+        isFocusable = true
+        setOnClickListener { onClick() }
+
+        val iconWrap = FrameLayout(activity).apply {
+            val bubble = TextView(activity).apply {
+                text = iconGlyph
+                textSize = 22f
+                gravity = Gravity.CENTER
+                setTextColor(accentColor)
+                background = rounded(Color.TRANSPARENT, Color.TRANSPARENT, 16)
+            }
+            addView(bubble, FrameLayout.LayoutParams(dp(36), dp(36), Gravity.CENTER))
+        }
+        addView(iconWrap, LinearLayout.LayoutParams(dp(52), dp(52)))
+
+        addView(View(activity).apply { setBackgroundColor(borderColor) }, LinearLayout.LayoutParams(dp(1), dp(42)).apply { marginStart = dp(14); marginEnd = dp(16) })
+
+        val textCol = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(text(title, 18f, true).apply { setTextColor(Color.BLACK) })
+            addView(text(subtitle, 12f, false).apply { setTextColor(Color.rgb(88, 96, 110)) })
+        }
+        addView(textCol, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+        val rightCol = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val badge = TextView(activity).apply {
+            text = count.toString()
+            textSize = 17f
+            setTypeface(null, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setTextColor(accentColor)
+            background = rounded(badgeColor, null, 18)
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            minWidth = dp(54)
+        }
+        rightCol.addView(badge)
+        rightCol.addView(TextView(activity).apply {
+            text = "›"
+            textSize = 26f
+            setTextColor(dark)
+            gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(14) })
+        addView(rightCol)
+    }
+
+    private data class HomeBuckets(
+        val drafts: List<HotelPurchaseOrder>,
+        val awaitingDelivery: List<HotelPurchaseOrder>,
+        val shortages: List<HotelPurchaseOrder>,
+        val delivered: List<HotelPurchaseOrder>
+    )
+
+    private fun isDelivered(order: HotelPurchaseOrder): Boolean {
+        if (closures.get(order.id).closed || workflows.get(order.id).archived || order.status == "ARCHIVED") return true
+        val history = receipts.forOrder(order.id)
+        if (history.isEmpty()) return false
+        return HotelPurchaseGoodsReceiptPolicy.remaining(order, history).values.all { it <= 0.000001 } ||
+            workflows.get(order.id).resolution == "CANCELLED_BALANCE"
+    }
+
+    private fun homeBuckets(): HomeBuckets {
+        val drafts = orders.all().filter(::isDraft)
+        val placed = orders.all().filter { it.status == "PLACED" && !isDelivered(it) }
+        val shortages = placed.filter { order ->
+            val history = receipts.forOrder(order.id)
+            history.isNotEmpty() || closures.get(order.id).updates.isNotEmpty()
+        }
+        val awaitingDelivery = placed.filter { it !in shortages }
+        val delivered = orders.all().filter(::isDelivered)
+        return HomeBuckets(drafts, awaitingDelivery, shortages, delivered)
+    }
+
+    private fun sectionScreenHeader(root: LinearLayout, title: String, subtitle: String) {
+        root.addView(button("‹ Back to Purchase") {
+            page = "HOME"
+            renderPage()
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)))
+        root.addView(space(6))
+        root.addView(text(title, 22f, true).apply { setTextColor(Color.BLACK) })
+        root.addView(text(subtitle, 13f).apply { setTextColor(Color.rgb(88, 96, 110)) })
+        root.addView(space(12))
     }
     private fun masterItems(): List<HotelPurchaseItem> {
         val originals = HotelPurchaseItems.items.map { original ->
@@ -103,16 +232,36 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
         root.removeAllViews()
         root.orientation = LinearLayout.VERTICAL
         mainToolbar?.visibility = if (page == "CREATE") View.GONE else View.VISIBLE
+        if (page == "CREATE") {
+            // Keep the two independently scrolling catalog rails and a fixed review footer.
+            drawCreate(root)
+            return
+        }
+        // Every non-catalog purchase page scrolls vertically. Previously these pages
+        // were rendered in a fixed, non-scrollable FrameLayout on the Finance tab.
+        val content = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(3), dp(5), dp(3), dp(24))
+        }
+        val scroller = ScrollView(activity).apply {
+            isFillViewport = true
+            isVerticalScrollBarEnabled = true
+            isFillViewport = true
+            addView(content)
+        }
+        root.addView(scroller, LinearLayout.LayoutParams(-1, 0, 1f))
         when (page) {
-            "CREATE" -> drawCreate(root)
-            "REVIEW" -> drawReview(root)
-            "ARCHIVE" -> drawArchive(root)
-            "DRAFTS" -> drawDrafts(root)
-            else -> drawHome(root)
+            "REVIEW" -> drawReview(content)
+            "ARCHIVE" -> drawArchive(content)
+            "DRAFTS" -> drawDrafts(content)
+            "PENDING_DELIVERY" -> drawPendingDelivery(content)
+            "SHORT_DELIVERY" -> drawShortDelivery(content)
+            "DELIVERED" -> drawDelivered(content)
+            else -> drawHome(content)
         }
     }
-    private fun isArchived(order: HotelPurchaseOrder): Boolean =
-        workflows.get(order.id).archived || order.status == "ARCHIVED"
+
+    private fun isArchived(order: HotelPurchaseOrder): Boolean = isDelivered(order)
 
     private fun isPlaced(order: HotelPurchaseOrder): Boolean =
         order.status == "PLACED" && !isArchived(order)
@@ -121,67 +270,168 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
         !isArchived(order) && !isPlaced(order)
 
     private fun openPlacedOrder(order: HotelPurchaseOrder) {
-        // Never reopen a placed PO as an editable draft: receipts must match its saved lines.
-        val recorded = receipts.forOrder(order.id)
-        val remaining = HotelPurchaseGoodsReceiptPolicy.remaining(order, recorded)
-        val outstanding = order.lines.count { (remaining[it.itemId] ?: 0.0) > 0.000001 }
-        val message = buildString {
-            appendLine("Vendor: ${order.vendorName}")
-            appendLine("Order: ${order.id.take(8)}")
-            appendLine("${order.lines.size} ordered items | ${recorded.size} deliveries recorded")
-            appendLine("$outstanding item(s) still outstanding")
-            appendLine()
-            order.lines.forEach { line ->
-                val pending = remaining[line.itemId] ?: 0.0
-                appendLine("${line.itemName}: ${formatQty(line.quantity)} ${line.unit}" +
-                    if (pending > 0.000001) " (pending ${formatQty(pending)})" else " (received)")
-            }
-        }
-        AlertDialog.Builder(activity)
-            .setTitle("Placed Purchase Order")
-            .setMessage(message)
-            .setNegativeButton("Close", null)
-            .setNeutralButton("Share") { _, _ -> share(order) }
-            .setPositiveButton("Receive / Check Delivery") { _, _ ->
-                HotelPurchaseReceiveScreen(activity).show(order) { renderPage() }
-            }
-            .show()
+        HotelPurchaseSimpleDeliveryScreen(activity).open(order) { renderPage() }
+    }
+
+    private fun sectionHeader(label: String, count: Int): TextView = text("$label  ($count)", 17f, true).apply {
+        setPadding(dp(8), dp(12), dp(8), dp(10))
+        setTextColor(dark)
     }
 
     private fun drawHome(root: LinearLayout) {
-        root.addView(space(12))
-        root.addView(button("+  Create New Order") {
-            val available = vendors.all()
-            if (available.isEmpty()) {
-                Toast.makeText(activity, "Add a vendor from the three-dot menu first", Toast.LENGTH_LONG).show()
-            } else {
-                selectedQuantities.clear()
-                selectedVendorId = available.first().id
-                selectedCategoryId = null
-                editingOrder = null
-                query = ""
-                page = "CREATE"
-                renderPage()
+        root.setBackgroundColor(pageBackground)
+        root.setPadding(dp(12), dp(10), dp(12), dp(30))
+        val buckets = homeBuckets()
+
+        root.addView(space(6))
+        val createCard = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            background = rounded(Color.rgb(241, 250, 244), green, 22)
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+            elevation = dp(2).toFloat()
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                val available = vendors.all()
+                if (available.isEmpty()) {
+                    Toast.makeText(activity, "Add a vendor from the three-dot menu first", Toast.LENGTH_LONG).show()
+                } else {
+                    selectedQuantities.clear()
+                    selectedVendorId = available.first().id
+                    selectedCategoryId = null
+                    editingOrder = null
+                    query = ""
+                    page = "CREATE"
+                    renderPage()
+                }
             }
-        }, LinearLayout.LayoutParams(-1, dp(51)))
-        root.addView(space(10))
-        val drafts = orders.all().filter(::isDraft)
-        root.addView(button("Drafts (${drafts.size})  ›") {
+            addView(TextView(activity).apply {
+                text = "+"
+                textSize = 34f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(green)
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(dp(38), dp(38)))
+            addView(text("Create New Order", 20f, true).apply {
+                setTextColor(Color.BLACK)
+                setPadding(dp(10), 0, 0, 0)
+            })
+        }
+        root.addView(createCard, LinearLayout.LayoutParams(-1, -2))
+
+        root.addView(space(16))
+        root.addView(homeCard(
+            title = "Drafts",
+            subtitle = "Incomplete orders",
+            count = buckets.drafts.size,
+            cardColor = neutralCard,
+            borderColor = neutralStroke,
+            accentColor = Color.rgb(88, 96, 110),
+            badgeColor = Color.rgb(242, 244, 247),
+            iconGlyph = "📝"
+        ) {
             page = "DRAFTS"
             renderPage()
-        }, LinearLayout.LayoutParams(-1, dp(45)))
-        root.addView(space(16))
-        val placed = orders.all().filter(::isPlaced)
-        root.addView(text("Pending Orders (${placed.size})", 19f, true))
-        root.addView(space(8))
-        if (placed.isEmpty()) root.addView(text("No placed orders awaiting delivery approval."))
-        placed.forEach { order ->
-            val deliveryCount = receipts.forOrder(order.id).size
-            val label = "${order.vendorName}   •   ${order.lines.size} items" +
-                if (deliveryCount > 0) "   •   $deliveryCount delivery(ies)" else "   •   Awaiting delivery"
-            root.addView(button("$label   ›") { openPlacedOrder(order) },
-                LinearLayout.LayoutParams(-1, dp(55)))
-            root.addView(space(3))
+        }, LinearLayout.LayoutParams(-1, -2))
+
+        root.addView(space(12))
+        root.addView(homeCard(
+            title = "Pending Delivery",
+            subtitle = "Orders awaiting delivery",
+            count = buckets.awaitingDelivery.size,
+            cardColor = blueCard,
+            borderColor = blueStroke,
+            accentColor = blue,
+            badgeColor = Color.rgb(232, 242, 255),
+            iconGlyph = "🚚"
+        ) {
+            page = "PENDING_DELIVERY"
+            renderPage()
+        }, LinearLayout.LayoutParams(-1, -2))
+
+        root.addView(space(12))
+        root.addView(homeCard(
+            title = "Short Delivery",
+            subtitle = "Missing items to resolve",
+            count = buckets.shortages.size,
+            cardColor = orangeCard,
+            borderColor = orangeStroke,
+            accentColor = orange,
+            badgeColor = redBadge,
+            iconGlyph = "⚠"
+        ) {
+            page = "SHORT_DELIVERY"
+            renderPage()
+        }, LinearLayout.LayoutParams(-1, -2))
+
+        root.addView(space(12))
+        root.addView(homeCard(
+            title = "Delivered",
+            subtitle = "Completed orders & bill references",
+            count = buckets.delivered.size,
+            cardColor = greenCard,
+            borderColor = greenStroke,
+            accentColor = green,
+            badgeColor = pale,
+            iconGlyph = "📄"
+        ) {
+            page = "DELIVERED"
+            renderPage()
+        }, LinearLayout.LayoutParams(-1, -2))
+    }
+
+    private fun drawPendingDelivery(root: LinearLayout) {
+        val queue = homeBuckets().awaitingDelivery
+        sectionScreenHeader(root, "Pending Delivery", "Orders awaiting delivery")
+        if (queue.isEmpty()) {
+            root.addView(text("No orders are awaiting delivery.", 14f).apply { setTextColor(Color.rgb(88, 96, 110)) })
+            return
+        }
+        queue.forEach { order ->
+            root.addView(button("${order.vendorName}  •  ${order.lines.size} items  ›") {
+                openPlacedOrder(order)
+            }, LinearLayout.LayoutParams(-1, dp(56)))
+            root.addView(space(8))
+        }
+    }
+
+    private fun drawShortDelivery(root: LinearLayout) {
+        val queue = homeBuckets().shortages
+        sectionScreenHeader(root, "Short Delivery", "Orders with missing items")
+        if (queue.isEmpty()) {
+            root.addView(text("No orders currently have missing items.", 14f).apply { setTextColor(Color.rgb(88, 96, 110)) })
+            return
+        }
+        queue.forEach { order ->
+            val balances = HotelPurchaseGoodsReceiptPolicy.remaining(order, receipts.forOrder(order.id))
+            val shortLines = order.lines.count { (balances[it.itemId] ?: 0.0) > 0.000001 }
+            root.addView(button("${order.vendorName}  •  $shortLines missing item(s)  ›") {
+                HotelPurchaseSimpleDeliveryScreen(activity).open(order) { renderPage() }
+            }, LinearLayout.LayoutParams(-1, dp(58)))
+            root.addView(space(8))
+        }
+    }
+
+    private fun drawDelivered(root: LinearLayout) {
+        val queue = homeBuckets().delivered
+        sectionScreenHeader(root, "Delivered", "Completed orders & bill references")
+        if (queue.isEmpty()) {
+            root.addView(text("No delivered orders yet.", 14f).apply { setTextColor(Color.rgb(88, 96, 110)) })
+            return
+        }
+        queue.groupBy { it.vendorId }.forEach { (_, grouped) ->
+            root.addView(text(grouped.first().vendorName, 17f, true))
+            root.addView(space(6))
+            grouped.forEach { order ->
+                val recorded = receipts.forOrder(order.id)
+                val countUnavailable = closures.get(order.id).unavailable.count { it.value > 0.000001 }
+                root.addView(button("Order ${order.id.take(8)} · ${recorded.size} deliveries · $countUnavailable unavailable  ›") {
+                    HotelPurchaseSimpleDeliveryScreen(activity).showHistory(order)
+                }, LinearLayout.LayoutParams(-1, dp(60)))
+                root.addView(space(7))
+            }
+            root.addView(space(12))
         }
     }
 
@@ -540,7 +790,7 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
             menu.add("Manage Categories")
             menu.add("Manage Vendors")
             menu.add("Draft Orders")
-            menu.add("Archived Orders")
+            menu.add("Delivered Orders")
             setOnMenuItemClickListener { item ->
                 when (item.title.toString()) {
                     "Manage Items" -> HotelPurchaseItemScreen(activity).show()
@@ -553,7 +803,7 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
                             .setPositiveButton("Close") { _, _ -> onChanged(); renderPage() }.show()
                     }
                     "Draft Orders" -> { saveVisibleInputs(); page = "DRAFTS"; renderPage() }
-                    "Archived Orders" -> { saveVisibleInputs(); page = "ARCHIVE"; renderPage() }
+                    "Delivered Orders" -> { saveVisibleInputs(); page = "DELIVERED"; renderPage() }
                 }
                 true
             }
