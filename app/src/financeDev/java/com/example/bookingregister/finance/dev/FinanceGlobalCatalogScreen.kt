@@ -41,6 +41,7 @@ internal class FinanceGlobalCatalogScreen(private val activity: Activity) {
     private var allGroups = false
     private var showArchivedItems = false
     private var dialog: Dialog? = null
+    private var queuedItemSearch: String? = null
 
     private val bg = Color.rgb(247, 249, 252)
     private val white = Color.WHITE
@@ -276,7 +277,9 @@ internal class FinanceGlobalCatalogScreen(private val activity: Activity) {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { updateList(s?.toString() ?: "") }
             override fun afterTextChanged(s: Editable?) = Unit
         })
-        updateList("")
+        val jumpToItem = queuedItemSearch
+        queuedItemSearch = null
+        if (jumpToItem.isNullOrBlank()) updateList("") else search.setText(jumpToItem)
     }
 
     private fun breadcrumb(): String = when {
@@ -310,7 +313,56 @@ internal class FinanceGlobalCatalogScreen(private val activity: Activity) {
         })
     }
 
+    private fun showCatalogQuality() {
+        val activeGroups = groups.all()
+        val allItems = items.catalogItems(true)
+        val types = caMaster.allTypes.map { (_, type) ->
+            val config = settings.forType(type.code)
+            FinanceQualityType(type.code, type.name, config.stockable, config.groupIds)
+        }
+        val issues = FinanceCatalogQualityRules.inspect(
+            activeGroups.map { FinanceQualityGroup(it.id, it.name) },
+            allItems.map { FinanceQualityItem(it.id, it.categoryId, it.name, it.unit, it.active) },
+            types
+        )
+        FinanceCatalogQualityScreen(activity).show(
+            groupCount = activeGroups.size,
+            itemCount = allItems.count { it.active },
+            typeCount = types.size,
+            stockableCount = types.count { it.stockable },
+            findings = issues
+        ) { issue ->
+            selectedCategory = null
+            selectedType = null
+            selectedGroup = null
+            allGroups = false
+            showArchivedItems = false
+            val affectedItem = issue.itemId?.let { id -> allItems.firstOrNull { it.id == id } }
+            when {
+                affectedItem != null -> {
+                    selectedGroup = groups.allIncludingArchived().firstOrNull { it.first.id == affectedItem.categoryId }?.first
+                    allGroups = true
+                    if (selectedGroup != null) queuedItemSearch = affectedItem.name
+                }
+                issue.typeCode != null -> {
+                    val entry = caMaster.findType(issue.typeCode)
+                    selectedCategory = entry?.first
+                    selectedType = entry?.second
+                }
+                issue.groupId != null -> {
+                    selectedGroup = groups.allIncludingArchived().firstOrNull { it.first.id == issue.groupId }?.first
+                    allGroups = true
+                }
+            }
+            render()
+        }
+    }
+
     private fun renderCategories(parent: LinearLayout, query: String) {
+        section(parent, "CATALOG QUALITY", "Review item coverage and unit suggestions before making changes.")
+        put(parent, card("Catalog quality review", "Read-only checks for missing links, duplicates and units", "Review") {
+            showCatalogQuality()
+        })
         section(parent, "ACCOUNTING CATEGORIES", "These are your CA-oriented categories. Codes remain stable.")
         val categories = caMaster.categories.filter { it.name.contains(query, true) || it.code.contains(query, true) }
         if (categories.isEmpty()) empty(parent, "No categories found", "Try a different name or code.")
