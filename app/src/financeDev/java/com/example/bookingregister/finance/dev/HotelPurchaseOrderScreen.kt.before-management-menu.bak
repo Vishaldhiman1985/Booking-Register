@@ -1,0 +1,500 @@
+package com.example.bookingregister.finance.dev
+
+import android.app.Activity
+import android.content.Intent
+import android.view.ViewGroup
+import android.widget.*
+import androidx.appcompat.app.AlertDialog
+import java.util.UUID
+
+class HotelPurchaseOrderScreen(private val activity: Activity) {
+
+    private val vendors = HotelPurchaseVendorStore(activity)
+    private val orders = HotelPurchaseOrderStore(activity)
+
+    fun render(container: LinearLayout) {
+        container.removeAllViews()
+
+        val header = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+        }
+
+        header.addView(
+            TextView(activity).apply {
+                text = "Purchasing"
+                textSize = 24f
+                setTypeface(null, android.graphics.Typeface.BOLD)
+            },
+            LinearLayout.LayoutParams(0, -2, 1f)
+        )
+
+        val menuButton = Button(activity).apply {
+            text = "\u22EE"
+            contentDescription = "Purchasing menu"
+        }
+
+        menuButton.setOnClickListener {
+            android.widget.PopupMenu(activity, menuButton).apply {
+                menu.add("Manage Vendors")
+                setOnMenuItemClickListener {
+                    val vendorContainer = LinearLayout(activity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        setPadding(24, 12, 24, 12)
+                    }
+                    HotelPurchaseVendorScreen(activity).render(vendorContainer)
+
+                    val scroll = ScrollView(activity).apply {
+                        addView(vendorContainer)
+                    }
+
+                    AlertDialog.Builder(activity)
+                        .setTitle("Manage Vendors")
+                        .setView(scroll)
+                        .setPositiveButton("Close", null)
+                        .show()
+                    true
+                }
+                show()
+            }
+        }
+
+        header.addView(menuButton)
+        container.addView(header)
+
+        container.addView(Button(activity).apply {
+            text = "+ New Purchase Order"
+            setOnClickListener {
+                createOrder { render(container) }
+            }
+        })
+
+        container.addView(TextView(activity).apply {
+            text = "Purchase Order History"
+            textSize = 18f
+            setPadding(0, 20, 0, 12)
+        })
+
+        val history = orders.all()
+
+        if (history.isEmpty()) {
+            container.addView(TextView(activity).apply {
+                text = "No purchase orders yet."
+                setPadding(0, 12, 0, 12)
+            })
+        }
+
+        history.forEach { order ->
+            container.addView(Button(activity).apply {
+                text = "${order.vendorName} | ${order.lines.size} items | ${order.status}"
+                setOnClickListener { showOrder(order) }
+            })
+        }
+    }
+    fun show() {
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 12, 24, 12)
+        }
+
+        val content = ScrollView(activity).apply {
+            addView(root)
+        }
+
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle("Purchase Orders")
+            .setView(content)
+            .setPositiveButton("Close", null)
+            .create()
+
+        root.addView(Button(activity).apply {
+            text = "+ New Purchase Order"
+            setOnClickListener {
+                createOrder { dialog.dismiss(); show() }
+            }
+        })
+
+        val history = orders.all()
+
+        if (history.isEmpty()) {
+            root.addView(TextView(activity).apply {
+                text = "No purchase orders yet."
+                setPadding(8, 20, 8, 20)
+            })
+        }
+
+        history.forEach { order ->
+            root.addView(Button(activity).apply {
+                text = "${order.vendorName} | ${order.lines.size} items | ${order.status}"
+                setOnClickListener { showOrder(order) }
+            })
+        }
+
+        dialog.show()
+        dialog.window?.setSoftInputMode(
+            android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        )
+    }
+
+    private fun createOrder(onSaved: () -> Unit) {
+        val vendorList = vendors.all()
+
+        if (vendorList.isEmpty()) {
+            Toast.makeText(activity, "Add a vendor first", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 12, 24, 12)
+        }
+
+        val vendorPicker = Spinner(activity).apply {
+            adapter = ArrayAdapter(
+                activity,
+                android.R.layout.simple_spinner_dropdown_item,
+                vendorList.map { it.name }
+            )
+        }
+
+        root.addView(TextView(activity).apply { text = "Select vendor" })
+        root.addView(vendorPicker)
+
+        val itemSearch = EditText(activity).apply {
+            hint = "Search purchasing items"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+            setSingleLine(true)
+        }
+        root.addView(itemSearch)
+
+        val addItemButton = Button(activity).apply {
+            text = "+ Add Item"
+        }
+        root.addView(addItemButton)
+
+        val itemContainer = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        root.addView(itemContainer)
+
+        val quantities = mutableMapOf<String, EditText>()
+        val enteredQuantities = mutableMapOf<String, String>()
+        var selectedVendorId = ""
+        val expandedCategories = mutableSetOf<String>()
+
+        fun refreshItems() {
+            itemContainer.removeAllViews()
+            quantities.forEach { (id, field) ->
+                enteredQuantities[id] = field.text.toString()
+            }
+            quantities.clear()
+
+            val vendor = vendorList[vendorPicker.selectedItemPosition]
+            val available = HotelPurchasePolicy.itemsForVendor(
+                vendor, (
+    HotelPurchaseItems.items.map { original ->
+    val master = HotelPurchaseMasterCatalog.items.firstOrNull {
+        it.categoryId == original.categoryId &&
+        it.name.equals(original.name, ignoreCase = true)
+    }
+    original.copy(
+        synonyms = (original.synonyms + (master?.synonyms ?: emptyList())).distinct()
+    )
+} +
+    HotelPurchaseMasterCatalog.items.filter { master ->
+        HotelPurchaseItems.items.none { original ->
+            original.categoryId == master.categoryId &&
+            original.name.equals(master.name, ignoreCase = true)
+        }
+    } +
+    HotelPurchaseCustomItemStore(activity).all()
+)
+            )
+
+            if (selectedVendorId != vendor.id) {
+                enteredQuantities.clear()
+                selectedVendorId = vendor.id
+            }
+
+            val query = itemSearch.text.toString().trim()
+
+            val matchingItems = available.filter {
+                query.isEmpty() ||
+                    (it.name.contains(query, ignoreCase = true) ||
+                     it.synonyms.any { alias ->
+                         alias.contains(query, ignoreCase = true)
+                     })
+            }
+
+            matchingItems.groupBy { it.categoryId }.forEach { (categoryId, categoryItems) ->
+                val expanded = query.isNotEmpty() || categoryId in expandedCategories
+
+                val categoryButton = Button(activity).apply {
+                    text = (if (expanded) "▼ " else "▶ ") +
+                        (mapOf(
+                    "bakery" to "Bakery & Breads",
+                    "beverages" to "Tea, Coffee & Beverages",
+                    "cleaning" to "Cleaning Chemicals",
+                    "dairy" to "Dairy & Eggs",
+                    "decor" to "Decor & Soft Furnishings",
+                    "disposables" to "Packaging & Disposables",
+                    "electrical" to "Electrical & Lighting",
+                    "frozen" to "Frozen & Ready-to-Cook",
+                    "furniture" to "Furniture & Fixtures",
+                    "garden" to "Gardening & Landscaping",
+                    "grocery" to "Grocery & Dry Rations",
+                    "guest" to "Guest Amenities & Toiletries",
+                    "hardware" to "Hardware & Maintenance",
+                    "housekeeping" to "Housekeeping Supplies",
+                    "it" to "IT & Electronics",
+                    "kitchen" to "Kitchen Equipment & Utensils",
+                    "laundry" to "Laundry Supplies & Services",
+                    "linen" to "Linen, Towels & Bedding",
+                    "meat" to "Meat, Poultry & Seafood",
+                    "office" to "Office & Stationery",
+                    "plumbing" to "Plumbing & Sanitary",
+                    "pool" to "Swimming Pool Supplies",
+                    "services" to "External Services & Events",
+                    "spices" to "Spices, Oils & Condiments",
+                    "uniforms" to "Staff Uniforms & Safety",
+                    "vegetables" to "Vegetables & Fruits"
+)[categoryId] ?: categoryId) +
+                        " (${categoryItems.size})"
+
+                    setOnClickListener {
+                        if (!expandedCategories.add(categoryId)) {
+                            expandedCategories.remove(categoryId)
+                        }
+                        refreshItems()
+                    }
+                }
+                itemContainer.addView(categoryButton)
+
+                if (expanded) {
+                    categoryItems.forEach { item ->
+                val row = LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                }
+
+                val name = TextView(activity).apply {
+                    text = "${item.name} (${item.unit})"
+                }
+
+                val quantity = EditText(activity).apply {
+                    hint = "Qty"
+                    inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                        android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+                    setSingleLine(true)
+                    setText(enteredQuantities[item.id].orEmpty())
+                }
+
+                quantities[item.id] = quantity
+
+                row.addView(
+                    name,
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 2f)
+                )
+                val minus = Button(activity).apply {
+                    text = "-"
+                    setOnClickListener {
+                        val current = quantity.text.toString().toDoubleOrNull() ?: 0.0
+                        val next = (current - 1.0).coerceAtLeast(0.0)
+                        quantity.setText(next.toString())
+                    }
+                }
+
+                val plus = Button(activity).apply {
+                    text = "+"
+                    setOnClickListener {
+                        val current = quantity.text.toString().toDoubleOrNull() ?: 0.0
+                        quantity.setText((current + 1.0).toString())
+                    }
+                }
+
+                quantity.isEnabled = true
+                quantity.isFocusable = true
+                quantity.isFocusableInTouchMode = true
+                quantity.isClickable = true
+                quantity.showSoftInputOnFocus = true
+
+                quantity.setOnClickListener {
+                    quantity.requestFocus()
+                    val keyboard = activity.getSystemService(
+                        android.content.Context.INPUT_METHOD_SERVICE
+                    ) as android.view.inputmethod.InputMethodManager
+                    keyboard.showSoftInput(
+                        quantity,
+                        android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT
+                    )
+                }
+
+                row.addView(
+                    minus,
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.8f)
+                )
+                row.addView(
+                    quantity,
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.2f)
+                )
+                row.addView(
+                    plus,
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.8f)
+                )
+                itemContainer.addView(row)
+                    }
+                }
+            }
+        }
+
+        addItemButton.setOnClickListener {
+            HotelPurchaseAddItemDialog(activity).show {
+                itemSearch.setText("")
+                refreshItems()
+            }
+        }
+        itemSearch.addTextChangedListener(
+            object : android.text.TextWatcher {
+                override fun beforeTextChanged(
+                    s: CharSequence?, start: Int, count: Int, after: Int
+                ) {}
+                override fun onTextChanged(
+                    s: CharSequence?, start: Int, before: Int, count: Int
+                ) {
+                    refreshItems()
+                }
+                override fun afterTextChanged(s: android.text.Editable?) {}
+            }
+        )
+        vendorPicker.onItemSelectedListener =
+            object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+                override fun onItemSelected(
+                    parent: android.widget.AdapterView<*>?,
+                    view: android.view.View?,
+                    position: Int,
+                    id: Long
+                ) {
+                    refreshItems()
+                }
+            }
+
+        val scroll = ScrollView(activity).apply { addView(root) }
+
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle("New Purchase Order")
+            .setView(scroll)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save Order", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val vendor = vendorList[vendorPicker.selectedItemPosition]
+                val available = HotelPurchasePolicy.itemsForVendor(
+                    vendor, (
+    HotelPurchaseItems.items.map { original ->
+    val master = HotelPurchaseMasterCatalog.items.firstOrNull {
+        it.categoryId == original.categoryId &&
+        it.name.equals(original.name, ignoreCase = true)
+    }
+    original.copy(
+        synonyms = (original.synonyms + (master?.synonyms ?: emptyList())).distinct()
+    )
+} +
+    HotelPurchaseMasterCatalog.items.filter { master ->
+        HotelPurchaseItems.items.none { original ->
+            original.categoryId == master.categoryId &&
+            original.name.equals(master.name, ignoreCase = true)
+        }
+    } +
+    HotelPurchaseCustomItemStore(activity).all()
+)
+                )
+
+                quantities.forEach { (id, field) ->
+                    enteredQuantities[id] = field.text.toString()
+                }
+
+                val lines = available.mapNotNull { item ->
+                    val raw = enteredQuantities[item.id]?.trim().orEmpty()
+                    if (raw.isEmpty()) return@mapNotNull null
+
+                    val qty = raw.toDoubleOrNull()
+                    if (qty == null || !qty.isFinite() || qty <= 0) {
+                        Toast.makeText(
+                            activity,
+                            "Invalid quantity for ${item.name}",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        return@setOnClickListener
+                    }
+
+                    HotelPurchaseOrderLine(
+                        item.id, item.name, qty, item.unit
+                    )
+                }
+
+                if (lines.isEmpty()) {
+                    Toast.makeText(
+                        activity, "Enter at least one quantity",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return@setOnClickListener
+                }
+
+                try {
+                    orders.save(
+                        HotelPurchaseOrder(
+                            id = UUID.randomUUID().toString(),
+                            vendorId = vendor.id,
+                            vendorName = vendor.name,
+                            createdAtMillis = System.currentTimeMillis(),
+                            lines = lines
+                        )
+                    )
+                    dialog.dismiss()
+                    onSaved()
+                } catch (error: Exception) {
+                    Toast.makeText(
+                        activity, error.message ?: "Unable to save order",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+
+        dialog.show()
+        dialog.window?.setSoftInputMode(
+            android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        )
+    }
+
+    private fun showOrder(order: HotelPurchaseOrder) {
+        val message = buildString {
+            appendLine("PURCHASE ORDER")
+            appendLine("Vendor: ${order.vendorName}")
+            appendLine("Order ID: ${order.id.take(8)}")
+            appendLine()
+            order.lines.forEachIndexed { index, line ->
+                appendLine(
+                    "${index + 1}. ${line.itemName} - ${line.quantity} ${line.unit}"
+                )
+            }
+            appendLine()
+            appendLine("Please confirm availability and delivery.")
+        }
+
+        AlertDialog.Builder(activity)
+            .setTitle("Purchase Order")
+            .setMessage(message)
+            .setNegativeButton("Close", null)
+            .setPositiveButton("Share") { _, _ ->
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, message)
+                }
+                activity.startActivity(Intent.createChooser(intent, "Share purchase order"))
+            }
+            .show()
+    }
+}

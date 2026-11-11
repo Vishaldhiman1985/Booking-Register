@@ -1,0 +1,244 @@
+package com.example.bookingregister.finance.dev
+
+import android.app.Activity
+import android.app.DatePickerDialog
+import android.graphics.Color
+import android.graphics.Typeface
+import android.text.InputType
+import android.text.TextWatcher
+import android.text.Editable
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.*
+import androidx.appcompat.app.AlertDialog
+import java.time.YearMonth
+import java.util.Locale
+
+/** Finance DEV: catalog-based physical monthly count. Existing stock store is unchanged. */
+class HotelMonthlyStockScreen(private val activity: Activity) {
+    private val store = HotelMonthlyStockStore(activity)
+    private val categories by lazy { HotelPurchaseCategoryStore(activity).all() }
+    private val items by lazy {
+        // Use the SAME master + custom item catalog as Purchasing, not a second stock master.
+        (HotelPurchaseItems.items + HotelPurchaseMasterCatalog.items + HotelPurchaseCustomItemStore(activity).all())
+            .filter { it.active }
+            .distinctBy { it.id }
+            .sortedBy { it.name.lowercase(Locale.ROOT) }
+    }
+    private val dark = Color.rgb(31, 42, 59)
+    private val muted = Color.rgb(105, 116, 130)
+    private val border = Color.rgb(230, 234, 239)
+    private val emerald = Color.rgb(18, 124, 84)
+    private fun dp(v: Int) = (activity.resources.displayMetrics.density * v + 0.5f).toInt()
+    private fun linear(vertical: Boolean = true) = LinearLayout(activity).apply {
+        orientation = if (vertical) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+    }
+    private fun label(s: String, size: Float = 14f, bold: Boolean = false, color: Int = dark) = TextView(activity).apply {
+        text = s; textSize = size; setTextColor(color)
+        if (bold) setTypeface(null, Typeface.BOLD)
+        gravity = Gravity.CENTER_VERTICAL
+    }
+    private fun padding(v: View, x: Int = 12, y: Int = 9) { v.setPadding(dp(x), dp(y), dp(x), dp(y)) }
+    private fun toast(message: String) = Toast.makeText(activity, message, Toast.LENGTH_LONG).show()
+    private fun qty(value: Double): String = if (value == value.toLong().toDouble()) value.toLong().toString() else
+        String.format(Locale.US, "%.3f", value).trimEnd('0').trimEnd('.')
+    private fun stepFor(unit: String): Double = when (unit.lowercase(Locale.ROOT)) {
+        "kg", "kilogram", "litre", "liter", "l" -> 0.1
+        "g", "gram", "ml", "millilitre" -> 50.0
+        else -> 1.0
+    }
+
+    fun show() {
+        val current = YearMonth.now().minusMonths(1)
+        val root = linear().apply { padding(this, 18, 12) }
+        root.addView(label("Choose stock month", 13f, false, muted))
+        var selected = current
+        val monthButton = Button(activity).apply { isAllCaps = false; text = current.toString() }
+        monthButton.setOnClickListener {
+            DatePickerDialog(activity, { _, year, month, _ ->
+                selected = YearMonth.of(year, month + 1)
+                monthButton.text = "${selected.month.name.lowercase(Locale.ROOT).replaceFirstChar { it.uppercase() }} $year"
+            }, selected.year, selected.monthValue - 1, 1).apply {
+                datePicker.maxDate = System.currentTimeMillis()
+            }.show()
+        }
+        root.addView(monthButton)
+        root.addView(label("Items are taken directly from your Purchase catalog. Count only stock physically remaining.", 12f, false, muted))
+        AlertDialog.Builder(activity).setTitle("Monthly Kitchen Stock")
+            .setView(root)
+            .setNegativeButton("Cancel", null)
+            .setNeutralButton("Opening Stock") { _, _ -> start(selected.toString(), true) }
+            .setPositiveButton("Month-End Count") { _, _ -> start(selected.toString(), false) }
+            .show()
+    }
+
+    private fun start(month: String, initial: Boolean) {
+        try {
+            val period = HotelMonthlyStockPolicy.validMonth(month)
+            if (initial) {
+                require(store.opening(month) == null) { "Opening stock already exists. Please use month-end count." }
+            } else {
+                require(period < YearMonth.now()) { "Select a completed month for closing." }
+                if (store.all().any { it.month == month }) { showSummary(month); return }
+                require(store.opening(month) != null) { "First set opening stock for your initial month." }
+            }
+            showEditor(month, initial)
+        } catch (e: Exception) { toast(e.message ?: "Unable to open stock") }
+    }
+
+    private fun showSummary(month: String) {
+        val record = store.all().firstOrNull { it.month == month } ?: return
+        val lines = record.closing.joinToString("\n") { "${it.name}: ${qty(it.quantity)} ${it.unit}" }
+        val warning = if (store.receiptsChangedAfterClose(month)) "\n\nNew receipts exist for this closed month; manager review required." else ""
+        AlertDialog.Builder(activity).setTitle("Approved stock — $month")
+            .setMessage("Approved by: ${record.approvedBy}\n\n$lines$warning")
+            .setPositiveButton("Close", null).show()
+    }
+
+    private fun showEditor(month: String, initial: Boolean) {
+        val opening = if (initial) emptyList() else store.opening(month).orEmpty()
+        val purchased = if (initial) emptyList() else store.purchased(month).first
+        val required = (opening + purchased).associateBy { it.itemId }
+        // Maintain all edits independent of visible category/search filter.
+        val counts = mutableMapOf<String, String>()
+        val itemMeta = linkedMapOf<String, HotelStockQuantity>()
+        required.values.forEach { itemMeta[it.itemId] = it }
+        items.forEach { itemMeta.putIfAbsent(it.id, HotelStockQuantity(it.id, it.name, it.unit, 0.0)) }
+        val categoryByItem = items.associate { it.id to it.categoryId }
+        val names = categories.associate { it.id to it.name }
+        val root = linear().apply { padding(this, 12, 8) }
+        root.addView(label(if (initial) "Initial opening stock" else "Physical closing stock", 18f, true))
+        root.addView(label("$month  •  ${if (initial) "Set starting quantities" else "Count stock remaining"}", 12f, false, muted))
+        val progress = label("", 12f, false, emerald).apply { padding(this, 0, 6) }
+        root.addView(progress)
+        val pickerRow = linear(false)
+        val selectedCategories = listOf("All categories") + categories.map { it.name }
+        val categoryPicker = Spinner(activity).apply {
+            adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item, selectedCategories)
+        }
+        pickerRow.addView(categoryPicker, LinearLayout.LayoutParams(0, dp(52), 1f))
+        root.addView(pickerRow)
+        val search = EditText(activity).apply {
+            hint = "Search ingredient or item"; setSingleLine(); textSize = 14f
+            padding(this, 10, 6)
+        }
+        root.addView(search)
+        val list = linear().apply { padding(this, 0, 4) }
+        val scrolling = ScrollView(activity).apply { addView(list); isFillViewport = false }
+        root.addView(scrolling, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        val help = label("Blank = not counted · 0 = physically none left. Use − / + or type an exact amount.", 12f, false, muted)
+        root.addView(help)
+        val manager = EditText(activity).apply { hint = "Manager name (required to close)"; setSingleLine(); textSize = 14f }
+        if (!initial) root.addView(manager)
+
+        fun updateProgress() {
+            val done = required.keys.count { counts[it]?.isNotBlank() == true }
+            progress.text = if (initial) "${counts.values.count { it.isNotBlank() }} items counted" else
+                "$done / ${required.size} required items counted"
+        }
+        fun updateList() {
+            // Recreate visible rows, but never lose entered quantities when filtering.
+            list.removeAllViews()
+            val filter = search.text?.toString()?.trim().orEmpty()
+            val selectedCategory = categories.getOrNull(categoryPicker.selectedItemPosition - 1)?.id
+            val visible = itemMeta.values.filter { item ->
+                (selectedCategory == null || categoryByItem[item.itemId] == selectedCategory) &&
+                    (filter.isEmpty() || item.name.contains(filter, ignoreCase = true))
+            }.sortedWith(compareBy<HotelStockQuantity> { names[categoryByItem[it.itemId]] ?: "Other" }.thenBy { it.name })
+            if (visible.isEmpty()) list.addView(label("No matching items", 14f, false, muted).apply { padding(this) })
+            var lastCategory = ""
+            for (item in visible) {
+                val category = names[categoryByItem[item.itemId]] ?: "Previously counted items"
+                if (category != lastCategory) {
+                    lastCategory = category
+                    list.addView(label(category, 14f, true).apply { padding(this, 4, 10) })
+                }
+                val row = linear(false).apply { gravity = Gravity.CENTER_VERTICAL; minimumHeight = dp(64) }
+                val left = linear()
+                left.addView(label(item.name, 14f, true))
+                left.addView(label(item.unit + if (item.itemId in required) "  ·  required" else "", 11f, false, muted))
+                row.addView(left, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                val field = EditText(activity).apply {
+                    textSize = 15f; gravity = Gravity.CENTER
+                    setSingleLine(true)
+                    inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                    hint = "—"; setText(counts[item.itemId].orEmpty())
+                }
+                val minus = Button(activity).apply { text = "−"; isAllCaps = false; minWidth = 0; minimumWidth = 0; setPadding(0, 0, 0, 0) }
+                val plus = Button(activity).apply { text = "+"; isAllCaps = false; minWidth = 0; minimumWidth = 0; setPadding(0, 0, 0, 0) }
+                val setByStep: (Int) -> Unit = { sign ->
+                    val n = field.text.toString().toDoubleOrNull() ?: 0.0
+                    val next = (n + sign * stepFor(item.unit)).coerceAtLeast(0.0)
+                    field.setText(qty(next)); field.setSelection(field.text.length)
+                }
+                minus.setOnClickListener { setByStep(-1) }
+                plus.setOnClickListener { setByStep(1) }
+                field.addTextChangedListener(object : TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                        counts[item.itemId] = s?.toString().orEmpty(); updateProgress()
+                    }
+                    override fun afterTextChanged(s: Editable?) {}
+                })
+                row.addView(minus, LinearLayout.LayoutParams(dp(40), dp(48)))
+                row.addView(field, LinearLayout.LayoutParams(dp(65), dp(48)))
+                row.addView(plus, LinearLayout.LayoutParams(dp(40), dp(48)))
+                list.addView(row)
+                list.addView(View(activity).apply { setBackgroundColor(border) }, LinearLayout.LayoutParams(-1, dp(1)))
+            }
+            updateProgress()
+        }
+        categoryPicker.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) { updateList() }
+        }
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { updateList() }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle("Kitchen Stock · $month")
+            .setView(root)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton(if (initial) "Save Opening" else "Review & Close", null)
+            .create()
+        dialog.setOnShowListener {
+            updateList()
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                try {
+                    require(counts.values.any { it.isNotBlank() }) { "Count at least one item" }
+                    if (!initial) {
+                        val missing = required.values.filter { counts[it.itemId].isNullOrBlank() }
+                        require(missing.isEmpty()) { "Count all required items. Still missing: ${missing.take(3).joinToString { it.name }}" }
+                    }
+                    val result = counts.filterValues { it.isNotBlank() }.map { (id, raw) ->
+                        val q = raw.toDoubleOrNull()
+                        require(q != null && q.isFinite() && q >= 0) { "Invalid count for ${itemMeta[id]?.name}" }
+                        itemMeta.getValue(id).copy(quantity = q)
+                    }
+                    if (initial) {
+                        store.setInitialOpening(month, result)
+                        dialog.dismiss(); toast("Opening stock saved")
+                    } else {
+                        require(manager.text.toString().isNotBlank()) { "Enter manager name" }
+                        val consumption = HotelMonthlyStockPolicy.balance(opening, purchased, result)
+                        val preview = "${result.size} items counted\n${consumption.size} stock balances calculated\n\nThis will lock the month and carry its closing stock into next month."
+                        AlertDialog.Builder(activity).setTitle("Approve month-end stock")
+                            .setMessage(preview)
+                            .setNegativeButton("Review again", null)
+                            .setPositiveButton("Approve & Close") { _, _ ->
+                                try {
+                                    store.approve(month, result, manager.text.toString())
+                                    dialog.dismiss(); toast("Stock closed and carried forward")
+                                } catch (e: Exception) { toast(e.message ?: "Unable to close month") }
+                            }.show()
+                    }
+                } catch (e: Exception) { toast(e.message ?: "Please check your counts") }
+            }
+        }
+        dialog.show()
+        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, (activity.resources.displayMetrics.heightPixels * .88).toInt())
+    }
+}

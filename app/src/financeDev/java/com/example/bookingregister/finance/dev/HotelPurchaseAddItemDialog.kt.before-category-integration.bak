@@ -1,0 +1,112 @@
+package com.example.bookingregister.finance.dev
+
+import android.app.Activity
+import android.app.AlertDialog
+import android.widget.ArrayAdapter
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.Spinner
+import android.widget.Toast
+
+class HotelPurchaseAddItemDialog(private val activity: Activity) {
+
+    fun show(onSaved: () -> Unit) {
+        val categories = HotelPurchaseCatalog.categories
+
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(32, 20, 32, 12)
+        }
+
+        val name = EditText(activity).apply {
+            hint = "Item name (e.g. Desi Ghee)"
+            setSingleLine(true)
+        }
+
+        val category = Spinner(activity).apply {
+            adapter = ArrayAdapter(
+                activity,
+                android.R.layout.simple_spinner_dropdown_item,
+                categories.map { it.name }
+            )
+        }
+
+        val unit = Spinner(activity).apply {
+            val units = listOf(
+                "kg", "gram", "litre", "ml",
+                "piece", "packet", "box", "bottle",
+                "dozen", "bag", "roll", "set",
+                "pair", "carton", "service"
+            )
+            adapter = ArrayAdapter(
+                activity,
+                android.R.layout.simple_spinner_dropdown_item,
+                units
+            )
+        }
+
+        val synonyms = EditText(activity).apply {
+            hint = "Synonyms separated by commas"
+            minLines = 2
+            maxLines = 3
+        }
+
+        root.addView(name)
+        root.addView(category)
+        root.addView(unit)
+        root.addView(synonyms)
+
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle("Add Purchasing Item")
+            .setView(root)
+            .setPositiveButton("Save Item", null)
+            .setNegativeButton("Cancel", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener {
+                    val itemName = name.text.toString().trim()
+
+                    if (itemName.isEmpty()) {
+                        name.error = "Enter item name"
+                        return@setOnClickListener
+                    }
+
+                    val categoryId =
+                        categories[category.selectedItemPosition].id
+
+                    val aliases = synonyms.text.toString()
+                        .split(",")
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+
+                    try {
+                        HotelPurchaseCustomItemStore(activity).add(
+                            name = itemName,
+                            categoryId = categoryId,
+                            unit = unit.selectedItem.toString(),
+                            synonyms = aliases
+                        )
+
+                        Toast.makeText(
+                            activity,
+                            "Item saved successfully",
+                            Toast.LENGTH_SHORT
+                        ).show()
+
+                        dialog.dismiss()
+                        onSaved()
+                    } catch (e: Exception) {
+                        Toast.makeText(
+                            activity,
+                            "Could not save item: ${e.message}",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+        }
+
+        dialog.show()
+    }
+}

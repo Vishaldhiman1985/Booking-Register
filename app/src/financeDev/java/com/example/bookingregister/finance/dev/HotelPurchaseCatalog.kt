@@ -1,4 +1,4 @@
-﻿package com.example.bookingregister.finance.dev
+package com.example.bookingregister.finance.dev
 
 object HotelPurchaseCatalog {
 
@@ -28,7 +28,8 @@ object HotelPurchaseCatalog {
         HotelPurchaseCategory("garden", "Gardening & Landscaping"),
         HotelPurchaseCategory("office", "Office & Stationery"),
         HotelPurchaseCategory("it", "IT & Electronics"),
-        HotelPurchaseCategory("services", "External Services & Events")
+        HotelPurchaseCategory("services", "External Services & Events"),
+        HotelPurchaseCategory("alcoholic", "Alcoholic Beverages")
     )
 
     fun categoryById(id: String): HotelPurchaseCategory? {

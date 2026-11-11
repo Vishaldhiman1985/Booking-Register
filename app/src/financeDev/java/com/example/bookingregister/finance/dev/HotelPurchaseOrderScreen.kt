@@ -774,16 +774,14 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
     fun showMenu(anchor: View, onChanged: () -> Unit = {}) {
         PopupMenu(activity, anchor).apply {
             menu.add("Monthly Stock")
-            menu.add("Manage Items")
-            menu.add("Manage Categories")
+            menu.add("Global Catalog")
             menu.add("Vendors")
             menu.add("Draft Orders")
             menu.add("Delivered Orders")
             setOnMenuItemClickListener { item ->
                 when (item.title.toString()) {
                     "Monthly Stock" -> HotelMonthlyStockScreen(activity).show()
-                    "Manage Items" -> { saveVisibleInputs(); HotelPurchaseItemScreen(activity).show { renderPage() } }
-                    "Manage Categories" -> { saveVisibleInputs(); HotelPurchaseCategoryScreen(activity).show { renderPage() } }
+                    "Global Catalog" -> { saveVisibleInputs(); FinanceGlobalCatalogScreen(activity).show { renderPage() } }
                     "Vendors" -> {
                         val vendorContainer = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8)) }
                         HotelPurchaseVendorScreen(activity).render(vendorContainer)

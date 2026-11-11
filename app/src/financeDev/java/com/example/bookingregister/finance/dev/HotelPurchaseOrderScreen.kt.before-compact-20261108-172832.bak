@@ -1,0 +1,416 @@
+package com.example.bookingregister.finance.dev
+
+import android.app.Activity
+import android.content.Intent
+import android.graphics.Color
+import android.graphics.Typeface
+import android.text.Editable
+import android.text.InputType
+import android.text.TextWatcher
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
+import android.content.Context
+import android.widget.*
+import androidx.appcompat.app.AlertDialog
+import java.util.UUID
+
+/** Finance DEV purchasing: home -> compact item picker -> review. */
+class HotelPurchaseOrderScreen(private val activity: Activity) {
+    private val vendors = HotelPurchaseVendorStore(activity)
+    private val orders = HotelPurchaseOrderStore(activity)
+    private val customItems = HotelPurchaseCustomItemStore(activity)
+    private val categories = HotelPurchaseCategoryStore(activity)
+    private var host: LinearLayout? = null
+    private var page = "HOME"
+    private var selectedVendorId: String? = null
+    private val selectedQuantities = mutableMapOf<String, Double>()
+    private val pendingFields = mutableMapOf<String, EditText>()
+    private var selectedCategoryId: String? = null
+    private var query = ""
+    private var editingOrder: HotelPurchaseOrder? = null
+
+    private fun dp(n: Int) = (activity.resources.displayMetrics.density * n + 0.5f).toInt()
+    private val green = Color.rgb(0, 115, 46)
+    private val dark = Color.rgb(31, 42, 59)
+    private val pale = Color.rgb(227, 247, 238)
+    private val light = Color.rgb(247, 247, 251)
+
+    private fun text(label: String, size: Float = 15f, bold: Boolean = false): TextView = TextView(activity).apply {
+        text = label
+        textSize = size
+        setTextColor(dark)
+        if (bold) setTypeface(null, Typeface.BOLD)
+        gravity = Gravity.CENTER_VERTICAL
+    }
+    private fun button(label: String, onClick: () -> Unit): Button = Button(activity).apply {
+        text = label
+        isAllCaps = false
+        setOnClickListener { onClick() }
+    }
+    private fun space(px: Int) = Space(activity).apply { minimumHeight = dp(px) }
+    private fun line(parent: LinearLayout) {
+        parent.addView(View(activity).apply { setBackgroundColor(Color.rgb(230, 233, 237)) }, LinearLayout.LayoutParams(-1, dp(1)))
+    }
+    private fun masterItems(): List<HotelPurchaseItem> {
+        val originals = HotelPurchaseItems.items.map { original ->
+            val master = HotelPurchaseMasterCatalog.items.firstOrNull {
+                it.categoryId == original.categoryId && it.name.equals(original.name, ignoreCase = true)
+            }
+            original.copy(synonyms = (original.synonyms + (master?.synonyms ?: emptyList())).distinct())
+        }
+        val others = HotelPurchaseMasterCatalog.items.filter { master ->
+            HotelPurchaseItems.items.none {
+                it.categoryId == master.categoryId && it.name.equals(master.name, ignoreCase = true)
+            }
+        }
+        return (originals + others + customItems.all()).distinctBy { it.id }
+    }
+    private fun chosenVendor(): HotelPurchaseVendor? = vendors.all().firstOrNull { it.id == selectedVendorId }
+    private fun availableItems(): List<HotelPurchaseItem> = chosenVendor()?.let {
+        HotelPurchasePolicy.itemsForVendor(it, masterItems())
+    } ?: emptyList()
+    private fun allSelectedLines(): List<HotelPurchaseOrderLine> {
+        saveVisibleInputs()
+        val byId = masterItems().associateBy { it.id }
+        return selectedQuantities.filterValues { it.isFinite() && it > 0 }.mapNotNull { (id, qty) ->
+            byId[id]?.let { HotelPurchaseOrderLine(it.id, it.name, qty, it.unit) }
+                ?: editingOrder?.lines?.firstOrNull { it.itemId == id }?.copy(quantity = qty)
+        }
+    }
+    private fun saveVisibleInputs() {
+        pendingFields.forEach { (id, field) ->
+            val value = field.text.toString().trim().toDoubleOrNull()
+            if (value != null && value.isFinite() && value >= 0) {
+                if (value == 0.0) selectedQuantities.remove(id) else selectedQuantities[id] = value
+            } else if (field.text.isBlank()) {
+                selectedQuantities.remove(id)
+            }
+        }
+        pendingFields.clear()
+    }
+    fun render(container: LinearLayout) {
+        host = container
+        renderPage()
+    }
+    private fun renderPage() {
+        val root = host ?: return
+        root.removeAllViews()
+        root.orientation = LinearLayout.VERTICAL
+        when (page) {
+            "CREATE" -> drawCreate(root)
+            "REVIEW" -> drawReview(root)
+            "ARCHIVE" -> drawArchive(root)
+            else -> drawHome(root)
+        }
+    }
+    private fun drawHome(root: LinearLayout) {
+        root.addView(space(12))
+        root.addView(button("+  Create New Order") {
+            val available = vendors.all()
+            if (available.isEmpty()) {
+                Toast.makeText(activity, "Add a vendor from the three-dot menu first", Toast.LENGTH_LONG).show()
+            } else {
+                selectedQuantities.clear()
+                selectedVendorId = available.first().id
+                selectedCategoryId = null
+                editingOrder = null
+                query = ""
+                page = "CREATE"
+                renderPage()
+            }
+        }, LinearLayout.LayoutParams(-1, dp(51)))
+        root.addView(space(18))
+        val list = orders.all().filter { it.status != "ARCHIVED" }
+        root.addView(text("Pending Orders (${list.size})", 19f, true))
+        root.addView(space(8))
+        if (list.isEmpty()) root.addView(text("No pending orders."))
+        list.forEach { order ->
+            root.addView(button("${order.vendorName}   •   ${order.lines.size} items   ›") {
+                editingOrder = order
+                selectedVendorId = order.vendorId
+                selectedQuantities.clear()
+                order.lines.forEach { selectedQuantities[it.itemId] = it.quantity }
+                page = "REVIEW"
+                renderPage()
+            }, LinearLayout.LayoutParams(-1, dp(51)))
+            root.addView(space(3))
+        }
+    }
+    private fun drawCreate(root: LinearLayout) {
+        val availableVendors = vendors.all()
+        if (availableVendors.isEmpty()) { page = "HOME"; drawHome(root); return }
+        if (selectedVendorId !in availableVendors.map { it.id }) selectedVendorId = availableVendors.first().id
+        val selectorRow = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        selectorRow.addView(text("Vendor", 14f, true), LinearLayout.LayoutParams(dp(65), dp(45)))
+        val spinner = Spinner(activity).apply {
+            adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item, availableVendors.map { it.name })
+            setSelection(availableVendors.indexOfFirst { it.id == selectedVendorId }.coerceAtLeast(0))
+        }
+        selectorRow.addView(spinner, LinearLayout.LayoutParams(0, dp(45), 1f))
+        root.addView(selectorRow)
+        val search = EditText(activity).apply {
+            hint = "Search items"
+            setSingleLine(true)
+            textSize = 14f
+            inputType = InputType.TYPE_CLASS_TEXT
+            setText(query)
+        }
+        root.addView(search, LinearLayout.LayoutParams(-1, dp(48)))
+        root.addView(space(5))
+        val body = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        val left = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+        val right = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+        body.addView(left, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.34f))
+        body.addView(right, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.66f))
+        root.addView(body)
+        val footer = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val count = text("0 items added", 14f, true).apply { setTextColor(green) }
+        footer.addView(count, LinearLayout.LayoutParams(0, dp(50), 1f))
+        footer.addView(button("Review Order  →") {
+            val valid = pendingFields.values.all { field ->
+                field.text.isBlank() || (field.text.toString().toDoubleOrNull()?.let { it.isFinite() && it >= 0 } == true)
+            }
+            if (!valid) { Toast.makeText(activity, "Correct invalid quantities", Toast.LENGTH_SHORT).show(); return@button }
+            saveVisibleInputs()
+            if (allSelectedLines().isEmpty()) Toast.makeText(activity, "Add at least one item", Toast.LENGTH_SHORT).show()
+            else { page = "REVIEW"; renderPage() }
+        }, LinearLayout.LayoutParams(0, dp(51), 1f))
+        fun refreshCount() {
+            count.text = "${selectedQuantities.count { it.value > 0 }} items added"
+        }
+        fun rebuild() {
+            saveVisibleInputs()
+            left.removeAllViews(); right.removeAllViews()
+            val items = availableItems()
+            val allowed = categories.all().filter { category -> items.any { it.categoryId == category.id } }
+            if (selectedCategoryId !in allowed.map { it.id }) selectedCategoryId = allowed.firstOrNull()?.id
+            allowed.forEach { category ->
+                val selected = category.id == selectedCategoryId
+                left.addView(button(category.name) {
+                    if (selectedCategoryId != category.id) {
+                        saveVisibleInputs()
+                        selectedCategoryId = category.id
+                        rebuild()
+                    }
+                }.apply {
+                    textSize = 11f
+                    isAllCaps = false
+                    setTextColor(if (selected) green else dark)
+                    setBackgroundColor(if (selected) pale else light)
+                    setPadding(dp(3), 0, dp(3), 0)
+                }, LinearLayout.LayoutParams(-1, dp(52)))
+                left.addView(space(3))
+            }
+            val matching = items.filter { item ->
+                (query.isBlank() || item.name.contains(query, true) || item.synonyms.any { it.contains(query, true) }) &&
+                    (query.isNotBlank() || item.categoryId == selectedCategoryId)
+            }
+            if (matching.isEmpty()) right.addView(text("No matching items", 13f))
+            matching.forEach { item ->
+                val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(5), dp(3), 0, dp(3)) }
+                val itemLabel = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+                itemLabel.addView(text(item.name, 13f, true))
+                itemLabel.addView(text(item.unit, 11f))
+                row.addView(itemLabel, LinearLayout.LayoutParams(0, dp(48), 1.1f))
+                val minus = button("−") { }
+                val qtyField = EditText(activity).apply {
+                    inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                    gravity = Gravity.CENTER
+                    textSize = 15f
+                    setSingleLine(true)
+                    setSelectAllOnFocus(true)
+                    setText(formatQty(selectedQuantities[item.id] ?: 0.0))
+                    setOnClickListener { selectAll() }
+                }
+                pendingFields[item.id] = qtyField
+                qtyField.addTextChangedListener(object : TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                        val value = s.toString().toDoubleOrNull()
+                        if (value == null || value <= 0 || !value.isFinite()) selectedQuantities.remove(item.id)
+                        else selectedQuantities[item.id] = value
+                        refreshCount()
+                    }
+                    override fun afterTextChanged(s: Editable?) {}
+                })
+                minus.setOnClickListener {
+                    val next = ((qtyField.text.toString().toDoubleOrNull() ?: 0.0) - 1.0).coerceAtLeast(0.0)
+                    qtyField.setText(formatQty(next))
+                }
+                val plus = button("+") {
+                    val next = (qtyField.text.toString().toDoubleOrNull() ?: 0.0) + 1.0
+                    qtyField.setText(formatQty(next))
+                }
+                row.addView(minus, LinearLayout.LayoutParams(dp(35), dp(42)))
+                row.addView(qtyField, LinearLayout.LayoutParams(dp(50), dp(42)))
+                row.addView(plus, LinearLayout.LayoutParams(dp(35), dp(42)))
+                right.addView(row)
+                line(right)
+            }
+            refreshCount()
+        }
+        spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val newId = availableVendors[position].id
+                if (selectedVendorId != newId) {
+                    saveVisibleInputs()
+                    selectedVendorId = newId
+                    selectedQuantities.clear()
+                    selectedCategoryId = null
+                    rebuild()
+                }
+            }
+        }
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { query = s?.toString().orEmpty(); rebuild() }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+        rebuild()
+        root.addView(space(10))
+        root.addView(footer)
+    }
+    private fun formatQty(n: Double): String = if (n % 1.0 == 0.0) n.toLong().toString() else n.toString()
+    private fun drawReview(root: LinearLayout) {
+        root.addView(text("Review Order", 19f, true))
+        root.addView(space(8))
+        root.addView(text("Vendor: ${chosenVendor()?.name ?: editingOrder?.vendorName.orEmpty()}", 15f, true))
+        root.addView(space(9))
+        val lines = allSelectedLines()
+        if (lines.isEmpty()) root.addView(text("No items selected"))
+        lines.forEach { orderLine ->
+            val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            val label = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+            label.addView(text(orderLine.itemName, 14f, true))
+            label.addView(text(orderLine.unit, 12f))
+            row.addView(label, LinearLayout.LayoutParams(0, dp(55), 1f))
+            row.addView(button("−") {
+                selectedQuantities[orderLine.itemId] = ((selectedQuantities[orderLine.itemId] ?: orderLine.quantity) - 1).coerceAtLeast(0.0)
+                renderPage()
+            }, LinearLayout.LayoutParams(dp(40), dp(45)))
+            val quantity = EditText(activity).apply {
+                gravity = Gravity.CENTER
+                inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                setSingleLine(true)
+                textSize = 15f
+                setText(formatQty(selectedQuantities[orderLine.itemId] ?: orderLine.quantity))
+                setSelectAllOnFocus(true)
+                setOnClickListener { selectAll() }
+            }
+            row.addView(quantity, LinearLayout.LayoutParams(dp(57), dp(45)))
+            quantity.addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                    val q = s.toString().toDoubleOrNull()
+                    if (q != null && q.isFinite() && q >= 0) selectedQuantities[orderLine.itemId] = q
+                }
+                override fun afterTextChanged(s: Editable?) {}
+            })
+            row.addView(button("+") {
+                selectedQuantities[orderLine.itemId] = (quantity.text.toString().toDoubleOrNull() ?: 0.0) + 1
+                renderPage()
+            }, LinearLayout.LayoutParams(dp(40), dp(45)))
+            row.addView(button("×") { selectedQuantities.remove(orderLine.itemId); renderPage() }, LinearLayout.LayoutParams(dp(42), dp(45)))
+            root.addView(row)
+            line(root)
+        }
+        root.addView(space(12))
+        root.addView(text("Total Items: ${lines.size}", 16f, true))
+        root.addView(space(12))
+        root.addView(button("Add More Items") { page = "CREATE"; renderPage() })
+        root.addView(button("Save Draft") { persist("DRAFT", share = false) })
+        root.addView(button("Place Order & Share") { persist("PLACED", share = true) })
+        if (editingOrder != null) {
+            root.addView(button("Move to Archive") {
+                AlertDialog.Builder(activity).setMessage("Archive this order?")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Archive") { _, _ ->
+                        try { orders.save(editingOrder!!.copy(status = "ARCHIVED")); page = "HOME"; renderPage() }
+                        catch (error: Exception) { Toast.makeText(activity, error.message, Toast.LENGTH_LONG).show() }
+                    }.show()
+            })
+        }
+    }
+    private fun persist(status: String, share: Boolean) {
+        val vendor = chosenVendor()
+        if (vendor == null) { Toast.makeText(activity, "Choose a vendor", Toast.LENGTH_SHORT).show(); return }
+        val lines = allSelectedLines()
+        if (lines.isEmpty()) { Toast.makeText(activity, "Add at least one item", Toast.LENGTH_SHORT).show(); return }
+        try {
+            val existing = editingOrder
+            val order = HotelPurchaseOrder(
+                id = existing?.id ?: UUID.randomUUID().toString(), vendorId = vendor.id,
+                vendorName = vendor.name, createdAtMillis = existing?.createdAtMillis ?: System.currentTimeMillis(),
+                lines = lines, status = status
+            )
+            orders.save(order)
+            editingOrder = null
+            page = "HOME"
+            renderPage()
+            if (share) share(order)
+            else Toast.makeText(activity, "Draft saved", Toast.LENGTH_SHORT).show()
+        } catch (error: Exception) { Toast.makeText(activity, error.message ?: "Unable to save order", Toast.LENGTH_LONG).show() }
+    }
+    private fun share(order: HotelPurchaseOrder) {
+        val message = buildString {
+            appendLine("PURCHASE ORDER")
+            appendLine("Vendor: ${order.vendorName}")
+            appendLine("Order ID: ${order.id.take(8)}")
+            appendLine()
+            order.lines.forEachIndexed { index, line -> appendLine("${index + 1}. ${line.itemName} - ${formatQty(line.quantity)} ${line.unit}") }
+            appendLine()
+            appendLine("Please confirm availability and delivery.")
+        }
+        val intent = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, message) }
+        activity.startActivity(Intent.createChooser(intent, "Share purchase order"))
+    }
+    private fun drawArchive(root: LinearLayout) {
+        root.addView(button("← Pending Orders") { page = "HOME"; renderPage() })
+        root.addView(text("Archived Orders", 19f, true))
+        val archived = orders.all().filter { it.status == "ARCHIVED" }
+        if (archived.isEmpty()) root.addView(text("No archived orders"))
+        archived.forEach { order ->
+            root.addView(button("${order.vendorName} • ${order.lines.size} items") {
+                AlertDialog.Builder(activity).setTitle(order.vendorName)
+                    .setMessage(order.lines.joinToString("\n") { "${it.itemName}: ${formatQty(it.quantity)} ${it.unit}" })
+                    .setNegativeButton("Close", null)
+                    .setPositiveButton("Share") { _, _ -> share(order) }.show()
+            })
+        }
+    }
+    fun showMenu(anchor: View, onChanged: () -> Unit = {}) {
+        PopupMenu(activity, anchor).apply {
+            menu.add("Manage Items")
+            menu.add("Manage Categories")
+            menu.add("Manage Vendors")
+            menu.add("Archived Orders")
+            setOnMenuItemClickListener { item ->
+                when (item.title.toString()) {
+                    "Manage Items" -> HotelPurchaseItemScreen(activity).show()
+                    "Manage Categories" -> HotelPurchaseCategoryScreen(activity).show()
+                    "Manage Vendors" -> {
+                        val vendorContainer = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8)) }
+                        HotelPurchaseVendorScreen(activity).render(vendorContainer)
+                        AlertDialog.Builder(activity).setTitle("Manage Vendors")
+                            .setView(ScrollView(activity).apply { addView(vendorContainer) })
+                            .setPositiveButton("Close") { _, _ -> onChanged(); renderPage() }.show()
+                    }
+                    "Archived Orders" -> { saveVisibleInputs(); page = "ARCHIVE"; renderPage() }
+                }
+                true
+            }
+            show()
+        }
+    }
+    fun navigateBack(): Boolean {
+        if (page == "HOME") return false
+        if (page == "REVIEW") { page = "CREATE"; renderPage(); return true }
+        if (page == "CREATE") saveVisibleInputs()
+        page = "HOME"
+        renderPage()
+        return true
+    }
+}

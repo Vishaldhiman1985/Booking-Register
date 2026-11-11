@@ -141,6 +141,10 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
     private val purple = Color.rgb(113, 57, 211)
 
     /** Shared Finance DEV vendor directory. Same vendor IDs and preferences used by Purchase. */
+    private fun showGlobalCatalog() {
+        FinanceGlobalCatalogScreen(this).show { refresh() }
+    }
+
     private fun showGlobalVendors() {
         val vendorContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -190,11 +194,14 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                         }
                         menu.add(0, 100, 100, "Accounting Standards & Tax Rules")
                         menu.add(0, 101, 101, "Vendors")
+                        menu.add(0, 102, 102, "Global Catalog")
                         setOnMenuItemClickListener { item ->
                             if (item.itemId == 100) {
                                 showAccountingRules()
                             } else if (item.itemId == 101) {
                                 showGlobalVendors()
+                            } else if (item.itemId == 102) {
+                                showGlobalCatalog()
                             } else {
                                 expenseFilter = expenseFilters[item.itemId]
                                 refresh()
@@ -208,8 +215,10 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                 } else {
                                         PopupMenu(this@FinanceDevSafetyActivity, anchor).apply {
                         menu.add("Vendors")
-                        setOnMenuItemClickListener {
-                            showGlobalVendors()
+                        menu.add("Global Catalog")
+                        setOnMenuItemClickListener { selected ->
+                            if (selected.title.toString() == "Global Catalog") showGlobalCatalog()
+                            else showGlobalVendors()
                             true
                         }
                         show()

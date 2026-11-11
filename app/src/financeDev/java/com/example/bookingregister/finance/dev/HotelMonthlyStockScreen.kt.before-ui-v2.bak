@@ -1,0 +1,148 @@
+package com.example.bookingregister.finance.dev
+
+import android.app.Activity
+import android.graphics.Typeface
+import android.text.InputType
+import android.view.Gravity
+import android.view.ViewGroup
+import android.widget.*
+import androidx.appcompat.app.AlertDialog
+import java.time.YearMonth
+
+/** Small manager-driven count screen; does not change purchase, expense or payment flows. */
+class HotelMonthlyStockScreen(private val activity: Activity) {
+    private val store = HotelMonthlyStockStore(activity)
+    private fun dp(n: Int) = (activity.resources.displayMetrics.density * n + .5f).toInt()
+    private fun field(hint: String, value: String = "") = EditText(activity).apply {
+        setSingleLine(true); this.hint = hint; setText(value)
+        inputType = InputType.TYPE_CLASS_TEXT
+        setPadding(dp(10), dp(8), dp(10), dp(8))
+    }
+    private fun title(value: String) = TextView(activity).apply {
+        text = value; textSize = 16f; setTypeface(null, Typeface.BOLD)
+        setPadding(0, dp(8), 0, dp(4))
+    }
+    private fun scroll(parent: LinearLayout): ScrollView = ScrollView(activity).apply {
+        addView(parent); isFillViewport = false
+    }
+    private fun layout() = LinearLayout(activity).apply {
+        orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(12))
+    }
+    private fun toast(value: String) = Toast.makeText(activity, value, Toast.LENGTH_LONG).show()
+
+    fun show() {
+        val root = layout()
+        root.addView(title("Month to close (YYYY-MM)"))
+        val month = field("2026-11", YearMonth.now().minusMonths(1).toString())
+        root.addView(month)
+        root.addView(TextView(activity).apply {
+            text = "Record the physical quantity left at month-end. An approved close becomes the next month's opening stock."
+            textSize = 13f
+        })
+        AlertDialog.Builder(activity).setTitle("Monthly Kitchen Stock")
+            .setView(scroll(root))
+            .setNegativeButton("Cancel", null)
+            .setNeutralButton("Opening stock") { _, _ -> openingScreen(month.text.toString().trim()) }
+            .setPositiveButton("Count & close") { _, _ -> countScreen(month.text.toString().trim()) }
+            .show()
+    }
+
+    private fun candidateItems(): List<HotelPurchaseItem> =
+        (HotelPurchaseItems.items + HotelPurchaseMasterCatalog.items + HotelPurchaseCustomItemStore(activity).all())
+            .distinctBy { it.id }.sortedBy { it.name }
+
+    /** Starting inventory is initialized explicitly, never guessed as zero. */
+    private fun openingScreen(month: String) {
+        try {
+            HotelMonthlyStockPolicy.validMonth(month)
+            if (store.opening(month) != null) { toast("Opening stock already exists for this month"); return }
+            showItemsEditor(month, true)
+        } catch (e: Exception) { toast(e.message ?: "Invalid month") }
+    }
+
+    private fun countScreen(month: String) {
+        try {
+            val period = HotelMonthlyStockPolicy.validMonth(month)
+            if (period >= YearMonth.now()) { toast("Close the month after its final day"); return }
+            if (store.all().any { it.month == month }) { toast("Month already closed"); showSummary(month); return }
+            if (store.opening(month) == null) { toast("Enter initial opening stock first (or close previous month)"); return }
+            showItemsEditor(month, false)
+        } catch (e: Exception) { toast(e.message ?: "Invalid month") }
+    }
+
+    private fun showSummary(month: String) {
+        val record = store.all().find { it.month == month } ?: return
+        val consumption = HotelMonthlyStockPolicy.balance(record.opening, record.purchased, record.closing)
+        val body = consumption.joinToString("\n") { "${it.name}: ${it.quantity} ${it.unit} used" }
+        val late = if (store.receiptsChangedAfterClose(month)) "\n\nWARNING: Received goods have changed since this month was closed. Manager review needed." else ""
+        AlertDialog.Builder(activity).setTitle("Approved stock: $month")
+            .setMessage("Approved by ${record.approvedBy}\n\n$body$late")
+            .setPositiveButton("Close", null).show()
+    }
+
+    private fun showItemsEditor(month: String, initial: Boolean) {
+        val opening = if (initial) emptyList() else store.opening(month).orEmpty()
+        val purchased = if (initial) emptyList() else store.purchased(month).first
+        val known = linkedMapOf<String, HotelStockQuantity>()
+        (opening + purchased).forEach { known[it.itemId] = it }
+        val root = layout()
+        root.addView(title(if (initial) "Starting stock for $month" else "Physical closing count for $month"))
+        root.addView(TextView(activity).apply {
+            text = if (initial) "Add every ingredient and fuel item already in the kitchen before tracking begins."
+            else "Count all listed items, entering 0 if none remains. Use Add item for unrecorded stock."
+            textSize = 13f
+        })
+        val inputs = linkedMapOf<String, Pair<HotelStockQuantity, EditText>>()
+        val list = layout().apply { setPadding(0, dp(8), 0, dp(8)) }
+        fun append(item: HotelStockQuantity) {
+            if (inputs.containsKey(item.itemId)) return
+            val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            row.addView(TextView(activity).apply { text = "${item.name}\n${item.unit}"; textSize = 14f }, LinearLayout.LayoutParams(0, dp(58), 1f))
+            val quantity = field("Count", if (initial) "" else "")
+            quantity.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            row.addView(quantity, LinearLayout.LayoutParams(dp(96), dp(54)))
+            list.addView(row)
+            inputs[item.itemId] = item to quantity
+        }
+        known.values.forEach(::append)
+        root.addView(list)
+        val add = Button(activity).apply { text = "+ Add stock item"; isAllCaps = false }
+        add.setOnClickListener {
+            val catalog = candidateItems().filterNot { inputs.containsKey(it.id) }
+            if (catalog.isEmpty()) { toast("No more catalog items available"); return@setOnClickListener }
+            val labels = catalog.map { "${it.name} (${it.unit})" }.toTypedArray()
+            AlertDialog.Builder(activity).setTitle("Select stock item").setItems(labels) { _, index ->
+                val item = catalog[index]
+                append(HotelStockQuantity(item.id, item.name, item.unit, 0.0))
+            }.setNegativeButton("Cancel", null).show()
+        }
+        root.addView(add)
+        val manager = field("Manager name")
+        if (!initial) { root.addView(title("Verified by")); root.addView(manager) }
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle(if (initial) "Set opening stock" else "Close stock month")
+            .setView(scroll(root))
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton(if (initial) "Save opening" else "Approve closing", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                try {
+                    require(inputs.isNotEmpty()) { "Add at least one tracked stock item" }
+                    val counts = inputs.values.map { (item, box) ->
+                        val raw = box.text.toString().trim()
+                        require(raw.isNotEmpty()) { "Count ${item.name}, or enter 0" }
+                        val quantity = raw.toDoubleOrNull()
+                        require(quantity != null && quantity.isFinite() && quantity >= 0) { "Invalid count for ${item.name}" }
+                        item.copy(quantity = quantity)
+                    }
+                    if (initial) store.setInitialOpening(month, counts)
+                    else store.approve(month, counts, manager.text.toString())
+                    dialog.dismiss()
+                    toast(if (initial) "Opening stock saved" else "Stock closed. Next month opening updated")
+                } catch (e: Exception) { toast(e.message ?: "Unable to save stock") }
+            }
+        }
+        dialog.show()
+    }
+}
