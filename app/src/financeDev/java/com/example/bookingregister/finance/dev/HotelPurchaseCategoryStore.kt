@@ -5,109 +5,110 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-class HotelPurchaseCategoryStore(context: Context) {
+/** Keeps the factory catalog immutable; only user edits are persisted. */
+class HotelPurchaseCategoryStore(private val context: Context) {
+    private val prefs = context.getSharedPreferences("finance_dev_purchase_categories_v1", Context.MODE_PRIVATE)
 
-    private val prefs = context.getSharedPreferences(
-        "finance_dev_purchase_categories_v1",
-        Context.MODE_PRIVATE
-    )
+    private fun customRaw(): JSONArray = JSONArray(prefs.getString("categories", "[]") ?: "[]")
+    private fun overrides(): JSONObject = JSONObject(prefs.getString("overrides_v2", "{}") ?: "{}")
 
-    fun all(): List<HotelPurchaseCategory> {
-        val builtIn = HotelPurchaseCatalog.categories
-        val custom = customCategories()
-        return builtIn + custom.filter { category ->
-            builtIn.none { it.id == category.id }
-        }
-    }
+    fun customCategories(): List<HotelPurchaseCategory> = customWithStates().map { it.first }
 
-    fun customCategories(): List<HotelPurchaseCategory> {
-        val array = JSONArray(prefs.getString("categories", "[]") ?: "[]")
-
-        return (0 until array.length()).mapNotNull { index ->
+    private fun customWithStates(): List<Pair<HotelPurchaseCategory, Boolean>> {
+        val a = customRaw()
+        return (0 until a.length()).mapNotNull { index ->
             runCatching {
-                val obj = array.getJSONObject(index)
-                HotelPurchaseCategory(
-                    id = obj.getString("id"),
-                    name = obj.getString("name")
-                )
+                val obj = a.getJSONObject(index)
+                HotelPurchaseCategory(obj.getString("id"), obj.getString("name")) to obj.optBoolean("active", true)
             }.getOrNull()
         }
     }
 
+    fun allIncludingArchived(): List<Pair<HotelPurchaseCategory, Boolean>> {
+        val edits = overrides()
+        val builtIn = HotelPurchaseCatalog.categories.map { category ->
+            val edit = edits.optJSONObject(category.id)
+            category.copy(name = edit?.optString("name", category.name) ?: category.name) to
+                (edit?.optBoolean("active", true) ?: true)
+        }
+        return builtIn + customWithStates().filter { custom -> builtIn.none { it.first.id == custom.first.id } }
+    }
+
+    fun all(): List<HotelPurchaseCategory> = allIncludingArchived().filter { it.second }.map { it.first }
+
     fun add(name: String): HotelPurchaseCategory {
-        val cleanName = name.trim()
-        require(cleanName.isNotEmpty()) {
-            "Enter category name"
-        }
-
-        require(all().none {
-            it.name.equals(cleanName, ignoreCase = true)
-        }) {
-            "Category already exists"
-        }
-
-        val category = HotelPurchaseCategory(
-            id = "custom_" + UUID.randomUUID().toString(),
-            name = cleanName
-        )
-
-        val array = JSONArray(
-            prefs.getString("categories", "[]") ?: "[]"
-        )
-
-        array.put(JSONObject().apply {
-            put("id", category.id)
-            put("name", category.name)
-        })
-
-        check(
-            prefs.edit()
-                .putString("categories", array.toString())
-                .commit()
-        ) {
-            "Could not save category"
-        }
-
-        return category
+        val clean = validName(name, null)
+        val entry = HotelPurchaseCategory("custom_${UUID.randomUUID()}", clean)
+        val a = customRaw()
+        a.put(JSONObject().put("id", entry.id).put("name", entry.name).put("active", true))
+        saveCustom(a)
+        return entry
     }
 
     fun rename(id: String, newName: String) {
-        val cleanName = newName.trim()
-
-        require(cleanName.isNotEmpty()) {
-            "Enter category name"
+        val clean = validName(newName, id)
+        require(allIncludingArchived().any { it.first.id == id }) { "Category not found" }
+        if (HotelPurchaseCatalog.categories.any { it.id == id }) {
+            val all = overrides()
+            val edit = all.optJSONObject(id) ?: JSONObject()
+            edit.put("name", clean)
+            all.put(id, edit)
+            saveOverrides(all)
+        } else {
+            val a = customRaw()
+            val result = JSONArray()
+            for (index in 0 until a.length()) {
+                val obj = a.getJSONObject(index)
+                if (obj.getString("id") == id) obj.put("name", clean)
+                result.put(obj)
+            }
+            saveCustom(result)
         }
+    }
 
-        require(all().none {
-            it.id != id &&
-                it.name.equals(cleanName, ignoreCase = true)
-        }) {
-            "Category already exists"
+    fun archive(id: String) = setActive(id, false)
+    fun restore(id: String) = setActive(id, true)
+
+    private fun setActive(id: String, active: Boolean) {
+        val entry = allIncludingArchived().firstOrNull { it.first.id == id } ?: error("Category not found")
+        if (!active) {
+            require(HotelPurchaseCustomItemStore(context).catalogItems().none { it.categoryId == id }) {
+                "Move or archive active items in '${entry.first.name}' before archiving this category"
+            }
+        } else {
+            validName(entry.first.name, id)
         }
-
-        val categories = customCategories()
-        require(categories.any { it.id == id }) {
-            "Only custom categories can be renamed"
+        if (HotelPurchaseCatalog.categories.any { it.id == id }) {
+            val edits = overrides()
+            val obj = edits.optJSONObject(id) ?: JSONObject()
+            obj.put("active", active)
+            edits.put(id, obj)
+            saveOverrides(edits)
+        } else {
+            val old = customRaw()
+            val next = JSONArray()
+            for (i in 0 until old.length()) {
+                val obj = old.getJSONObject(i)
+                if (obj.getString("id") == id) obj.put("active", active)
+                next.put(obj)
+            }
+            saveCustom(next)
         }
+    }
 
-        val array = JSONArray()
-
-        categories.forEach { category ->
-            array.put(JSONObject().apply {
-                put("id", category.id)
-                put(
-                    "name",
-                    if (category.id == id) cleanName else category.name
-                )
-            })
+    private fun validName(name: String, exceptId: String?): String {
+        val value = name.trim()
+        require(value.isNotEmpty() && value.length <= 80) { "Enter a category name up to 80 characters" }
+        require(allIncludingArchived().none { it.first.id != exceptId && it.first.name.equals(value, true) }) {
+            "Category name already exists"
         }
+        return value
+    }
 
-        check(
-            prefs.edit()
-                .putString("categories", array.toString())
-                .commit()
-        ) {
-            "Could not rename category"
-        }
+    private fun saveCustom(a: JSONArray) {
+        check(prefs.edit().putString("categories", a.toString()).commit()) { "Could not save categories" }
+    }
+    private fun saveOverrides(o: JSONObject) {
+        check(prefs.edit().putString("overrides_v2", o.toString()).commit()) { "Could not save category edit" }
     }
 }

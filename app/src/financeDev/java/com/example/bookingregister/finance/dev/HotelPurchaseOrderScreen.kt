@@ -186,20 +186,7 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
         root.addView(text(subtitle, 13f).apply { setTextColor(Color.rgb(88, 96, 110)) })
         root.addView(space(12))
     }
-    private fun masterItems(): List<HotelPurchaseItem> {
-        val originals = HotelPurchaseItems.items.map { original ->
-            val master = HotelPurchaseMasterCatalog.items.firstOrNull {
-                it.categoryId == original.categoryId && it.name.equals(original.name, ignoreCase = true)
-            }
-            original.copy(synonyms = (original.synonyms + (master?.synonyms ?: emptyList())).distinct())
-        }
-        val others = HotelPurchaseMasterCatalog.items.filter { master ->
-            HotelPurchaseItems.items.none {
-                it.categoryId == master.categoryId && it.name.equals(master.name, ignoreCase = true)
-            }
-        }
-        return (originals + others + customItems.all()).distinctBy { it.id }
-    }
+    private fun masterItems(): List<HotelPurchaseItem> = customItems.catalogItems()
     private fun chosenVendor(): HotelPurchaseVendor? = vendors.all().firstOrNull { it.id == selectedVendorId }
     private fun availableItems(): List<HotelPurchaseItem> = chosenVendor()?.let {
         HotelPurchasePolicy.itemsForVendor(it, masterItems())
@@ -786,6 +773,7 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
     }
     fun showMenu(anchor: View, onChanged: () -> Unit = {}) {
         PopupMenu(activity, anchor).apply {
+            menu.add("Monthly Stock")
             menu.add("Manage Items")
             menu.add("Manage Categories")
             menu.add("Manage Vendors")
@@ -793,8 +781,9 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
             menu.add("Delivered Orders")
             setOnMenuItemClickListener { item ->
                 when (item.title.toString()) {
-                    "Manage Items" -> HotelPurchaseItemScreen(activity).show()
-                    "Manage Categories" -> HotelPurchaseCategoryScreen(activity).show()
+                    "Monthly Stock" -> HotelMonthlyStockScreen(activity).show()
+                    "Manage Items" -> { saveVisibleInputs(); HotelPurchaseItemScreen(activity).show { renderPage() } }
+                    "Manage Categories" -> { saveVisibleInputs(); HotelPurchaseCategoryScreen(activity).show { renderPage() } }
                     "Manage Vendors" -> {
                         val vendorContainer = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8)) }
                         HotelPurchaseVendorScreen(activity).render(vendorContainer)
