@@ -19,7 +19,7 @@ class HotelPurchaseVendorScreen(private val activity: Activity) {
         container.removeAllViews()
 
         val title = TextView(activity).apply {
-            text = "Purchasing Vendors"
+            text = "Vendors"
             textSize = 22f
             setPadding(0, 12, 0, 20)
         }
@@ -34,7 +34,7 @@ class HotelPurchaseVendorScreen(private val activity: Activity) {
 
         if (vendors.isEmpty()) {
             container.addView(TextView(activity).apply {
-                text = "No purchasing vendors added yet."
+                text = "No vendors added yet. Vendors can be used across Finance."
                 textSize = 15f
                 setPadding(0, 20, 0, 12)
             })
@@ -58,7 +58,7 @@ class HotelPurchaseVendorScreen(private val activity: Activity) {
 
             container.addView(TextView(activity).apply {
                 text = "${vendor.name}\n${vendor.phone}\n" +
-                    "Categories: ${categories.joinToString()}\n" +
+                    "Purchase categories: ${if (categories.isEmpty()) "None (services / other expenses)" else categories.joinToString()}\n" +
                     "Available items: ${availableItems.size}"
                 textSize = 15f
                 setPadding(12, 20, 12, 20)
@@ -91,7 +91,7 @@ class HotelPurchaseVendorScreen(private val activity: Activity) {
         layout.addView(name)
         layout.addView(phone)
         layout.addView(TextView(activity).apply {
-            text = "Select supply categories"
+            text = "Purchase supply categories (optional)"
             textSize = 16f
             setPadding(0, 16, 0, 8)
         })
@@ -130,14 +130,6 @@ class HotelPurchaseVendorScreen(private val activity: Activity) {
                         return@setOnClickListener
                     }
 
-                    if (selected.isEmpty()) {
-                        android.widget.Toast.makeText(
-                            activity,
-                            "Select at least one supply category",
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
-                        return@setOnClickListener
-                    }
 
                     try {
                         store.save(

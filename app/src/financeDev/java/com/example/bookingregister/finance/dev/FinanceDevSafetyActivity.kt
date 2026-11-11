@@ -140,6 +140,19 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
     private val gold = Color.rgb(193, 132, 13)
     private val purple = Color.rgb(113, 57, 211)
 
+    /** Shared Finance DEV vendor directory. Same vendor IDs and preferences used by Purchase. */
+    private fun showGlobalVendors() {
+        val vendorContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+        }
+        HotelPurchaseVendorScreen(this).render(vendorContainer)
+        AlertDialog.Builder(this)
+            .setTitle("Vendors")
+            .setView(ScrollView(this).apply { addView(vendorContainer) })
+            .setPositiveButton("Close") { _, _ -> refresh() }
+            .show()
+    }
     private fun showScreen(snapshot: ScreenSnapshot) {
         purchaseScreen = if (currentTab == "Purchase") HotelPurchaseOrderScreen(this) else null
         val root = LinearLayout(this).apply {
@@ -176,9 +189,12 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                             }
                         }
                         menu.add(0, 100, 100, "Accounting Standards & Tax Rules")
+                        menu.add(0, 101, 101, "Vendors")
                         setOnMenuItemClickListener { item ->
                             if (item.itemId == 100) {
                                 showAccountingRules()
+                            } else if (item.itemId == 101) {
+                                showGlobalVendors()
                             } else {
                                 expenseFilter = expenseFilters[item.itemId]
                                 refresh()
@@ -190,7 +206,14 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                 } else if (currentTab == "Purchase") {
                     purchaseScreen?.showMenu(anchor)
                 } else {
-                    Toast.makeText(this@FinanceDevSafetyActivity, "Menu options are on Expenses and Purchase tabs", Toast.LENGTH_SHORT).show()
+                                        PopupMenu(this@FinanceDevSafetyActivity, anchor).apply {
+                        menu.add("Vendors")
+                        setOnMenuItemClickListener {
+                            showGlobalVendors()
+                            true
+                        }
+                        show()
+                    }
                 }
             }
         }, LinearLayout.LayoutParams(dp(34), dp(42)))
@@ -421,10 +444,21 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             maximumFractionDigits = 2
         }.format(paise / 100.0)
 
+    /** One source for Finance vendors; historical demo identifiers are read-only fallbacks. */
+    private fun sharedVendorOptions(): List<FinanceDemoDraftPolicy.VendorOption> =
+        HotelPurchaseVendorStore(this).all().map {
+            FinanceDemoDraftPolicy.VendorOption(it.id, it.name)
+        }
+
+    private fun vendorDisplayName(code: String): String =
+        sharedVendorOptions().firstOrNull { it.code == code }?.name
+            ?: FinanceDemoDraftPolicy.vendors.firstOrNull { it.code == code }?.name
+            ?: "Unknown vendor (" + code.take(8) + ")"
+
     private fun expenses(page: LinearLayout, snapshot: ScreenSnapshot) {
         page.addView(label("Expenses", 24f, navy, true))
         page.addView(space(11))
-        page.addView(label("${LocalDate.now().format(DateTimeFormatter.ofPattern("MMM yyyy"))}  ·  Local fictional drafts", 12f, muted, false))
+        page.addView(label("${LocalDate.now().format(DateTimeFormatter.ofPattern("MMM yyyy"))}  ·  Local drafts (not posted)", 12f, muted, false))
         page.addView(space(10))
         val smartSearchRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val smartSearchButton = TextView(this).apply {
@@ -495,7 +529,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         if (draft.expenseCategoryCode != null) {
             textColumn.addView(label("${draft.category} · ${draft.expenseTypeCode}", 11f, muted, false))
         }
-        textColumn.addView(label("${FinanceDemoDraftPolicy.vendorName(draft.vendorCode)}  ·  ${draft.invoiceDate}", 11f, muted, false))
+        textColumn.addView(label("${vendorDisplayName(draft.vendorCode)}  ·  ${draft.invoiceDate}", 11f, muted, false))
         first.addView(textColumn, LinearLayout.LayoutParams(0, -2, 1f))
         val amountColumn = LinearLayout(this@FinanceDevSafetyActivity).apply { orientation = LinearLayout.VERTICAL }
         amountColumn.addView(label(formatRupees(draft.amountPaise), 15f, navy, true).apply { gravity = Gravity.END })
@@ -587,7 +621,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         page.addView(label("Pending vendors", 18f, navy, true))
         page.addView(space(8))
         var any = false
-        FinanceDemoDraftPolicy.vendors.forEachIndexed { index, vendor ->
+        sharedVendorOptions().forEachIndexed { index, vendor ->
             val bills = pending.filter { it.vendorCode == vendor.code }
             if (bills.isNotEmpty()) {
                 any = true
@@ -633,7 +667,11 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
 
     /** Simple three-stage payment flow. Review is read-only until a payable ledger exists. */
     private fun paymentDetails(page: LinearLayout, snapshot: ScreenSnapshot, initialIndex: Int) {
-        val vendors = FinanceDemoDraftPolicy.vendors
+        val vendors = sharedVendorOptions()
+        if (vendors.isEmpty()) {
+            page.addView(label("Add a vendor from Home > â‹® > Vendors first.", 14f, muted, false))
+            return
+        }
         val drafts = snapshot.drafts.filter {
             it.status == FinanceDemoDraftPolicy.STATUS_ACTIVE && it.amountPaise > it.amountPaidPaise
         }
@@ -1173,7 +1211,11 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         existing: FinanceDemoDraftBill?,
         initialSelection: Pair<SmartExpenseCategory, SmartExpenseType>? = null
     ) {
-        val vendors = FinanceDemoDraftPolicy.vendors
+        val vendors = sharedVendorOptions()
+        if (vendors.isEmpty()) {
+            Toast.makeText(this, "Create a vendor from Home > â‹® > Vendors first", Toast.LENGTH_LONG).show()
+            return
+        }
         var selectedClassification = initialSelection ?: existing?.expenseTypeCode?.let { code ->
             expenseCatalog.findType(code)
         }
@@ -1197,12 +1239,12 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             adapter = ArrayAdapter(
                 this@FinanceDevSafetyActivity,
                 android.R.layout.simple_spinner_dropdown_item,
-                listOf("Select a demo payee") + vendors.map { it.name }
+                listOf("Select a vendor") + vendors.map { it.name }
             )
             setSelection(if (existing == null) 0 else
                 (vendors.indexOfFirst { it.code == existing.vendorCode } + 1).coerceAtLeast(0))
         }
-        addFormField(form, "Vendor / payee * (fictional)", vendor)
+        addFormField(form, "Vendor / payee *", vendor)
 
         val classification = label("", 14f, navy, true)
         val classificationHint = label("", 12f, muted, false)
@@ -1326,7 +1368,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         applyPaymentMode(clearPartial = false)
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle(if (existing == null) "New fictional expense draft" else "Edit fictional draft")
+            .setTitle(if (existing == null) "New expense draft" else "Edit expense draft")
             .setView(ScrollView(this).apply { addView(form) })
             .setPositiveButton(if (existing == null) "Save draft" else "Save changes", null)
             .setNegativeButton("Cancel", null)
@@ -1347,7 +1389,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                     require(selection != null || existing != null) {
                         "Choose an expense type before saving"
                     }
-                    require(vendor.selectedItemPosition > 0) { "Select a demo vendor or payee" }
+                    require(vendor.selectedItemPosition > 0) { "Select a vendor or payee" }
                     val input = FinanceDemoDraftPolicy.DraftInput(
                         vendorCode = vendors[vendor.selectedItemPosition - 1].code,
                         category = selection?.first?.name ?: existing!!.category,

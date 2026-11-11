@@ -46,6 +46,17 @@ class FinanceDemoDraftPolicyTest {
     }
 
     @Test
+    fun acceptsGlobalVendorUuidWithoutChangingDevDraftIsolation() {
+        val vendorId = "e8467b32-8c2e-4f23-95c7-ea5d92be1ab0"
+        val row = FinanceDemoDraftPolicy.create(
+            input(vendorCode = vendorId), "shared-vendor", 123L
+        )
+        FinanceDemoDraftPolicy.validate(row)
+        assertEquals(vendorId, row.vendorCode)
+        assertEquals(FinanceDemoDraftPolicy.STATUS_ACTIVE, row.status)
+    }
+
+    @Test
     fun rejectsWrongPropertyCurrencyOrAccountingPeriod() {
         val row = FinanceDemoDraftPolicy.create("demo-laundry", "test-4", 123L)
         assertFails { FinanceDemoDraftPolicy.validate(row.copy(propertyId = "REAL_PROPERTY")) }

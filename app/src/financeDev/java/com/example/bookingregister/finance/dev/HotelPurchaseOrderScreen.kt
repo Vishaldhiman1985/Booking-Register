@@ -280,9 +280,9 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
             isClickable = true
             isFocusable = true
             setOnClickListener {
-                val available = vendors.all()
+                val available = vendors.all().filter { it.suppliedCategoryIds.isNotEmpty() }
                 if (available.isEmpty()) {
-                    Toast.makeText(activity, "Add a vendor from the three-dot menu first", Toast.LENGTH_LONG).show()
+                    Toast.makeText(activity, "Add supply categories to a vendor in the three-dot Vendors menu first", Toast.LENGTH_LONG).show()
                 } else {
                     selectedQuantities.clear()
                     selectedVendorId = available.first().id
@@ -441,7 +441,7 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
     }
 
     private fun drawCreate(root: LinearLayout) {
-        val availableVendors = vendors.all()
+        val availableVendors = vendors.all().filter { it.suppliedCategoryIds.isNotEmpty() }
         if (availableVendors.isEmpty()) { page = "HOME"; drawHome(root); return }
         if (selectedVendorId !in availableVendors.map { it.id }) selectedVendorId = availableVendors.first().id
         // Compact navigation: back, vendor dropdown and menu on one row.
@@ -776,7 +776,7 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
             menu.add("Monthly Stock")
             menu.add("Manage Items")
             menu.add("Manage Categories")
-            menu.add("Manage Vendors")
+            menu.add("Vendors")
             menu.add("Draft Orders")
             menu.add("Delivered Orders")
             setOnMenuItemClickListener { item ->
@@ -784,10 +784,10 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
                     "Monthly Stock" -> HotelMonthlyStockScreen(activity).show()
                     "Manage Items" -> { saveVisibleInputs(); HotelPurchaseItemScreen(activity).show { renderPage() } }
                     "Manage Categories" -> { saveVisibleInputs(); HotelPurchaseCategoryScreen(activity).show { renderPage() } }
-                    "Manage Vendors" -> {
+                    "Vendors" -> {
                         val vendorContainer = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8)) }
                         HotelPurchaseVendorScreen(activity).render(vendorContainer)
-                        AlertDialog.Builder(activity).setTitle("Manage Vendors")
+                        AlertDialog.Builder(activity).setTitle("Vendors")
                             .setView(ScrollView(activity).apply { addView(vendorContainer) })
                             .setPositiveButton("Close") { _, _ -> onChanged(); renderPage() }.show()
                     }

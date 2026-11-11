@@ -183,7 +183,10 @@ internal object FinanceDemoDraftPolicy {
                 row.hotelId == HOTEL && row.propertyId == PROPERTY
         ) { "Not a synthetic Finance DEV record" }
         require(row.currencyCode == CurrencyCode.INR.name) { "Unknown draft currency" }
-        require(row.vendorCode in vendors.map { it.code }) { "Unknown fictional vendor" }
+        require(row.vendorCode in vendors.map { it.code } ||
+            runCatching { java.util.UUID.fromString(row.vendorCode) }.isSuccess) {
+            "Unknown vendor reference"
+        }
         if (row.expenseTypeCode == null) {
             require(row.expenseCategoryCode == null && row.expenseTypeLabel == null) {
                 "Legacy draft cannot contain partial canonical classification"
