@@ -44,7 +44,9 @@ data class FinanceDemoDraftBill(
     // Nullable: all pre-2F drafts retain their original six-category classification.
     val expenseCategoryCode: String? = null,
     val expenseTypeCode: String? = null,
-    val expenseTypeLabel: String? = null
+    val expenseTypeLabel: String? = null,
+    @ColumnInfo(defaultValue = "'Unassigned'") val department: String = "Unassigned",
+    @ColumnInfo(defaultValue = "''") val notes: String = ""
 )
 
 /** Append-only local history for draft edits and discards; it is not a financial audit ledger. */
@@ -209,7 +211,7 @@ abstract class FinanceDemoDraftDao {
         FinanceDemoDraftBill::class, FinanceDemoDraftEvent::class,
         FinanceDemoAccountingRuleProposal::class, FinanceDemoAccountingRuleEvent::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = true
 )
 abstract class FinanceDemoDraftDatabase : RoomDatabase() {
@@ -307,9 +309,16 @@ abstract class FinanceDemoDraftDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE finance_demo_draft_bills ADD COLUMN department TEXT NOT NULL DEFAULT 'Unassigned'")
+                db.execSQL("ALTER TABLE finance_demo_draft_bills ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun build(context: Context): FinanceDemoDraftDatabase =
             Room.databaseBuilder(context, FinanceDemoDraftDatabase::class.java, DATABASE_NAME)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
     }
 }

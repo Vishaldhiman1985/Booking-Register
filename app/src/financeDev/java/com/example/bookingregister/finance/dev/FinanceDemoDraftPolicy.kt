@@ -41,7 +41,9 @@ internal object FinanceDemoDraftPolicy {
         val amountPaidPaise: Long,
         val expenseCategoryCode: String? = null,
         val expenseTypeCode: String? = null,
-        val expenseTypeLabel: String? = null
+        val expenseTypeLabel: String? = null,
+        val department: String = "Unassigned",
+        val notes: String = ""
     )
 
     val vendors: List<VendorOption> = listOf(
@@ -95,7 +97,9 @@ internal object FinanceDemoDraftPolicy {
             revision = 1L,
             expenseCategoryCode = input.expenseCategoryCode,
             expenseTypeCode = input.expenseTypeCode,
-            expenseTypeLabel = input.expenseTypeLabel
+            expenseTypeLabel = input.expenseTypeLabel,
+            department = input.department,
+            notes = input.notes
         ).also(::validate)
     }
 
@@ -139,6 +143,8 @@ internal object FinanceDemoDraftPolicy {
             expenseCategoryCode = input.expenseCategoryCode,
             expenseTypeCode = input.expenseTypeCode,
             expenseTypeLabel = input.expenseTypeLabel,
+            department = input.department,
+            notes = input.notes,
             updatedAtMillis = nowMillis,
             revision = Math.addExact(original.revision, 1L)
         ).also(::validate)
@@ -183,7 +189,14 @@ internal object FinanceDemoDraftPolicy {
                 row.hotelId == HOTEL && row.propertyId == PROPERTY
         ) { "Not a synthetic Finance DEV record" }
         require(row.currencyCode == CurrencyCode.INR.name) { "Unknown draft currency" }
+        require(row.department == "Unassigned" || row.department in FinanceGlobalCatalogDefaults.departments) {
+            "Unknown expense department"
+        }
+        require(row.notes.length <= 2000) { "Expense notes are too long" }
         require(row.vendorCode in vendors.map { it.code } ||
+            row.vendorCode == "no_payee" ||
+            (row.vendorCode.startsWith("one_time:") &&
+                row.vendorCode.removePrefix("one_time:").let { it.isNotBlank() && it.length <= 120 }) ||
             runCatching { java.util.UUID.fromString(row.vendorCode) }.isSuccess) {
             "Unknown vendor reference"
         }

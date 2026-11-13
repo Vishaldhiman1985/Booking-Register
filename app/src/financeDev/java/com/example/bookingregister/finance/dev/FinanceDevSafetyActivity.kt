@@ -459,39 +459,31 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             FinanceDemoDraftPolicy.VendorOption(it.id, it.name)
         }
 
-    private fun vendorDisplayName(code: String): String =
-        sharedVendorOptions().firstOrNull { it.code == code }?.name
+    private fun vendorDisplayName(code: String): String = when {
+        code == "no_payee" -> "No vendor / payee"
+        code.startsWith("one_time:") -> code.removePrefix("one_time:")
+        else -> sharedVendorOptions().firstOrNull { it.code == code }?.name
             ?: FinanceDemoDraftPolicy.vendors.firstOrNull { it.code == code }?.name
             ?: "Unknown vendor (" + code.take(8) + ")"
-
+    }
     private fun expenses(page: LinearLayout, snapshot: ScreenSnapshot) {
         page.addView(label("Expenses", 24f, navy, true))
         page.addView(space(11))
         page.addView(label("${LocalDate.now().format(DateTimeFormatter.ofPattern("MMM yyyy"))}  ·  Local drafts (not posted)", 12f, muted, false))
         page.addView(space(10))
-        val smartSearchRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val smartSearchButton = TextView(this).apply {
-            text = "⌕  Smart Expense Search"
-            textSize = 14f
+        page.addView(TextView(this).apply {
+            text = "+ Add Expense"
+            textSize = 15f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(forest)
             gravity = Gravity.CENTER
             background = outlinedCard(0xFFEAF8EF.toInt(), 10f)
-            setOnClickListener { showSmartExpenseSearch() }
-        }
-        smartSearchRow.addView(smartSearchButton, LinearLayout.LayoutParams(0, dp(46), 1f))
-        smartSearchRow.addView(spaceHorizontal(8))
-        val settingsButton = TextView(this).apply {
-            text = "⚙"
-            textSize = 22f
-            setTextColor(navy)
-            gravity = Gravity.CENTER
-            background = outlinedCard(0xFFF2F4F7.toInt(), 10f)
-            contentDescription = "Expense category visibility settings"
-            setOnClickListener { showExpenseVisibilitySettings() }
-        }
-        smartSearchRow.addView(settingsButton, LinearLayout.LayoutParams(dp(50), dp(46)))
-        page.addView(smartSearchRow)
+            minHeight = dp(48)
+            contentDescription = "Add expense draft"
+            setOnClickListener { showExpenseForm(null) }
+        })
+        page.addView(space(8))
+        page.addView(label("Category  >  Expense Type  >  Department  >  Amount", 12f, muted, false))
         page.addView(space(12))
         val drafts = snapshot.drafts
         val total = drafts.sumOf { it.amountPaise }
@@ -538,7 +530,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         if (draft.expenseCategoryCode != null) {
             textColumn.addView(label("${draft.category} · ${draft.expenseTypeCode}", 11f, muted, false))
         }
-        textColumn.addView(label("${vendorDisplayName(draft.vendorCode)}  ·  ${draft.invoiceDate}", 11f, muted, false))
+        textColumn.addView(label("${draft.department}  ·  ${vendorDisplayName(draft.vendorCode)}  ·  ${draft.invoiceDate}", 11f, muted, false))
         first.addView(textColumn, LinearLayout.LayoutParams(0, -2, 1f))
         val amountColumn = LinearLayout(this@FinanceDevSafetyActivity).apply { orientation = LinearLayout.VERTICAL }
         amountColumn.addView(label(formatRupees(draft.amountPaise), 15f, navy, true).apply { gravity = Gravity.END })
@@ -1216,227 +1208,28 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         }
     }
 
+    /** V14: straightforward CA category/type form; old smart search is no longer part of entry. */
     private fun showExpenseForm(
         existing: FinanceDemoDraftBill?,
         initialSelection: Pair<SmartExpenseCategory, SmartExpenseType>? = null
     ) {
-        val vendors = sharedVendorOptions()
-        if (vendors.isEmpty()) {
-            Toast.makeText(this, "Create a vendor from Home > â‹® > Vendors first", Toast.LENGTH_LONG).show()
-            return
-        }
-        var selectedClassification = initialSelection ?: existing?.expenseTypeCode?.let { code ->
-            expenseCatalog.findType(code)
-        }
-        val paymentStatuses = FinanceDemoDraftPolicy.PaymentStatus.entries
-
-        val form = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), dp(8))
-        }
-        form.addView(
-            label(
-                "Expense draft · Offline preview (not posted)",
-                12f,
-                accent,
-                true
-            )
-        )
-        form.addView(space(12))
-
-        val vendor = Spinner(this).apply {
-            adapter = ArrayAdapter(
-                this@FinanceDevSafetyActivity,
-                android.R.layout.simple_spinner_dropdown_item,
-                listOf("Select a vendor") + vendors.map { it.name }
-            )
-            setSelection(if (existing == null) 0 else
-                (vendors.indexOfFirst { it.code == existing.vendorCode } + 1).coerceAtLeast(0))
-        }
-        addFormField(form, "Vendor / payee *", vendor)
-
-        val classification = label("", 14f, navy, true)
-        val classificationHint = label("", 12f, muted, false)
-        fun updateClassification() {
-            val selection = selectedClassification
-            if (selection != null) {
-                classification.text = "${selection.second.name}  ✓"
-                classificationHint.text = "${selection.first.name} · ${selection.second.code}" +
-                    if (selection.second.requiresAccountantReview) " · CA review needed" else ""
-            } else if (existing != null) {
-                classification.text = existing.expenseTypeLabel ?: existing.category
-                classificationHint.text = "Existing classification preserved · choose to change"
+        FinanceSimpleExpenseForm(
+            activity = this,
+            catalog = expenseCatalog,
+            visibility = expenseVisibility,
+            stockSettings = FinanceGlobalCatalogSettings(this),
+            vendors = sharedVendorOptions()
+        ).show(existing, initialSelection) { input, editReason ->
+            val now = System.currentTimeMillis()
+            if (existing == null) {
+                val row = FinanceDemoDraftPolicy.create(input, UUID.randomUUID().toString(), now)
+                persistCreate(row)
             } else {
-                classification.text = "No expense type selected"
-                classificationHint.text = "Search for what you paid for, or choose manually"
+                val row = FinanceDemoDraftPolicy.edit(existing, input, editReason, now)
+                persistChange(row, FinanceDemoDraftPolicy.editedEvent(row, editReason))
             }
         }
-        form.addView(label("Expense classification *", 12f, muted, true))
-        form.addView(classification)
-        form.addView(classificationHint)
-        form.addView(Button(this).apply {
-            text = "⌕  ${if (existing == null) "Find expense type" else "Change expense type"}"
-            isAllCaps = false
-            setOnClickListener {
-                showSmartExpenseSearch { category, type ->
-                    selectedClassification = category to type
-                    updateClassification()
-                }
-            }
-        })
-        form.addView(space(10))
-        updateClassification()
-
-        val amount = EditText(this).apply {
-            hint = "Example: 12500.00"
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            existing?.let {
-                setText(FinanceDemoDraftPolicy.moneyText(it.amountPaise).removePrefix("₹"))
-            }
-        }
-        addFormField(form, "Total Bill Amount (₹) *", amount)
-
-        val initialDate = existing?.invoiceDate?.let(LocalDate::parse) ?: LocalDate.now()
-        val invoiceDate = EditText(this).apply {
-            isFocusable = false
-            isClickable = true
-            setText(initialDate.toString())
-            setOnClickListener { showDatePicker(this) }
-        }
-        addFormField(form, "Invoice Date *", invoiceDate)
-
-        val paymentStatus = Spinner(this).apply {
-            adapter = ArrayAdapter(
-                this@FinanceDevSafetyActivity,
-                android.R.layout.simple_spinner_dropdown_item,
-                paymentStatuses.map { it.label }
-            )
-            setSelection(
-                paymentStatuses.indexOfFirst { it.name == existing?.paymentStatus }.coerceAtLeast(0)
-            )
-        }
-        addFormField(form, "Payment status (draft description only)", paymentStatus)
-
-        val amountPaid = EditText(this).apply {
-            hint = "Amount marked paid"
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(
-                existing?.let {
-                    FinanceDemoDraftPolicy.moneyText(it.amountPaidPaise).removePrefix("₹")
-                } ?: "0.00"
-            )
-        }
-        addFormField(form, "Amount marked paid (₹)", amountPaid)
-
-        val reason = if (existing != null) {
-            EditText(this).apply {
-                hint = "Why is this draft being changed?"
-                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-                minLines = 2
-                maxLines = 4
-            }.also { addFormField(form, "Mandatory edit reason", it) }
-        } else {
-            null
-        }
-
-        fun applyPaymentMode(clearPartial: Boolean) {
-            when (paymentStatuses[paymentStatus.selectedItemPosition]) {
-                FinanceDemoDraftPolicy.PaymentStatus.NOT_PAID -> {
-                    amountPaid.setText(getString(R.string.finance_dev_zero_amount))
-                    amountPaid.isEnabled = false
-                }
-                FinanceDemoDraftPolicy.PaymentStatus.PAID -> {
-                    amountPaid.setText(
-                        amount.text.toString().ifBlank {
-                            getString(R.string.finance_dev_zero_amount)
-                        }
-                    )
-                    amountPaid.isEnabled = false
-                }
-                FinanceDemoDraftPolicy.PaymentStatus.PARTIALLY_PAID -> {
-                    amountPaid.isEnabled = true
-                    if (clearPartial) amountPaid.setText("")
-                }
-            }
-        }
-        paymentStatus.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            private var firstSelection = true
-
-            override fun onItemSelected(
-                parent: AdapterView<*>?,
-                view: View?,
-                position: Int,
-                id: Long
-            ) {
-                applyPaymentMode(clearPartial = !firstSelection)
-                firstSelection = false
-            }
-
-            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
-        }
-        applyPaymentMode(clearPartial = false)
-
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(if (existing == null) "New expense draft" else "Edit expense draft")
-            .setView(ScrollView(this).apply { addView(form) })
-            .setPositiveButton(if (existing == null) "Save draft" else "Save changes", null)
-            .setNegativeButton("Cancel", null)
-            .create()
-
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                try {
-                    val totalPaise = FinanceDemoDraftPolicy.parseMoney(amount.text.toString())
-                    val selectedPayment = paymentStatuses[paymentStatus.selectedItemPosition]
-                    val paidPaise = when (selectedPayment) {
-                        FinanceDemoDraftPolicy.PaymentStatus.NOT_PAID -> 0L
-                        FinanceDemoDraftPolicy.PaymentStatus.PAID -> totalPaise
-                        FinanceDemoDraftPolicy.PaymentStatus.PARTIALLY_PAID ->
-                            FinanceDemoDraftPolicy.parseMoney(amountPaid.text.toString())
-                    }
-                    val selection = selectedClassification
-                    require(selection != null || existing != null) {
-                        "Choose an expense type before saving"
-                    }
-                    require(vendor.selectedItemPosition > 0) { "Select a vendor or payee" }
-                    val input = FinanceDemoDraftPolicy.DraftInput(
-                        vendorCode = vendors[vendor.selectedItemPosition - 1].code,
-                        category = selection?.first?.name ?: existing!!.category,
-                        invoiceDate = invoiceDate.text.toString(),
-                        amountPaise = totalPaise,
-                        paymentStatus = selectedPayment,
-                        amountPaidPaise = paidPaise,
-                        expenseCategoryCode = selection?.first?.code ?: existing?.expenseCategoryCode,
-                        expenseTypeCode = selection?.second?.code ?: existing?.expenseTypeCode,
-                        expenseTypeLabel = selection?.second?.name ?: existing?.expenseTypeLabel
-                    )
-                    val now = System.currentTimeMillis()
-                    if (existing == null) {
-                        val row = FinanceDemoDraftPolicy.create(
-                            input = input,
-                            id = UUID.randomUUID().toString(),
-                            nowMillis = now
-                        )
-                        persistCreate(row)
-                    } else {
-                        val reasonText = reason?.text?.toString().orEmpty()
-                        val row = FinanceDemoDraftPolicy.edit(existing, input, reasonText, now)
-                        persistChange(row, FinanceDemoDraftPolicy.editedEvent(row, reasonText))
-                    }
-                    dialog.dismiss()
-                } catch (error: RuntimeException) {
-                    amount.error = error.message ?: "Check the draft details"
-                    Toast.makeText(
-                        this,
-                        error.message ?: "Check the draft details",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-        }
-        dialog.show()
     }
-
     private fun showDiscardDialog(draft: FinanceDemoDraftBill) {
         val reason = EditText(this).apply {
             hint = "Why is this draft being discarded?"
