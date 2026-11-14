@@ -29,4 +29,33 @@ class HotelMonthlyStockPolicyTest {
     @Test fun mergesMultipleReceipts() {
         assertEquals(11.5, HotelMonthlyStockPolicy.merge(listOf(q("rice", 10.0), q("rice", 1.5))).single().quantity, 0.000001)
     }
+
+    @Test fun recordedWastageIsSeparatedFromNormalUse() {
+        val waste = HotelStockAdjustment(
+            id = "a1", month = "2026-11", itemId = "rice", name = "rice", unit = "Kg",
+            quantity = 2.0, type = HotelStockAdjustmentType.WASTAGE,
+            reason = "Spoiled after water leak", createdAtMillis = 1L
+        )
+        val normalUse = HotelMonthlyStockPolicy.balance(
+            opening = listOf(q("rice", 10.0)),
+            purchases = listOf(q("rice", 10.0)),
+            closing = listOf(q("rice", 5.0)),
+            adjustments = listOf(waste)
+        )
+        assertEquals(13.0, normalUse.single().quantity, 0.000001)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun adjustmentCannotExceedAvailableStock() {
+        HotelMonthlyStockPolicy.balance(
+            opening = listOf(q("rice", 1.0)),
+            purchases = emptyList(),
+            closing = listOf(q("rice", 0.0)),
+            adjustments = listOf(HotelStockAdjustment(
+                id = "a1", month = "2026-11", itemId = "rice", name = "rice", unit = "Kg",
+                quantity = 2.0, type = HotelStockAdjustmentType.SUPPLIER_RETURN,
+                reason = "Returned damaged bag", createdAtMillis = 1L
+            ))
+        )
+    }
 }

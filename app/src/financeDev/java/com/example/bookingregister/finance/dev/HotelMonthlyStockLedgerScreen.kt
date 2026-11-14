@@ -99,14 +99,29 @@ class HotelMonthlyStockLedgerScreen(private val activity: Activity) {
         val content = col()
         scroll.addView(content)
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        val note = text("Used = Opening + Received − Closing. Quantities only; wastage and transfers require separate adjustments.",
+        val note = text("Used = available stock after purchases, returns, transfers and recorded wastage − closing.",
             11f, color = muted).apply { setPadding(dp(5), dp(12), dp(5), dp(4)) }
         root.addView(note)
         fun information(value: String) {
             content.addView(text(value, 13f, color = muted).apply { setPadding(dp(8), dp(13), dp(8), dp(13)) })
         }
-        fun tableRow(name: String, unit: String, opening: Double, received: Double, closing: Double?) {
-            val result = closing?.let { opening + received - it }
+        fun tableRow(
+            itemId: String,
+            name: String,
+            unit: String,
+            opening: Double,
+            received: Double,
+            closing: Double?,
+            adjustments: List<HotelStockAdjustment>
+        ) {
+            val result = closing?.let {
+                HotelMonthlyStockPolicy.balance(
+                    listOf(HotelStockQuantity(itemId, name, unit, opening)),
+                    listOf(HotelStockQuantity(itemId, name, unit, received)),
+                    listOf(HotelStockQuantity(itemId, name, unit, it)),
+                    adjustments
+                ).single().quantity
+            }
             val r = row().apply { setPadding(dp(7), dp(11), dp(7), dp(11)) }
             val names = col().apply {
                 addView(text(name, 12f, true))
@@ -134,23 +149,32 @@ class HotelMonthlyStockLedgerScreen(private val activity: Activity) {
             val opening = closed?.opening ?: stock.opening(key).orEmpty()
             val purchased = closed?.purchased ?: stock.purchased(key).first
             val closing = closed?.closing.orEmpty()
+            val adjustments = stock.adjustments(key)
             status.text = if (closed != null) "APPROVED · ${closed.approvedBy}"
                 else if (stock.opening(key) != null) "OPENING SAVED · MONTH NOT CLOSED"
                 else "NO OPENING STOCK SAVED"
             status.setTextColor(if (closed != null) green else muted)
             val changes = stock.corrections(key)
             if (changes.isNotEmpty()) information("CORRECTION HISTORY · ${changes.size} change(s)\n" + changes.joinToString("\n"))
-            if (closed != null && stock.receiptsChangedAfterClose(key))
-                information("Warning: receipts changed after approval. Reconcile the period before relying on consumption.")
+            if (closed != null && stock.movementsChangedAfterClose(key))
+                information("Warning: purchases or stock adjustments changed after approval. Reconcile the period before relying on consumption.")
+            if (adjustments.isNotEmpty()) {
+                information("STOCK ADJUSTMENTS · ${adjustments.size}\n" + adjustments.joinToString("\n") {
+                    "${it.type.replace('_', ' ')} · ${it.name} ${number(it.quantity)} ${it.unit} · ${it.reason}"
+                })
+            }
             val begins = opening.associateBy { it.itemId }
             val receipts = purchased.associateBy { it.itemId }
             val ends = closing.associateBy { it.itemId }
-            val ids = (begins.keys + receipts.keys + ends.keys).distinct()
+            val adjusted = adjustments.groupBy { it.itemId }
+            val ids = (begins.keys + receipts.keys + ends.keys + adjusted.keys).distinct()
             val catalog = HotelPurchaseCustomItemStore(activity).catalogItems(includeArchived = true).associateBy { it.id }
             val categories = HotelPurchaseCategoryStore(activity).allIncludingArchived().associate { it.first.id to it.first.name }
             val query = search.text.toString().trim()
             val groups = ids.map { id ->
-                val snap = begins[id] ?: receipts[id] ?: ends.getValue(id)
+                val snap = begins[id] ?: receipts[id] ?: ends[id] ?: adjusted.getValue(id).first().let {
+                    HotelStockQuantity(it.itemId, it.name, it.unit, 0.0)
+                }
                 val category = catalog[id]?.categoryId?.let { categories[it] } ?: "Other / historical items"
                 Triple(id, category, snap)
             }.filter { query.isBlank() || it.third.name.contains(query, true) }
@@ -164,8 +188,8 @@ class HotelMonthlyStockLedgerScreen(private val activity: Activity) {
                     setPadding(dp(9), dp(17), dp(8), dp(9))
                 })
                 entries.sortedBy { it.third.name.lowercase(Locale.ROOT) }.forEach { (id, _, item) ->
-                    tableRow(item.name, item.unit, begins[id]?.quantity ?: 0.0,
-                        receipts[id]?.quantity ?: 0.0, ends[id]?.quantity)
+                    tableRow(id, item.name, item.unit, begins[id]?.quantity ?: 0.0,
+                        receipts[id]?.quantity ?: 0.0, ends[id]?.quantity, adjusted[id].orEmpty())
                 }
             }
             if (closed != null) information("Approved closing automatically carries forward to ${period.plusMonths(1).format(format)}.")

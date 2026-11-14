@@ -5,6 +5,7 @@ import androidx.room.testing.MigrationTestHelper
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
+import java.time.LocalDate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -71,6 +72,59 @@ class FinanceDemoDraftDatabaseTest {
                     assertEquals("MIGRATED", cursor.getString(0))
                     assertEquals("Preserved from Finance DEV schema v1", cursor.getString(1))
                     assertEquals(1L, cursor.getLong(2))
+                }
+            }
+        } finally {
+            context.deleteDatabase(name)
+        }
+    }
+
+    @Test
+    fun migration4To5PreservesFinanceDataAndAddsRecurringBills() {
+        val name = databaseName("recurring-migration")
+        val context = instrumentation.targetContext
+        context.deleteDatabase(name)
+        try {
+            migrationHelper.createDatabase(name, 4).apply {
+                execSQL(
+                    """INSERT INTO finance_demo_draft_bills (
+                        draftId, environment, tenantId, hotelId, propertyId,
+                        vendorCode, category, invoiceDate, accountingPeriod,
+                        currencyCode, amountPaise, status, createdAtMillis,
+                        paymentStatus, amountPaidPaise, updatedAtMillis,
+                        revision, discardedAtMillis, department, notes
+                    ) VALUES (
+                        'before-recurring', 'FINANCE_DEV', 'DEMO_TENANT_ONLY',
+                        'DEMO_HOTEL_ONLY', 'DEMO_PROPERTY_ONLY', 'demo-rent',
+                        'Lease / Rent', '2026-11-01', '2026-11', 'INR',
+                        5000000, 'LOCAL_DRAFT_NOT_POSTED', 12345,
+                        'NOT_PAID', 0, 12345, 1, NULL, 'Rooms', 'Keep me'
+                    )""".trimIndent()
+                )
+                close()
+            }
+
+            migrationHelper.runMigrationsAndValidate(
+                name,
+                5,
+                true,
+                FinanceDemoDraftDatabase.MIGRATION_4_5
+            ).use { db ->
+                db.query(
+                    """SELECT amountPaise, department, notes
+                       FROM finance_demo_draft_bills
+                       WHERE draftId = 'before-recurring'"""
+                ).use { cursor ->
+                    assertTrue(cursor.moveToFirst())
+                    assertEquals(5_000_000L, cursor.getLong(0))
+                    assertEquals("Rooms", cursor.getString(1))
+                    assertEquals("Keep me", cursor.getString(2))
+                }
+                db.query(
+                    """SELECT name FROM sqlite_master
+                       WHERE type = 'table' AND name = 'finance_recurring_bills'"""
+                ).use { cursor ->
+                    assertTrue(cursor.moveToFirst())
                 }
             }
         } finally {
@@ -170,13 +224,61 @@ class FinanceDemoDraftDatabaseTest {
         }
     }
 
+    @Test
+    fun recurringBillAppearsForPaymentOnlyOnItsDueDate() = runBlocking {
+        val name = databaseName("recurring-due-date")
+        val context = instrumentation.targetContext
+        context.deleteDatabase(name)
+        try {
+            val database = open(name)
+            val rule = FinanceRecurringPolicy.newRule(
+                categoryCode = "HC01",
+                categoryLabel = "Property",
+                typeCode = "HE0101",
+                typeLabel = "Lease",
+                amountPaise = 5_000_000L,
+                firstDueDate = "2027-01-02",
+                endDate = null,
+                nowMillis = 1_000L,
+                id = "due-date-rule"
+            )
+            database.recurring().insertBills(
+                FinanceRecurringPolicy.billsThrough(rule, LocalDate.parse("2027-02-02"), 1_000L)
+            )
+
+            assertTrue(
+                database.recurring().openBills(
+                    FinanceDemoDraftPolicy.TENANT,
+                    FinanceDemoDraftPolicy.PROPERTY,
+                    "2027-01-01"
+                ).isEmpty()
+            )
+            assertEquals(
+                listOf("2027-01-02"),
+                database.recurring().openBills(
+                    FinanceDemoDraftPolicy.TENANT,
+                    FinanceDemoDraftPolicy.PROPERTY,
+                    "2027-01-02"
+                ).map { it.dueDate }
+            )
+            database.close()
+        } finally {
+            context.deleteDatabase(name)
+        }
+    }
+
     private fun open(name: String): FinanceDemoDraftDatabase =
         Room.databaseBuilder(
             instrumentation.targetContext,
             FinanceDemoDraftDatabase::class.java,
             name
         )
-            .addMigrations(FinanceDemoDraftDatabase.MIGRATION_1_2)
+            .addMigrations(
+                FinanceDemoDraftDatabase.MIGRATION_1_2,
+                FinanceDemoDraftDatabase.MIGRATION_2_3,
+                FinanceDemoDraftDatabase.MIGRATION_3_4,
+                FinanceDemoDraftDatabase.MIGRATION_4_5
+            )
             .build()
 
     private fun databaseName(prefix: String): String =

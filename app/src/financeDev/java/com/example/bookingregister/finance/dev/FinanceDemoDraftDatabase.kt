@@ -209,14 +209,17 @@ abstract class FinanceDemoDraftDao {
 @Database(
     entities = [
         FinanceDemoDraftBill::class, FinanceDemoDraftEvent::class,
-        FinanceDemoAccountingRuleProposal::class, FinanceDemoAccountingRuleEvent::class
+        FinanceDemoAccountingRuleProposal::class, FinanceDemoAccountingRuleEvent::class,
+        FinanceRecurringRule::class, FinanceRecurringBill::class,
+        FinanceRecurringPayment::class, FinanceRecurringEvent::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 abstract class FinanceDemoDraftDatabase : RoomDatabase() {
     abstract fun drafts(): FinanceDemoDraftDao
     abstract fun accountingRules(): FinanceDemoAccountingRuleDao
+    abstract fun recurring(): FinanceRecurringDao
 
     companion object {
         // Keep the original filename so Phase 2A device drafts are migrated rather than abandoned.
@@ -316,9 +319,84 @@ abstract class FinanceDemoDraftDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""CREATE TABLE IF NOT EXISTS finance_recurring_rules (
+                    ruleId TEXT NOT NULL PRIMARY KEY,
+                    seriesId TEXT NOT NULL,
+                    environment TEXT NOT NULL,
+                    tenantId TEXT NOT NULL,
+                    hotelId TEXT NOT NULL,
+                    propertyId TEXT NOT NULL,
+                    expenseCategoryCode TEXT NOT NULL,
+                    expenseCategoryLabel TEXT NOT NULL,
+                    expenseTypeCode TEXT NOT NULL,
+                    expenseTypeLabel TEXT NOT NULL,
+                    amountPaise INTEGER NOT NULL,
+                    firstDueDate TEXT NOT NULL,
+                    endDate TEXT,
+                    active INTEGER NOT NULL,
+                    createdAtMillis INTEGER NOT NULL,
+                    updatedAtMillis INTEGER NOT NULL,
+                    revision INTEGER NOT NULL
+                )""")
+                db.execSQL("""CREATE INDEX IF NOT EXISTS index_finance_recurring_rules_tenantId_propertyId_active
+                    ON finance_recurring_rules (tenantId, propertyId, active)""")
+                db.execSQL("""CREATE INDEX IF NOT EXISTS index_finance_recurring_rules_seriesId_firstDueDate
+                    ON finance_recurring_rules (seriesId, firstDueDate)""")
+
+                db.execSQL("""CREATE TABLE IF NOT EXISTS finance_recurring_bills (
+                    billId TEXT NOT NULL PRIMARY KEY,
+                    ruleId TEXT NOT NULL,
+                    seriesId TEXT NOT NULL,
+                    environment TEXT NOT NULL,
+                    tenantId TEXT NOT NULL,
+                    hotelId TEXT NOT NULL,
+                    propertyId TEXT NOT NULL,
+                    expenseCategoryCode TEXT NOT NULL,
+                    expenseCategoryLabel TEXT NOT NULL,
+                    expenseTypeCode TEXT NOT NULL,
+                    expenseTypeLabel TEXT NOT NULL,
+                    amountPaise INTEGER NOT NULL,
+                    amountPaidPaise INTEGER NOT NULL,
+                    dueDate TEXT NOT NULL,
+                    accountingPeriod TEXT NOT NULL,
+                    createdAtMillis INTEGER NOT NULL,
+                    updatedAtMillis INTEGER NOT NULL,
+                    revision INTEGER NOT NULL
+                )""")
+                db.execSQL("""CREATE UNIQUE INDEX IF NOT EXISTS index_finance_recurring_bills_ruleId_dueDate
+                    ON finance_recurring_bills (ruleId, dueDate)""")
+                db.execSQL("""CREATE INDEX IF NOT EXISTS index_finance_recurring_bills_tenantId_propertyId_dueDate
+                    ON finance_recurring_bills (tenantId, propertyId, dueDate)""")
+
+                db.execSQL("""CREATE TABLE IF NOT EXISTS finance_recurring_payments (
+                    paymentId TEXT NOT NULL PRIMARY KEY,
+                    billId TEXT NOT NULL,
+                    amountPaise INTEGER NOT NULL,
+                    paymentDate TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    reference TEXT NOT NULL,
+                    createdAtMillis INTEGER NOT NULL
+                )""")
+                db.execSQL("""CREATE INDEX IF NOT EXISTS index_finance_recurring_payments_billId_paymentDate
+                    ON finance_recurring_payments (billId, paymentDate)""")
+
+                db.execSQL("""CREATE TABLE IF NOT EXISTS finance_recurring_events (
+                    eventId TEXT NOT NULL PRIMARY KEY,
+                    referenceId TEXT NOT NULL,
+                    eventType TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    occurredAtMillis INTEGER NOT NULL
+                )""")
+                db.execSQL("""CREATE INDEX IF NOT EXISTS index_finance_recurring_events_referenceId_occurredAtMillis
+                    ON finance_recurring_events (referenceId, occurredAtMillis)""")
+            }
+        }
+
         fun build(context: Context): FinanceDemoDraftDatabase =
             Room.databaseBuilder(context, FinanceDemoDraftDatabase::class.java, DATABASE_NAME)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
     }
 }

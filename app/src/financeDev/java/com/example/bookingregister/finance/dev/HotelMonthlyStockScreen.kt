@@ -109,6 +109,7 @@ class HotelMonthlyStockScreen(private val activity: Activity) {
             val closed = store.all().firstOrNull { it.month == month }
             val opening = closed?.opening ?: store.opening(month)
             val receipts = closed?.purchased ?: store.purchased(month).first
+            val adjustments = store.adjustments(month)
             val corrections = store.corrections(month)
             body.addView(label(if (closed != null) "MONTH APPROVED" else if (opening != null) "MONTH IN PROGRESS" else "NOT STARTED",
                 12f, true, if (closed != null) emerald else muted))
@@ -118,6 +119,10 @@ class HotelMonthlyStockScreen(private val activity: Activity) {
             overview.addView(tile("Received", "${receipts.size} items", "Purchase deliveries"),
                 LinearLayout.LayoutParams(0, -2, 1f))
             body.addView(overview, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+            if (adjustments.isNotEmpty()) {
+                body.addView(tile("Adjustments", "${adjustments.size} recorded", "Waste · returns · transfers"),
+                    LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+            }
             body.addView(tile("Month-end", if (closed == null) "Pending" else "Approved",
                 if (closed == null) "Closing stock not yet recorded" else "${closed.closing.size} closing items · ${closed.approvedBy}"),
                 LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
@@ -125,6 +130,11 @@ class HotelMonthlyStockScreen(private val activity: Activity) {
             body.addView(action("View stock ledger", "Opening · received · closing · consumed", true) {
                 HotelMonthlyStockLedgerScreen(activity).show(month)
             })
+            if (closed == null) {
+                body.addView(action("Adjust stock", "Record wastage, supplier return or transfer") {
+                    showAdjustment(month) { render() }
+                }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+            }
             section("STOCK COUNT & CORRECTIONS")
             body.addView(action("Opening stock", if (store.initialOpening(month) != null)
                 "View or correct saved opening · reason required" else if (opening != null)
@@ -133,7 +143,7 @@ class HotelMonthlyStockScreen(private val activity: Activity) {
                 start(month, true)
             })
             body.addView(action("Month-end count", if (closed == null)
-                "Record remaining quantities · blanks become zero" else "View approved closing or correct with reason") {
+                "Record every remaining quantity · explicit zero required" else "View approved closing or correct with reason") {
                 dialog.dismiss()
                 start(month, false)
             }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
@@ -258,12 +268,17 @@ class HotelMonthlyStockScreen(private val activity: Activity) {
     private fun showEditor(month: String, initial: Boolean, correction: Boolean = false) {
         val opening = if (initial) emptyList() else store.opening(month).orEmpty()
         val purchased = if (initial) emptyList() else store.purchased(month).first
-        val required = (opening + purchased).associateBy { it.itemId }
+        val adjustments = if (initial) emptyList() else store.adjustments(month)
+        val movementItems = adjustments.map { HotelStockQuantity(it.itemId, it.name, it.unit, 0.0) }
+        val required = (opening + purchased + movementItems).associateBy { it.itemId }
         val counts = mutableMapOf<String, String>()
         if (correction) {
             val saved = if (initial) store.initialOpening(month).orEmpty()
                 else store.all().firstOrNull { it.month == month }?.closing.orEmpty()
             saved.forEach { counts[it.itemId] = qty(it.quantity) }
+        } else {
+            val kind = if (initial) "OPENING" else "CLOSING"
+            counts.putAll(store.countDraft(month, kind))
         }
 
         // Same live, customizable catalog used by Create Purchase Order.
@@ -342,6 +357,15 @@ class HotelMonthlyStockScreen(private val activity: Activity) {
         }
         val progress = label("", 12f, true, emerald)
         footer.addView(progress)
+        val saveLater = Button(activity).apply {
+            text = "Save & Continue Later"
+            isAllCaps = false
+            minHeight = dp(46)
+            visibility = if (correction) View.GONE else View.VISIBLE
+        }
+        footer.addView(saveLater, LinearLayout.LayoutParams(-1, dp(48)).apply {
+            topMargin = dp(6); bottomMargin = dp(6)
+        })
         val bottom = linear(false).apply { gravity = Gravity.CENTER_VERTICAL }
         val showMore = Button(activity).apply { text = "More Items"; isAllCaps = false; visibility = View.GONE; minHeight = dp(52) }
         bottom.addView(showMore, LinearLayout.LayoutParams(0, dp(52), 0.85f))
@@ -363,7 +387,7 @@ class HotelMonthlyStockScreen(private val activity: Activity) {
         fun updateProgress() {
             val done = required.keys.count { counts[it]?.isNotBlank() == true }
             progress.text = if (initial) "${counts.count { it.value.isNotBlank() }} items entered" else
-                "$done of ${required.size} stocked items counted · remaining will be zero"
+                "$done of ${required.size} stocked items counted · ${required.size - done} remaining"
         }
         fun itemButton(title: String, selected: Boolean, action: () -> Unit): Button = Button(activity).apply {
             text = title
@@ -426,7 +450,7 @@ class HotelMonthlyStockScreen(private val activity: Activity) {
                     setSingleLine(true)
                     setSelectAllOnFocus(true)
                     minHeight = dp(48)
-                    hint = "0"
+                    hint = "Enter"
                     setText(counts[item.itemId].orEmpty())
                     setOnClickListener { selectAll() }
                 }
@@ -459,6 +483,16 @@ class HotelMonthlyStockScreen(private val activity: Activity) {
             updateProgress()
         }
         showMore.setOnClickListener { pageSize += 24; rebuild() }
+        saveLater.setOnClickListener {
+            try {
+                saveVisible()
+                store.saveCountDraft(month, if (initial) "OPENING" else "CLOSING", counts)
+                dialog.dismiss()
+                toast("Stock-count progress saved. You can continue later.")
+            } catch (e: Exception) {
+                toast(e.message ?: "Check the entered quantities")
+            }
+        }
         filter.setOnCheckedChangeListener { _, enabled ->
             saveVisible()
             showAllCatalog = enabled
@@ -485,22 +519,14 @@ class HotelMonthlyStockScreen(private val activity: Activity) {
         review.setOnClickListener {
             try {
                 saveVisible()
-                // Explicit opening counts may be empty for a zero-stock start.
-                // Closing counts: every blank item is an intentional zero on approval.
+                // Explicit opening counts may be empty for a zero-stock start. A month-end
+                // count must contain a number (including an explicit 0) for every required item.
                 val entered = counts.filterValues { it.isNotBlank() }.map { (id, raw) ->
                     val value = raw.toDoubleOrNull()
                     require(value != null && value.isFinite() && value >= 0) { "Invalid quantity: ${allStock[id]?.name}" }
                     allStock.getValue(id).copy(quantity = value)
                 }
-                val result = if (initial) entered else {
-                    val selected = entered.associateBy { it.itemId }
-                    val complete = linkedMapOf<String, HotelStockQuantity>()
-                    required.values.forEach { requiredItem ->
-                        complete[requiredItem.itemId] = selected[requiredItem.itemId] ?: requiredItem.copy(quantity = 0.0)
-                    }
-                    entered.forEach { complete[it.itemId] = it }
-                    complete.values.toList()
-                }
+                val result = entered
                 if (initial && !correction) {
                     store.setInitialOpening(month, result)
                     dialog.dismiss()
@@ -509,14 +535,11 @@ class HotelMonthlyStockScreen(private val activity: Activity) {
                     val details = linear().apply { padding(this, 16, 8) }
                     val zeroCount = result.count { it.quantity == 0.0 }
                     val unentered = if (initial) 0 else required.keys.count { counts[it].isNullOrBlank() }
-                    details.addView(label("${result.size} items · $zeroCount zero quantities ($unentered left blank).", 14f, true))
-                    details.addView(label("Blank quantities will be saved as 0. Review carefully before approving.", 12f, false, muted))
-                    val confirmZero = CheckBox(activity).apply {
-                        text = "I confirm the zero quantities and have reviewed this month."
-                        textSize = 13f
-                        isChecked = unentered == 0
+                    require(unentered == 0) {
+                        "Count all ${required.size} stocked items. $unentered still need a quantity or an explicit zero."
                     }
-                    if (!correction && !initial && unentered > 0) details.addView(confirmZero)
+                    details.addView(label("${result.size} items · $zeroCount explicitly confirmed as zero.", 14f, true))
+                    details.addView(label("Every stocked item has been counted. Review before approving.", 12f, false, muted))
                     val manager = EditText(activity).apply { hint = "Approving manager"; setSingleLine(true) }
                     if (!initial) details.addView(manager)
                     val reason = EditText(activity).apply {
@@ -538,10 +561,7 @@ class HotelMonthlyStockScreen(private val activity: Activity) {
                                             else store.amendClosing(month, result, reason.text.toString(), manager.text.toString())
                                         } else {
                                             require(manager.text.toString().isNotBlank()) { "Enter manager name" }
-                                            require(unentered == 0 || confirmZero.isChecked) {
-                                                "Confirm that the blank items represent zero stock"
-                                            }
-                                            HotelMonthlyStockPolicy.balance(opening, purchased, result)
+                                            HotelMonthlyStockPolicy.balance(opening, purchased, result, adjustments)
                                             store.approve(month, result, manager.text.toString())
                                         }
                                         dismiss()
@@ -559,5 +579,75 @@ class HotelMonthlyStockScreen(private val activity: Activity) {
         dialog.show()
         dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         rebuild()
+    }
+
+    private fun showAdjustment(month: String, onSaved: () -> Unit) {
+        val items = HotelPurchaseCustomItemStore(activity).catalogItems()
+        val itemCategoryIds = items.map { it.categoryId }.toSet()
+        val categories = HotelPurchaseCategoryStore(activity).all().filter { it.id in itemCategoryIds }
+        if (categories.isEmpty() || items.isEmpty()) {
+            toast("Add stock items in Purchase first")
+            return
+        }
+        val form = linear().apply { setPadding(dp(18), dp(8), dp(18), dp(12)) }
+        val typeLabels = listOf("Wastage / spoiled", "Supplier return", "Transfer in", "Transfer out")
+        val typeCodes = listOf(
+            HotelStockAdjustmentType.WASTAGE,
+            HotelStockAdjustmentType.SUPPLIER_RETURN,
+            HotelStockAdjustmentType.TRANSFER_IN,
+            HotelStockAdjustmentType.TRANSFER_OUT
+        )
+        val type = Spinner(activity).apply {
+            adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item, typeLabels)
+        }
+        form.addView(label("TYPE", 11f, true, muted)); form.addView(type)
+        val category = Spinner(activity).apply {
+            adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item, categories.map { it.name })
+        }
+        form.addView(label("CATEGORY", 11f, true, muted)); form.addView(category)
+        val item = Spinner(activity)
+        form.addView(label("ITEM", 11f, true, muted)); form.addView(item)
+        var visibleItems = emptyList<HotelPurchaseItem>()
+        fun updateItems(position: Int) {
+            visibleItems = items.filter { it.categoryId == categories[position].id }.sortedBy { it.name }
+            item.adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item,
+                visibleItems.map { "${it.name} · ${it.unit}" })
+        }
+        category.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = updateItems(position)
+        }
+        updateItems(0)
+        val quantity = EditText(activity).apply {
+            hint = "Quantity"; setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        form.addView(label("QUANTITY", 11f, true, muted)); form.addView(quantity)
+        val reason = EditText(activity).apply { hint = "Reason"; minLines = 2 }
+        form.addView(label("REASON", 11f, true, muted)); form.addView(reason)
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle("Adjust Stock")
+            .setView(form)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                try {
+                    val chosen = visibleItems.getOrNull(item.selectedItemPosition) ?: error("Choose an item")
+                    store.addAdjustment(
+                        month = month,
+                        item = HotelStockQuantity(chosen.id, chosen.name, chosen.unit, 0.0),
+                        type = typeCodes[type.selectedItemPosition],
+                        quantity = quantity.text.toString().toDoubleOrNull() ?: error("Enter a valid quantity"),
+                        reason = reason.text.toString()
+                    )
+                    dialog.dismiss(); toast("Stock adjustment saved"); onSaved()
+                } catch (error: Exception) {
+                    toast(error.message ?: "Check stock adjustment")
+                }
+            }
+        }
+        dialog.show()
     }
 }

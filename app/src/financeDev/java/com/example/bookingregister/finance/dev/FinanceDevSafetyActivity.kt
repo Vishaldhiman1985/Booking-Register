@@ -24,6 +24,7 @@ import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
@@ -44,11 +45,6 @@ import java.util.Locale
 
 /** Finance DEV offline preview. The production launcher and existing database are unchanged. */
 class FinanceDevSafetyActivity : AppCompatActivity() {
-    @Deprecated("Handled for isolated Finance DEV purchasing navigation")
-    override fun onBackPressed() {
-        if (currentTab == "Purchase" && purchaseScreen?.navigateBack() == true) return
-        super.onBackPressed()
-    }
     private val tabs = listOf("Dashboard", "Expenses", "Payments", "Purchase", "Reports")
     private var currentTab = "Dashboard"
     private var purchaseScreen: HotelPurchaseOrderScreen? = null
@@ -64,7 +60,9 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         val drafts: List<FinanceDemoDraftBill>,
         val activeCount: Long,
         val discardedCount: Long,
-        val totalDraftPaise: Long
+        val totalDraftPaise: Long,
+        val recurringRules: List<FinanceRecurringRule>,
+        val recurringBills: List<FinanceRecurringBill>
     )
 
     private val localDatabaseDelegate = lazy {
@@ -77,6 +75,12 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (currentTab == "Purchase" && purchaseScreen?.navigateBack() == true) return
+                finish()
+            }
+        })
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
@@ -102,6 +106,13 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             try {
                 val snapshot = withContext(Dispatchers.IO) {
                     val dao = localDatabase.drafts()
+                    val recurring = localDatabase.recurring()
+                    val now = System.currentTimeMillis()
+                    val generated = recurring.activeRules(
+                        FinanceDemoDraftPolicy.TENANT,
+                        FinanceDemoDraftPolicy.PROPERTY
+                    ).flatMap { FinanceRecurringPolicy.billsThrough(it, LocalDate.now(), now) }
+                    if (generated.isNotEmpty()) recurring.insertBills(generated)
                     ScreenSnapshot(
                         drafts = dao.recentActive(
                             FinanceDemoDraftPolicy.TENANT,
@@ -122,6 +133,15 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                             FinanceDemoDraftPolicy.TENANT,
                             FinanceDemoDraftPolicy.PROPERTY,
                             FinanceDemoDraftPolicy.STATUS_ACTIVE
+                        ),
+                        recurringRules = recurring.activeRules(
+                            FinanceDemoDraftPolicy.TENANT,
+                            FinanceDemoDraftPolicy.PROPERTY
+                        ),
+                        recurringBills = recurring.openBills(
+                            FinanceDemoDraftPolicy.TENANT,
+                            FinanceDemoDraftPolicy.PROPERTY,
+                            LocalDate.now().toString()
                         )
                     )
                 }
@@ -157,6 +177,14 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             .setPositiveButton("Close") { _, _ -> refresh() }
             .show()
     }
+
+    private fun recurringScreen() = FinanceRecurringScreen(
+        activity = this,
+        database = localDatabase,
+        catalog = expenseCatalog,
+        visibility = expenseVisibility,
+        onChanged = ::refresh
+    )
     private fun showScreen(snapshot: ScreenSnapshot) {
         purchaseScreen = if (currentTab == "Purchase") HotelPurchaseOrderScreen(this) else null
         val root = LinearLayout(this).apply {
@@ -483,6 +511,20 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             setOnClickListener { showExpenseForm(null) }
         })
         page.addView(space(8))
+        page.addView(TextView(this).apply {
+            val due = snapshot.recurringBills.sumOf { it.amountPaise - it.amountPaidPaise }
+            text = "Recurring Bills  ·  ${snapshot.recurringRules.size} active  ·  ${formatRupees(due)} due   ›"
+            textSize = 14f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(navy)
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(13), 0, dp(13), 0)
+            background = outlinedCard(Color.WHITE, 10f)
+            minHeight = dp(50)
+            contentDescription = "Manage recurring expenses"
+            setOnClickListener { recurringScreen().showManage() }
+        })
+        page.addView(space(8))
         page.addView(label("Category  >  Expense Type  >  Department  >  Amount", 12f, muted, false))
         page.addView(space(12))
         val drafts = snapshot.drafts
@@ -603,15 +645,44 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         val pending = snapshot.drafts.filter {
             it.status == FinanceDemoDraftPolicy.STATUS_ACTIVE && it.amountPaise > it.amountPaidPaise
         }
-        val total = pending.sumOf { it.amountPaise - it.amountPaidPaise }
+        val draftTotal = pending.sumOf { it.amountPaise - it.amountPaidPaise }
+        val recurringTotal = snapshot.recurringBills.sumOf { it.amountPaise - it.amountPaidPaise }
+        val total = Math.addExact(draftTotal, recurringTotal)
         page.addView(label("Payments", 24f, navy, true))
         page.addView(label("Pending bills & payment history", 12f, muted, false))
         page.addView(space(14))
         val cards = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        cards.addView(softSummary("Pending draft bills", formatRupees(total), 0xFFFFECEC.toInt()), LinearLayout.LayoutParams(0, dp(88), 1f))
+        cards.addView(softSummary("Total due", formatRupees(total), 0xFFFFECEC.toInt()), LinearLayout.LayoutParams(0, dp(88), 1f))
         cards.addView(spaceHorizontal(9))
         cards.addView(softSummary("Paid this month", "—", 0xFFEAF8EF.toInt()), LinearLayout.LayoutParams(0, dp(88), 1f))
         page.addView(cards)
+        page.addView(space(15))
+        page.addView(label("Recurring bills", 18f, navy, true))
+        page.addView(space(8))
+        if (snapshot.recurringBills.isEmpty()) {
+            page.addView(label("No recurring bills are due.", 13f, muted, false))
+        } else snapshot.recurringBills.forEach { bill ->
+            val due = bill.amountPaise - bill.amountPaidPaise
+            val displayStatus = FinanceRecurringPolicy.displayStatus(bill, LocalDate.now())
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), dp(12), dp(12), dp(12))
+                background = outlinedCard(Color.WHITE, 13f)
+            }
+            row.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(label(bill.expenseTypeLabel, 15f, navy, true))
+                addView(label("Due ${bill.dueDate} · ${displayStatus.name.replace('_', ' ')}", 11f,
+                    if (displayStatus == FinanceRecurringPolicy.DisplayStatus.OVERDUE) red else muted, false))
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+            row.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; gravity = Gravity.END
+                addView(label(formatRupees(due), 15f, navy, true).apply { gravity = Gravity.END })
+                addView(label("Pay  ›", 13f, forest, true).apply { gravity = Gravity.END })
+            })
+            row.setOnClickListener { recurringScreen().showPayment(bill) }
+            page.addView(row); page.addView(space(8))
+        }
         page.addView(space(15))
         page.addView(Button(this).apply {
             text = "+ Make Payment"; isAllCaps = false; textSize = 16f
