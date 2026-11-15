@@ -473,166 +473,46 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
         }
         selectorRow.addView(menu, LinearLayout.LayoutParams(dp(38), dp(45)))
         root.addView(selectorRow)
-
-        val search = EditText(activity).apply {
-            hint = "Search items"
-            setSingleLine(true)
-            textSize = 14f
-            inputType = InputType.TYPE_CLASS_TEXT
-            setPadding(dp(14), 0, dp(14), 0)
-            setBackgroundColor(light)
-            setText(query)
-        }
-        root.addView(search, LinearLayout.LayoutParams(-1, dp(43)))
-        root.addView(space(7))
-
-        // Both rails get their own scrolling; scrolling items does not move categories.
-        val body = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
-        val left = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-        val right = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-        val categoriesScroll = ScrollView(activity).apply {
-            isFillViewport = false
-            isVerticalScrollBarEnabled = false
-            addView(left)
-        }
-        val itemsScroll = ScrollView(activity).apply {
-            isFillViewport = false
-            isVerticalScrollBarEnabled = false
-            addView(right)
-        }
-        body.addView(categoriesScroll, LinearLayout.LayoutParams(0, -1, 0.32f))
-        body.addView(itemsScroll, LinearLayout.LayoutParams(0, -1, 0.68f))
-        root.addView(body, LinearLayout.LayoutParams(-1, 0, 1f))
-
-        // Fixed footer: never scrolls away from the manager.
-        val footer = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(3), dp(5), dp(3), dp(5))
-            setBackgroundColor(Color.WHITE)
-        }
-        val count = text("0 items added", 14f, true).apply { setTextColor(green) }
-        footer.addView(count, LinearLayout.LayoutParams(0, dp(49), 1f))
-        val reviewButton = button("Review Order  →") {
-            val valid = pendingFields.values.all { field ->
-                field.text.isBlank() ||
-                    (field.text.toString().toDoubleOrNull()?.let { it.isFinite() && it >= 0 } == true)
-            }
-            if (!valid) {
-                Toast.makeText(activity, "Correct invalid quantities", Toast.LENGTH_SHORT).show()
-                return@button
-            }
-            saveVisibleInputs()
-            if (allSelectedLines().isEmpty()) {
-                Toast.makeText(activity, "Add at least one item", Toast.LENGTH_SHORT).show()
-            } else {
-                page = "REVIEW"
-                renderPage()
-            }
-        }.apply {
-            setTextColor(Color.WHITE)
-            backgroundTintList = android.content.res.ColorStateList.valueOf(green)
-        }
-        footer.addView(reviewButton, LinearLayout.LayoutParams(0, dp(49), 1f))
-        fun refreshCount() {
-            count.text = "${selectedQuantities.count { it.value > 0 }} items added"
-        }
-        fun rebuild() {
-            saveVisibleInputs()
-            left.removeAllViews(); right.removeAllViews()
-            val items = availableItems()
-            val allowed = categories.all().filter { category -> items.any { it.categoryId == category.id } }
-            if (selectedCategoryId !in allowed.map { it.id }) selectedCategoryId = allowed.firstOrNull()?.id
-            allowed.forEach { category ->
-                val selected = category.id == selectedCategoryId
-                left.addView(button(category.name) {
-                    if (selectedCategoryId != category.id) {
-                        saveVisibleInputs()
-                        selectedCategoryId = category.id
-                        rebuild()
-                    }
-                }.apply {
-                    textSize = 11f
-                    isAllCaps = false
-                    setTextColor(if (selected) green else dark)
-                    backgroundTintList = android.content.res.ColorStateList.valueOf(if (selected) pale else light)
-                    setPadding(dp(3), 0, dp(3), 0)
-                }, LinearLayout.LayoutParams(-1, dp(52)))
-                left.addView(space(3))
-            }
-            val matching = items.filter { item ->
-                (query.isBlank() || item.name.contains(query, true) || item.synonyms.any { it.contains(query, true) }) &&
-                    (query.isNotBlank() || item.categoryId == selectedCategoryId)
-            }
-            if (matching.isEmpty()) right.addView(text("No matching items", 13f))
-            matching.forEach { item ->
-                val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(5), dp(3), 0, dp(3)) }
-                val itemLabel = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-                itemLabel.addView(text(item.name, 13f, true))
-                itemLabel.addView(text(item.unit, 11f))
-                row.addView(itemLabel, LinearLayout.LayoutParams(0, dp(48), 1.1f))
-                val minus = button("−") { }.apply {
-                    backgroundTintList = android.content.res.ColorStateList.valueOf(light)
+        // Unified item picker: exactly the same category rail, item search, +/- quantities,
+        // and fixed review footer as direct received-stock entry.
+        pendingFields.clear()
+        FinanceSharedItemPicker(activity).render(
+            root = root,
+            groups = categories.all(),
+            items = availableItems(),
+            quantities = selectedQuantities,
+            initialGroupId = selectedCategoryId,
+            initialQuery = query,
+            reviewLabel = "Review Order  →",
+            onStateChanged = { groupId, textValue ->
+                selectedCategoryId = groupId
+                query = textValue
+            },
+            onReview = {
+                if (allSelectedLines().isEmpty()) {
+                    Toast.makeText(activity, "Add at least one item", Toast.LENGTH_SHORT).show()
+                } else {
+                    page = "REVIEW"
+                    renderPage()
                 }
-                val qtyField = EditText(activity).apply {
-                    inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-                    gravity = Gravity.CENTER
-                    textSize = 15f
-                    setSingleLine(true)
-                    setSelectAllOnFocus(true)
-                    setText(formatQty(selectedQuantities[item.id] ?: 0.0))
-                    setOnClickListener { selectAll() }
-                }
-                pendingFields[item.id] = qtyField
-                qtyField.addTextChangedListener(object : TextWatcher {
-                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                        val value = s.toString().toDoubleOrNull()
-                        if (value == null || value <= 0 || !value.isFinite()) selectedQuantities.remove(item.id)
-                        else selectedQuantities[item.id] = value
-                        refreshCount()
-                    }
-                    override fun afterTextChanged(s: Editable?) {}
-                })
-                minus.setOnClickListener {
-                    val next = ((qtyField.text.toString().toDoubleOrNull() ?: 0.0) - 1.0).coerceAtLeast(0.0)
-                    qtyField.setText(formatQty(next))
-                }
-                val plus = button("+") {
-                    val next = (qtyField.text.toString().toDoubleOrNull() ?: 0.0) + 1.0
-                    qtyField.setText(formatQty(next))
-                }.apply {
-                    backgroundTintList = android.content.res.ColorStateList.valueOf(pale)
-                }
-                row.addView(minus, LinearLayout.LayoutParams(dp(35), dp(42)))
-                row.addView(qtyField, LinearLayout.LayoutParams(dp(50), dp(42)))
-                row.addView(plus, LinearLayout.LayoutParams(dp(35), dp(42)))
-                right.addView(row)
-                line(right)
             }
-            refreshCount()
-        }
+        )
         spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 val newId = availableVendors[position].id
                 if (selectedVendorId != newId) {
-                    saveVisibleInputs()
                     selectedVendorId = newId
                     selectedQuantities.clear()
                     selectedCategoryId = null
-                    rebuild()
+                    query = ""
+                    pendingFields.clear()
+                    renderPage()
                 }
             }
         }
-        search.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { query = s?.toString().orEmpty(); rebuild() }
-            override fun afterTextChanged(s: Editable?) {}
-        })
-        rebuild()
-        root.addView(footer)
     }
+
     private fun formatQty(n: Double): String = if (n % 1.0 == 0.0) n.toLong().toString() else n.toString()
     private fun drawReview(root: LinearLayout) {
         root.addView(text("Review Order", 19f, true))

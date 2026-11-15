@@ -109,6 +109,8 @@ class HotelPurchaseCustomItemStore(private val context: Context) {
     }
 
     private fun hasHistory(id: String): Boolean {
+        // V15 direct receipts must protect historical item names and units too.
+        if (FinanceExpenseStockLinkStore(context).hasDirectItemHistory(id)) return true
         if (HotelPurchaseOrderStore(context).all().any { order -> order.lines.any { it.itemId == id } }) return true
         if (HotelPurchaseGoodsReceiptStore(context).all().any { receipt -> receipt.lines.any { it.itemId == id } }) return true
         if (HotelMonthlyStockStore(context).all().any { month ->

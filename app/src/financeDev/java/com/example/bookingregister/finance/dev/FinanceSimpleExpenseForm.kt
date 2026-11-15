@@ -142,7 +142,7 @@ internal class FinanceSimpleExpenseForm(
                 existing?.department?.let { it in departmentOptions } == true) existing!!.department else config.department
             department.setSelection(departmentOptions.indexOf(initialDept).coerceAtLeast(0))
             stockNotice.text = if (config.stockable)
-                "STOCKABLE · ${config.groupIds.size} linked item groups. This V14 draft does NOT add stock quantities; stock receipt integration is a separate step."
+                "STOCKABLE · ${config.groupIds.size} linked item groups. After saving, choose Enter Items Now, Complete Later, or Attach Received Purchase Order."
             else "ACCOUNTING EXPENSE · No physical stock is recorded for this type."
             if (expenseType.requiresAccountantReview) {
                 stockNotice.text = stockNotice.text.toString() + " Accountant review is required."

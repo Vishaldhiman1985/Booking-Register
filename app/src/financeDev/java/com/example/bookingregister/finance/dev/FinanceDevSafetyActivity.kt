@@ -486,6 +486,22 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         page.addView(label("Category  >  Expense Type  >  Department  >  Amount", 12f, muted, false))
         page.addView(space(12))
         val drafts = snapshot.drafts
+        val stockStore = FinanceExpenseStockLinkStore(this)
+        val pendingStockCount = stockStore.all().count { it.state == FinanceExpenseStockPolicy.PENDING }
+        if (pendingStockCount > 0) {
+            page.addView(TextView(this).apply {
+                text = "STOCK PENDING  ·  ${pendingStockCount} expense(s)  ·  Review now"
+                textSize = 14f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(navy)
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(14), dp(13), dp(14), dp(13))
+                background = outlinedCard(0xFFFFF5E5.toInt(), 12f)
+                isClickable = true
+                setOnClickListener { showPendingStockTasks() }
+            })
+            page.addView(space(12))
+        }
         val total = drafts.sumOf { it.amountPaise }
         val paid = drafts.sumOf { it.amountPaidPaise }
         val pending = total - paid
@@ -515,6 +531,32 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             page.addView(label("${snapshot.discardedCount} discarded draft(s) retained in local history.", 12f, muted, false))
         }
         page.addView(space(82)) // Keep the last card clear of the floating Add Expense button.
+    }
+
+    private fun showPendingStockTasks() {
+        lifecycleScope.launch {
+            try {
+                val links = FinanceExpenseStockLinkStore(this@FinanceDevSafetyActivity).all()
+                    .filter { it.state == FinanceExpenseStockPolicy.PENDING }
+                val pending = withContext(Dispatchers.IO) {
+                    links.mapNotNull { localDatabase.drafts().find(it.draftId) }
+                }.filter { it.status == FinanceDemoDraftPolicy.STATUS_ACTIVE }
+                if (pending.isEmpty()) {
+                    Toast.makeText(this@FinanceDevSafetyActivity,
+                        "No active stock tasks found", Toast.LENGTH_LONG).show()
+                    return@launch
+                }
+                val labels = pending.map { "${it.expenseTypeLabel ?: it.category}  ·  ${formatRupees(it.amountPaise)}  ·  ${it.invoiceDate}" }
+                AlertDialog.Builder(this@FinanceDevSafetyActivity)
+                    .setTitle("Stock Pending · ${pending.size} expense(s)")
+                    .setItems(labels.toTypedArray()) { _, index ->
+                        FinanceExpenseStockScreen(this@FinanceDevSafetyActivity).show(pending[index]) { refresh() }
+                    }.setNegativeButton("Close", null).show()
+            } catch (error: Exception) {
+                Toast.makeText(this@FinanceDevSafetyActivity,
+                    error.message ?: "Unable to load stock tasks", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun draftCard(draft: FinanceDemoDraftBill): LinearLayout = LinearLayout(this).apply {
@@ -562,6 +604,19 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         addView(space(6))
         addView(label("Marked paid ${formatRupees(draft.amountPaidPaise)}  ·  Due ${formatRupees(draft.amountPaise - draft.amountPaidPaise)}", 11f, muted, false))
         addView(label("${draft.accountingPeriod}  ·  Local draft, not posted", 11f, forest, true))
+        FinanceExpenseStockLinkStore(this@FinanceDevSafetyActivity).get(draft.draftId)?.let { stock ->
+            val pending = stock.state == FinanceExpenseStockPolicy.PENDING
+            addView(space(6))
+            addView(label(if (pending) "STOCK PENDING · Tap to complete" else "Stock: ${stock.state.replace('_', ' ')} · View", 12f,
+                if (pending) red else forest, true).apply {
+                setPadding(dp(7), dp(9), dp(7), dp(9))
+                background = outlinedCard(if (pending) 0xFFFFF2E5.toInt() else 0xFFEAF8EF.toInt(), 9f)
+                isClickable = true
+                setOnClickListener {
+                    FinanceExpenseStockScreen(this@FinanceDevSafetyActivity).show(draft) { refresh() }
+                }
+            })
+        }
     }
 
     private fun showDraftHistory(draft: FinanceDemoDraftBill) {
@@ -1226,6 +1281,8 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                 persistCreate(row)
             } else {
                 val row = FinanceDemoDraftPolicy.edit(existing, input, editReason, now)
+                FinanceExpenseStockPolicy.requireEditable(existing, row,
+                    FinanceExpenseStockLinkStore(this).get(existing.draftId))
                 persistChange(row, FinanceDemoDraftPolicy.editedEvent(row, editReason))
             }
         }
@@ -1252,6 +1309,8 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 try {
                     val reasonText = reason.text.toString()
+                    FinanceExpenseStockPolicy.requireDiscardable(
+                        FinanceExpenseStockLinkStore(this@FinanceDevSafetyActivity).get(draft.draftId))
                     val row = FinanceDemoDraftPolicy.discard(
                         original = draft,
                         reason = reasonText,
@@ -1267,45 +1326,48 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         dialog.show()
     }
 
+    /** Persist accounting draft first, then create stock task if classification requires it. */
     private fun persistCreate(row: FinanceDemoDraftBill) {
         lifecycleScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    localDatabase.drafts().createWithEvent(
-                        row,
-                        FinanceDemoDraftPolicy.createdEvent(row)
-                    )
+                    localDatabase.drafts().createWithEvent(row, FinanceDemoDraftPolicy.createdEvent(row))
                 }
-                Toast.makeText(
-                    this@FinanceDevSafetyActivity,
-                    "Fictional local draft saved — not posted",
-                    Toast.LENGTH_SHORT
-                ).show()
+                var pending = false
+                try {
+                    pending = FinanceExpenseStockLinkStore(this@FinanceDevSafetyActivity)
+                        .ensurePending(row) != null
+                } catch (error: Exception) {
+                    Toast.makeText(this@FinanceDevSafetyActivity,
+                        "Expense saved, but stock task setup failed: ${error.message}", Toast.LENGTH_LONG).show()
+                }
+                Toast.makeText(this@FinanceDevSafetyActivity,
+                    "Local expense draft saved · Not posted", Toast.LENGTH_SHORT).show()
                 refresh()
-            } catch (error: Exception) {
-                showDatabaseError(error)
-            }
+                if (pending) {
+                    FinanceExpenseStockScreen(this@FinanceDevSafetyActivity).show(row) { refresh() }
+                }
+            } catch (error: Exception) { showDatabaseError(error) }
         }
     }
-
     private fun persistChange(row: FinanceDemoDraftBill, event: FinanceDemoDraftEvent) {
         lifecycleScope.launch {
             try {
                 withContext(Dispatchers.IO) {
                     localDatabase.drafts().replaceWithEvent(row, event)
                 }
-                Toast.makeText(
-                    this@FinanceDevSafetyActivity,
-                    "Local draft history updated — not posted",
-                    Toast.LENGTH_SHORT
-                ).show()
+                try {
+                    FinanceExpenseStockLinkStore(this@FinanceDevSafetyActivity).synchronizeAfterChange(row)
+                } catch (error: Exception) {
+                    Toast.makeText(this@FinanceDevSafetyActivity,
+                        "Draft saved, but stock task needs review: ${error.message}", Toast.LENGTH_LONG).show()
+                }
+                Toast.makeText(this@FinanceDevSafetyActivity,
+                    "Local draft updated · Not posted", Toast.LENGTH_SHORT).show()
                 refresh()
-            } catch (error: Exception) {
-                showDatabaseError(error)
-            }
+            } catch (error: Exception) { showDatabaseError(error) }
         }
     }
-
     private fun showDatePicker(field: EditText) {
         val date = runCatching { LocalDate.parse(field.text.toString()) }
             .getOrElse { LocalDate.now() }

@@ -60,6 +60,7 @@ object HotelMonthlyStockPolicy {
 class HotelMonthlyStockStore(context: Context) {
     private val prefs = context.getSharedPreferences("finance_dev_monthly_stock_v1", Context.MODE_PRIVATE)
     private val receipts = HotelPurchaseGoodsReceiptStore(context)
+    private val directReceipts = FinanceExpenseStockLinkStore(context)
 
     fun all(): List<HotelStockMonth> {
         val a = JSONArray(prefs.getString("months", "[]") ?: "[]")
@@ -102,12 +103,17 @@ class HotelMonthlyStockStore(context: Context) {
             val date = Instant.ofEpochMilli(it.receivedAtMillis).atZone(ZoneId.systemDefault()).toLocalDate()
             YearMonth.from(date) == period
         }
-        val quantities = matching.flatMap { receipt -> receipt.lines.filter { it.receivedQuantity > 0 }.map {
+        val poQuantities = matching.flatMap { receipt -> receipt.lines.filter { it.receivedQuantity > 0 }.map {
             HotelStockQuantity(it.itemId, it.itemName, it.unit, it.receivedQuantity)
         } }
-        return HotelMonthlyStockPolicy.merge(quantities) to matching.map { it.id }.sorted()
+        val direct = directReceipts.directReceiptsForMonth(month)
+        val directQuantities = direct.flatMap { receipt -> receipt.lines.map {
+            HotelStockQuantity(it.itemId, it.itemName, it.unit, it.quantity)
+        } }
+        val ids = (matching.map { it.id } + direct.map { it.receiptId }).distinct().sorted()
+        // LINKED_PO has no new quantities: PO receipts were already included above.
+        return HotelMonthlyStockPolicy.merge(poQuantities + directQuantities) to ids
     }
-
     /** Initial stock is entered once before the first monthly close; later months inherit the preceding approved close. */
     fun opening(month: String): List<HotelStockQuantity>? {
         val previous = HotelMonthlyStockPolicy.validMonth(month).minusMonths(1).toString()
@@ -140,6 +146,10 @@ class HotelMonthlyStockStore(context: Context) {
         val period = HotelMonthlyStockPolicy.validMonth(month)
         require(period < YearMonth.now()) { "Only completed months may be closed" }
         require(managerName.isNotBlank()) { "Manager name is required" }
+        val overdueStock = directReceipts.pendingThroughMonth(month)
+        require(overdueStock.isEmpty()) {
+            "${overdueStock.size} stockable expense(s) are still pending. Complete Stock Pending before closing $month."
+        }
         val history = all()
         require(history.none { it.month == month }) { "This month is already closed" }
         require(history.none { it.month > month }) { "Close stock months in chronological order" }
