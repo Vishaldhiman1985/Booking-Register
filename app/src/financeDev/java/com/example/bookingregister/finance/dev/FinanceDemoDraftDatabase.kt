@@ -127,6 +127,12 @@ abstract class FinanceDemoAccountingRuleDao {
 
 @Dao
 abstract class FinanceDemoDraftDao {
+    /** Read every active draft so older vendor balances are not lost beyond a 30-row dashboard cap. */
+    @Query("""SELECT * FROM finance_demo_draft_bills
+        WHERE tenantId = :tenantId AND propertyId = :propertyId AND status = :activeStatus
+        ORDER BY invoiceDate DESC, draftId DESC""")
+    abstract suspend fun allActive(tenantId: String, propertyId: String, activeStatus: String): List<FinanceDemoDraftBill>
+
     @Query(
         """SELECT * FROM finance_demo_draft_bills
            WHERE tenantId = :tenantId AND propertyId = :propertyId AND status = :activeStatus

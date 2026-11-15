@@ -103,7 +103,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                 val snapshot = withContext(Dispatchers.IO) {
                     val dao = localDatabase.drafts()
                     ScreenSnapshot(
-                        drafts = dao.recentActive(
+                        drafts = dao.allActive(
                             FinanceDemoDraftPolicy.TENANT,
                             FinanceDemoDraftPolicy.PROPERTY,
                             FinanceDemoDraftPolicy.STATUS_ACTIVE
@@ -237,8 +237,14 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         }
         when (currentTab) {
             "Dashboard" -> dashboard(content, snapshot)
-            "Expenses" -> expenses(content, snapshot)
-            "Payments" -> if (paymentVendorIndex == null) payments(content, snapshot) else paymentDetails(content, snapshot, paymentVendorIndex!!)
+            "Expenses" -> FinanceUnifiedStatementScreen(this) { refresh() }.renderExpenses(
+                content, snapshot.drafts, expenseFilter,
+                { draft -> showStatementDraftActions(draft) },
+                { showPendingStockTasks() }
+            )
+            "Payments" -> FinanceUnifiedStatementScreen(this) { refresh() }.renderPayments(
+                content, snapshot.drafts, { draft -> showStatementDraftActions(draft) }
+            )
             "Purchase" -> purchaseScreen?.apply { bindToolbar(header); render(content) }
             "Reports" -> unavailable(content, "Reports", "Financial reports are coming soon.")
         }
@@ -361,6 +367,18 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             setOnClickListener { currentTab = "Expenses"; refresh() }
         }
         page.addView(draftPanel)
+        page.addView(space(10))
+        page.addView(TextView(this).apply {
+            text = "â–£  Fixed Expenses  Â·  Contracts, bills & dues  â€º"
+            textSize = 15f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(navy)
+            gravity = Gravity.CENTER_VERTICAL
+            background = outlinedCard(0xFFEAF8EF.toInt(), 12f)
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            minHeight = dp(58)
+            setOnClickListener { FinanceFixedExpensesScreen(this@FinanceDevSafetyActivity).show() }
+        })
     }
 
     private fun selector(title: String): TextView = label(title, 13f, navy, true).apply {
@@ -517,6 +535,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         }
         page.addView(summaryRow)
         page.addView(space(12))
+        FinanceFixedExpenseListSection(this) { refresh() }.render(page, expenseFilter)
         val filtered = drafts.filter { expenseFilter == "All" || FinanceDemoDraftPolicy.paymentLabel(it.paymentStatus) == expenseFilter }
         page.addView(label("${filtered.size} expense draft(s)", 13f, muted, false))
         if (filtered.isEmpty()) {
@@ -531,6 +550,31 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             page.addView(label("${snapshot.discardedCount} discarded draft(s) retained in local history.", 12f, muted, false))
         }
         page.addView(space(82)) // Keep the last card clear of the floating Add Expense button.
+    }
+
+    private fun showStatementDraftActions(draft: FinanceDemoDraftBill) {
+        val stock = FinanceExpenseStockLinkStore(this).get(draft.draftId)
+        // Payments in the new ledger lock legacy draft editing until a correction workflow exists.
+        val ledgerLocked = FinanceActivityStore(this).use { ledger ->
+            (ledger.bill("manual:${draft.draftId}")?.allocated ?: 0L) > 0L
+        }
+        val options = when {
+            ledgerLocked && stock == null -> arrayOf("History")
+            ledgerLocked -> arrayOf("History", "Stock details")
+            stock == null -> arrayOf("Edit", "History", "Discard")
+            else -> arrayOf("Edit", "History", "Stock details", "Discard")
+        }
+        AlertDialog.Builder(this)
+            .setTitle(draft.expenseTypeLabel ?: draft.category)
+            .setItems(options) { _, which ->
+                when (options[which]) {
+                    "Edit" -> showExpenseForm(draft)
+                    "History" -> showDraftHistory(draft)
+                    "Stock details" -> FinanceExpenseStockScreen(this).show(draft) { refresh() }
+                    "Discard" -> showDiscardDialog(draft)
+                }
+            }
+            .setNegativeButton("Close", null).show()
     }
 
     private fun showPendingStockTasks() {
