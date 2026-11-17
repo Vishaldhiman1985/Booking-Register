@@ -1,4 +1,4 @@
-﻿plugins {
+plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     id("com.google.gms.google-services")
@@ -14,8 +14,8 @@ android {
         applicationId = "com.bookingregister.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "1.0.19-recovery-test"
+        versionCode = 21
+        versionName = "1.0.20-legacy-property-dev"
     }
 
     compileOptions {
