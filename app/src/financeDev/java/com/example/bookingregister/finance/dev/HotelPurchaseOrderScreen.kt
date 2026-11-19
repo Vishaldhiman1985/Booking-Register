@@ -282,7 +282,7 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
             setOnClickListener {
                 val available = vendors.all().filter { it.suppliedCategoryIds.isNotEmpty() }
                 if (available.isEmpty()) {
-                    Toast.makeText(activity, "Add supply categories to a vendor in the three-dot Vendors menu first", Toast.LENGTH_LONG).show()
+                    Toast.makeText(activity, "Select a vendor configured in Finance Settings > Masters > Vendor Master", Toast.LENGTH_LONG).show()
                 } else {
                     selectedQuantities.clear()
                     selectedVendorId = available.first().id
@@ -365,6 +365,32 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
         ) {
             page = "DELIVERED"
             renderPage()
+        }, LinearLayout.LayoutParams(-1, -2))
+        // FINANCE_PURCHASE_STOCK_HOME_V18: direct, visible stock access without a menu.
+        root.addView(space(12))
+        root.addView(LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(Color.rgb(241, 250, 247), Color.rgb(188, 223, 211), 22)
+            elevation = dp(2).toFloat()
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Open Monthly Stock"
+            addView(text("▦", 29f, true).apply {
+                setTextColor(green)
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(dp(54), dp(52)))
+            addView(LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(text("Monthly Stock", 18f, true))
+                addView(text("Opening / Purchases / Closing", 12f).apply {
+                    setTextColor(Color.rgb(96, 113, 107))
+                    setPadding(0, dp(4), 0, 0)
+                })
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(text("›", 25f, true).apply { setTextColor(green) })
+            setOnClickListener { HotelMonthlyStockLedgerScreen(activity).show() } // FINANCE_STOCK_LEDGER_DIRECT_V18
         }, LinearLayout.LayoutParams(-1, -2))
     }
 
@@ -463,15 +489,7 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
             setSelection(availableVendors.indexOfFirst { it.id == selectedVendorId }.coerceAtLeast(0))
         }
         selectorRow.addView(spinner, LinearLayout.LayoutParams(0, dp(45), 1f))
-        val menu = TextView(activity).apply {
-            text = "⋮"
-            textSize = 27f
-            gravity = Gravity.CENTER
-            setTextColor(dark)
-            contentDescription = "Purchase management menu"
-            setOnClickListener { showMenu(this) }
-        }
-        selectorRow.addView(menu, LinearLayout.LayoutParams(dp(38), dp(45)))
+
         root.addView(selectorRow)
         // Unified item picker: exactly the same category rail, item search, +/- quantities,
         // and fixed review footer as direct received-stock entry.
@@ -654,21 +672,15 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
     fun showMenu(anchor: View, onChanged: () -> Unit = {}) {
         PopupMenu(activity, anchor).apply {
             menu.add("Monthly Stock")
-            menu.add("Global Catalog")
-            menu.add("Vendors")
+
+
             menu.add("Draft Orders")
             menu.add("Delivered Orders")
             setOnMenuItemClickListener { item ->
                 when (item.title.toString()) {
-                    "Monthly Stock" -> HotelMonthlyStockScreen(activity).show()
-                    "Global Catalog" -> { saveVisibleInputs(); FinanceGlobalCatalogScreen(activity).show { renderPage() } }
-                    "Vendors" -> {
-                        val vendorContainer = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8)) }
-                        HotelPurchaseVendorScreen(activity).render(vendorContainer)
-                        AlertDialog.Builder(activity).setTitle("Vendors")
-                            .setView(ScrollView(activity).apply { addView(vendorContainer) })
-                            .setPositiveButton("Close") { _, _ -> onChanged(); renderPage() }.show()
-                    }
+                    "Monthly Stock" -> HotelMonthlyStockLedgerScreen(activity).show()
+
+
                     "Draft Orders" -> { saveVisibleInputs(); page = "DRAFTS"; renderPage() }
                     "Delivered Orders" -> { saveVisibleInputs(); page = "DELIVERED"; renderPage() }
                 }

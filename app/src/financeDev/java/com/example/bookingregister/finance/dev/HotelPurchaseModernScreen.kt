@@ -105,8 +105,8 @@ class HotelPurchaseModernScreen(private val activity: Activity) {
         page.addView(text("Purchase orders • goods receiving • vendor history", 12f).apply { setTextColor(Color.GRAY) })
         val vendorList = activeVendors()
         if (vendorList.isEmpty()) {
-            page.addView(text("Add a vendor using Manage Vendors to begin.", 16f))
-            page.addView(button("Manage Vendors") { manage("Manage Vendors") })
+            page.addView(text("Add a vendor in Finance Settings > Masters > Vendor Master to begin.", 16f))
+
             return
         }
         if (selectedVendorId == null || vendorList.none { it.id == selectedVendorId }) selectedVendorId = vendorList.first().id
@@ -132,11 +132,7 @@ class HotelPurchaseModernScreen(private val activity: Activity) {
             }
         }
         page.addView(vendorArea)
-        val toolbar = row()
-        toolbar.addView(button("Items") { manage("Manage Items") })
-        toolbar.addView(button("Categories") { manage("Manage Categories") })
-        toolbar.addView(button("Vendors") { manage("Manage Vendors") })
-        page.addView(toolbar)
+
         if (archiveMode) { renderHistory(true); return }
         val contentArea = column().apply { tag = "itemsHolder" }
         val searchBox = EditText(activity).apply {
@@ -342,18 +338,6 @@ class HotelPurchaseModernScreen(private val activity: Activity) {
         }
         builder.show()
     }
-    private fun manage(which: String) {
-        when (which) {
-            "Manage Items" -> HotelPurchaseItemScreen(activity).show()
-            "Manage Categories" -> HotelPurchaseCategoryScreen(activity).show()
-            else -> {
-                val content = column()
-                HotelPurchaseVendorScreen(activity).render(content)
-                AlertDialog.Builder(activity).setTitle("Manage Vendors")
-                    .setView(ScrollView(activity).apply { addView(content) })
-                    .setPositiveButton("Done") { _, _ -> repaint() }.show()
-            }
-        }
-    }
+
     private fun fmt(q: Double): String = if (q == q.toLong().toDouble()) q.toLong().toString() else q.toString()
 }

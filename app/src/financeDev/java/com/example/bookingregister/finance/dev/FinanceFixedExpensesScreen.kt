@@ -165,9 +165,13 @@ internal class FinanceFixedExpensesScreen(private val activity: AppCompatActivit
     }
     private fun showAdd() {
         val catalog=FinanceExpenseCatalogLoader.load(activity)
-        val categories=catalog.categories
+        val visibility=FinanceExpenseVisibility(activity)
+        val categories=catalog.categories.filter {
+            it.code != FinanceExpenseCategoryRules.STAFF_ONLY && visibility.categoryVisible(it)
+        }
+        if(categories.isEmpty()) {notify("Enable a non-staff expense category in Add Expense first.");return}
         val vendors=HotelPurchaseVendorStore(activity).all()
-        if(vendors.isEmpty()){notify("Create a vendor in Purchase > Vendors first.");return}
+        if(vendors.isEmpty()){notify("Create a vendor in Settings > Masters > Vendor Master first.");return}
         val form=column().apply { setPadding(dp(16),dp(12),dp(16),dp(8)) }
         val category=spinner(categories.map{it.name})
         val types=spinner(categories.first().types.map{it.name})
@@ -178,6 +182,19 @@ internal class FinanceFixedExpensesScreen(private val activity: AppCompatActivit
             }
         }
         val vendor=spinner(vendors.map{it.name})
+        vendor.onItemSelectedListener=object:AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent:AdapterView<*>?)=Unit
+            override fun onItemSelected(parent:AdapterView<*>?,view:View?,position:Int,id:Long) {
+                val preferred=HotelPurchaseVendorStore(activity).typeCodes(vendors[position].id)
+                val match=categories.flatMapIndexed { ci,c ->
+                    c.types.mapIndexedNotNull { ti,t -> if(t.code in preferred)Triple(ci,ti,t.code) else null }
+                }.firstOrNull()
+                if(match!=null) {
+                    category.setSelection(match.first)
+                    types.post { types.setSelection(match.second) }
+                }
+            }
+        }
         val departments=FinanceGlobalCatalogDefaults.departments
         val dept=spinner(departments)
         val amount=edit("","₹ Monthly base amount",true)

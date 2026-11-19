@@ -10,10 +10,18 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.CheckBox
+import android.widget.PopupMenu
+import android.widget.Toast
+import android.os.Build
+import android.content.pm.PackageManager
+import android.Manifest
+import androidx.appcompat.app.AlertDialog
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -40,15 +48,16 @@ class HotelMonthlyStockLedgerScreen(private val activity: Activity) {
     private fun rounded(fill: Int): GradientDrawable = GradientDrawable().apply {
         setColor(fill); cornerRadius = dp(10).toFloat(); setStroke(dp(1), line)
     }
+    private fun toast(message: String) = Toast.makeText(activity, message, Toast.LENGTH_LONG).show()
     private fun separator(parent: LinearLayout) {
         parent.addView(View(activity).apply { setBackgroundColor(line) }, LinearLayout.LayoutParams(-1, dp(1)))
     }
 
     fun show(requestedMonth: String? = null) {
         val initial = requestedMonth?.let { runCatching { YearMonth.parse(it) }.getOrNull() }
-        var period = initial ?: stock.savedInitialMonths().lastOrNull()?.let { YearMonth.parse(it) }
-            ?: stock.all().lastOrNull()?.month?.let { YearMonth.parse(it) }
-            ?: YearMonth.now().minusMonths(1)
+        // FINANCE_STOCK_LEDGER_DIRECT_V18: always open the actual current month.
+        var period = initial ?: YearMonth.now()
+        runCatching { FinanceStockMonthEndReminderWorker.schedule(activity.applicationContext) }
         val dialog = android.app.Dialog(activity, android.R.style.Theme_Material_Light_NoActionBar_Fullscreen)
         val root = col().apply {
             setPadding(dp(14), dp(12), dp(14), dp(22))
@@ -65,6 +74,12 @@ class HotelMonthlyStockLedgerScreen(private val activity: Activity) {
             addView(text("Monthly movement & consumption", 12f, color = muted))
         }
         header.addView(titles, LinearLayout.LayoutParams(0, -2, 1f))
+        val more = text("⋮", 25f, true, ink).apply {
+            gravity = Gravity.CENTER
+            contentDescription = "Stock Ledger actions"
+            setPadding(dp(8), 0, dp(8), 0)
+        }
+        header.addView(more, LinearLayout.LayoutParams(dp(43), dp(53)))
         root.addView(header)
         val monthRow = row().apply { setPadding(0, dp(12), 0, dp(9)) }
         val previous = text("‹", 24f, true, green).apply { gravity = Gravity.CENTER }
@@ -76,6 +91,8 @@ class HotelMonthlyStockLedgerScreen(private val activity: Activity) {
         root.addView(monthRow)
         val status = text("", 12f, true, muted).apply { setPadding(dp(6), dp(5), dp(6), dp(10)) }
         root.addView(status)
+        val firstMonthArea = col()
+        root.addView(firstMonthArea)
         val search = EditText(activity).apply {
             hint = "Search stock item"
             setSingleLine(true)
@@ -138,6 +155,54 @@ class HotelMonthlyStockLedgerScreen(private val activity: Activity) {
                 else if (stock.opening(key) != null) "OPENING SAVED · MONTH NOT CLOSED"
                 else "NO OPENING STOCK SAVED"
             status.setTextColor(if (closed != null) green else muted)
+            // FINANCE_STOCK_LEDGER_DIRECT_V18: setup once, otherwise chronological carry-forward.
+            firstMonthArea.removeAllViews()
+            val initialMonths = stock.savedInitialMonths()
+            if (initialMonths.isEmpty() && stock.all().isEmpty()) {
+                firstMonthArea.addView(text("FIRST-TIME STOCK SETUP", 12f, true, green).apply {
+                    setPadding(dp(8), dp(12), dp(8), dp(3))
+                })
+                val check = CheckBox(activity).apply {
+                    text = "This is our first stock month (${period.format(format)})"
+                    textSize = 13f
+                }
+                firstMonthArea.addView(check)
+                val enter = text("Enter first opening stock  ›", 15f, true, green).apply {
+                    setPadding(dp(12), dp(8), dp(12), dp(14))
+                    isEnabled = false
+                    alpha = .40f
+                    setOnClickListener {
+                        if (check.isChecked) {
+                            dialog.dismiss()
+                            HotelMonthlyStockScreen(activity).editOpening(key)
+                        }
+                    }
+                }
+                check.setOnCheckedChangeListener { _, checked ->
+                    enter.isEnabled = checked
+                    enter.alpha = if (checked) 1f else .40f
+                }
+                firstMonthArea.addView(enter)
+            } else {
+                val first = initialMonths.firstOrNull()?.let(YearMonth::parse)
+                if (first != null && period > first && stock.opening(key) == null && closed == null) {
+                    val previousPeriod = period.minusMonths(1)
+                    firstMonthArea.addView(text("Close ${previousPeriod.format(format)} to carry opening stock into this month.",
+                        12f, true, Color.rgb(166, 77, 33)).apply { setPadding(dp(7), dp(9), dp(7), dp(12)) })
+                }
+                if (closed == null && stock.opening(key) != null) {
+                    val due = period < YearMonth.now() ||
+                        (period == YearMonth.now() && LocalDate.now().dayOfMonth == period.lengthOfMonth())
+                    if (due) {
+                        val message = if (period < YearMonth.now()) "CLOSING OVERDUE · Complete the physical stock count"
+                            else "CLOSING DUE TODAY · Count remaining stock at the end of the day"
+                        firstMonthArea.addView(text(message, 12f, true, Color.rgb(168, 65, 45)).apply {
+                            setPadding(dp(7), dp(8), dp(7), dp(12))
+                            setOnClickListener { dialog.dismiss(); HotelMonthlyStockScreen(activity).editClosing(key) }
+                        })
+                    }
+                }
+            }
             val changes = stock.corrections(key)
             if (changes.isNotEmpty()) information("CORRECTION HISTORY · ${changes.size} change(s)\n" + changes.joinToString("\n"))
             if (closed != null && stock.receiptsChangedAfterClose(key))
@@ -170,11 +235,52 @@ class HotelMonthlyStockLedgerScreen(private val activity: Activity) {
             }
             if (closed != null) information("Approved closing automatically carries forward to ${period.plusMonths(1).format(format)}.")
         }
-        previous.setOnClickListener { period = period.minusMonths(1); refresh() }
-        next.setOnClickListener { period = period.plusMonths(1); refresh() }
+        // Restrict date navigation to the declared initial month through today.
+        fun changePeriod(target: YearMonth) {
+            val first = stock.savedInitialMonths().firstOrNull()?.let(YearMonth::parse)
+            when {
+                target > YearMonth.now() -> toast("Cannot view a future stock month")
+                first != null && target < first -> toast("Stock started in ${first.format(format)}")
+                else -> { period = target; refresh() }
+            }
+        }
+        previous.setOnClickListener { changePeriod(period.minusMonths(1)) }
+        next.setOnClickListener { changePeriod(period.plusMonths(1)) }
         monthText.setOnClickListener {
-            DatePickerDialog(activity, { _, y, m, _ -> period = YearMonth.of(y, m + 1); refresh() },
+            DatePickerDialog(activity, { _, y, m, _ -> changePeriod(YearMonth.of(y, m + 1)) },
                 period.year, period.monthValue - 1, 1).show()
+        }
+        more.setOnClickListener {
+            val month = period.toString()
+            val isApproved = stock.all().any { it.month == month }
+            val available = stock.opening(month) != null
+            val readyToClose = (period < YearMonth.now() ||
+                (period == YearMonth.now() && LocalDate.now().dayOfMonth == period.lengthOfMonth()))
+            PopupMenu(activity, more).apply {
+                menu.add("Opening stock").isEnabled = stock.initialOpening(month) != null
+                menu.add("Closing stock").isEnabled = isApproved || (readyToClose && available)
+                menu.add("Enable closing notifications")
+                setOnMenuItemClickListener { item ->
+                    when (item.title.toString()) {
+                        "Opening stock" -> { dialog.dismiss(); HotelMonthlyStockScreen(activity).editOpening(month) }
+                        "Closing stock" -> { dialog.dismiss(); HotelMonthlyStockScreen(activity).editClosing(month) }
+                        else -> {
+                            FinanceStockMonthEndReminderWorker.schedule(activity.applicationContext)
+                            if (Build.VERSION.SDK_INT >= 33 &&
+                                activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                                AlertDialog.Builder(activity)
+                                    .setTitle("Monthly stock reminders")
+                                    .setMessage("Allow Finance DEV notifications to receive a month-end stock closing reminder. The ledger will still display due and overdue warnings without permission.")
+                                    .setPositiveButton("Continue") { _, _ ->
+                                        activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1911)
+                                    }.setNegativeButton("Not now", null).show()
+                            } else toast("Month-end closing reminders enabled")
+                        }
+                    }
+                    true
+                }
+                show()
+            }
         }
         val refreshTask = Runnable { refresh() }
         search.addTextChangedListener(object : TextWatcher {

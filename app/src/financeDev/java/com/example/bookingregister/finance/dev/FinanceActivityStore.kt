@@ -14,7 +14,7 @@ import java.util.UUID
  * Finance DEV screens; NOT a production journal, synchronized service or banking integration.
  * Existing V16 sources remain untouched. Their historical records are imported idempotently.
  */
-internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context, "finance_dev_activity_v17.db", null, 1) {
+internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context, "finance_dev_activity_v17.db", null, 2) {
     private val contextForStore:Context = context.applicationContext
     data class Bill(
         val id: String, val source: String, val title: String, val vendorId: String,
@@ -73,12 +73,21 @@ internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context
             id TEXT PRIMARY KEY, record_id TEXT NOT NULL, action TEXT NOT NULL,
             detail TEXT NOT NULL, created_at INTEGER NOT NULL
         )""")
+        db.execSQL("""CREATE TABLE finance_payment_reversals(
+            payment_id TEXT PRIMARY KEY REFERENCES finance_payments(id),
+            reason TEXT NOT NULL, reversed_on TEXT NOT NULL, created_at INTEGER NOT NULL
+        )""")
         db.execSQL("CREATE INDEX finance_bills_vendor_idx ON finance_bills(vendor_id,due_date)")
         db.execSQL("CREATE INDEX finance_allocations_bill_idx ON finance_allocations(bill_id)")
         db.execSQL("CREATE INDEX finance_payments_vendor_idx ON finance_payments(vendor_id,payment_date)")
     }
     override fun onUpgrade(db:SQLiteDatabase,oldVersion:Int,newVersion:Int) {
-        throw IllegalStateException("Unsupported V17 ledger migration $oldVersion → $newVersion; no data deleted")
+        if(oldVersion==1 && newVersion==2) {
+            db.execSQL("""CREATE TABLE finance_payment_reversals(
+                payment_id TEXT PRIMARY KEY REFERENCES finance_payments(id),
+                reason TEXT NOT NULL, reversed_on TEXT NOT NULL, created_at INTEGER NOT NULL
+            )""")
+        } else throw IllegalStateException("Unsupported ledger migration $oldVersion → $newVersion; data preserved")
     }
     private inline fun <T> transaction(body:(SQLiteDatabase)->T):T {
         val db=writableDatabase; db.beginTransaction()
@@ -94,7 +103,9 @@ internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context
         })
     }
     private fun existingSettled(db:SQLiteDatabase,id:String):Long = select(db,
-        "SELECT COALESCE(SUM(amount_paise),0) FROM finance_allocations WHERE bill_id=?",arrayOf(id)) { it.getLong(0) }.single()
+        """SELECT COALESCE(SUM(a.amount_paise),0) FROM finance_allocations a
+        WHERE a.bill_id=? AND NOT EXISTS(
+            SELECT 1 FROM finance_payment_reversals r WHERE r.payment_id=a.payment_id)""",arrayOf(id)) { it.getLong(0) }.single()
     private fun putBill(db:SQLiteDatabase,id:String,source:String,title:String,vendorId:String,vendor:String,
                         department:String,date:String,dueDate:String,period:String,amount:Long,openingPaid:Long,stock:Boolean) {
         LocalDate.parse(date);LocalDate.parse(dueDate)
@@ -102,6 +113,8 @@ internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context
         val old=select(db,"SELECT amount_paise,opening_paid,vendor_id FROM finance_bills WHERE id=?",arrayOf(id)) {
             Triple(it.getLong(0),it.getLong(1),it.getString(2))
         }.firstOrNull()
+        val originalVendorName=if(old==null)null else select(db,
+            "SELECT vendor FROM finance_bills WHERE id=?",arrayOf(id)) { it.getString(0) }.firstOrNull()
         val allocated=existingSettled(db,id)
         require(old==null || source!="MANUAL" || allocated==0L || old.second==openingPaid) {
             "Earlier paid amount changed after recorded payments. Existing history was preserved; accountant review required."
@@ -114,7 +127,9 @@ internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context
         }
         val values=ContentValues().apply {
             put("id",id);put("source",source);put("title",title);put("vendor_id",vendorId)
-            put("vendor",vendor);put("department",department);put("bill_date",date)
+            // Vendor master renames must not rewrite the supplier name printed on historic bills.
+            put("vendor",if(old!=null && old.third==vendorId)originalVendorName?:vendor else vendor)
+            put("department",department);put("bill_date",date)
             put("due_date",dueDate);put("period",period);put("amount_paise",amount)
             put("opening_paid",openingPaid);put("stock_pending",if(stock)1 else 0)
             put("active",1);put("updated_at",System.currentTimeMillis())
@@ -130,10 +145,18 @@ internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context
             original.bills().map { bill -> Triple(bill,rules[bill.ruleId]?.vendorId ?: bill.vendor,
                 original.payments(bill.id)) }
         }
-        val names=if(includeManual) HotelPurchaseVendorStore(contextForStore).all().associate { it.id to it.name } else emptyMap()
+        val names=if(includeManual) HotelPurchaseVendorStore(contextForStore).allIncludingArchived().associate { it.id to it.name } else emptyMap()
         val historical=FinanceDemoDraftPolicy.vendors.associate { it.code to it.name }
         val stock=if(includeManual) FinanceExpenseStockLinkStore(contextForStore).all()
             .filter { it.state==FinanceExpenseStockPolicy.PENDING }.map { it.draftId }.toSet() else emptySet()
+        val issuedPayroll=FinancePayrollStore(contextForStore).use { payroll ->
+            payroll.issuedRuns().map { run ->
+                run to (payroll.employee(run.employeeId) ?: error("Payroll employee missing"))
+            }
+        }
+        val approvedCompanyExitBenefits=FinancePayrollStore(contextForStore).use { payroll ->
+            payroll.approvedCompanyExitBenefits()
+        }
         transaction { db ->
             if(includeManual) drafts.forEach { d ->
                 val vendorName=when {
@@ -177,24 +200,59 @@ internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context
                     }
                 }
             }
+            // Only issued payroll becomes a bill. Salary advances remain separate payment entries
+            // until explicitly allocated to the issued salary bill.
+            issuedPayroll.forEach { (run,employee) ->
+                val month=YearMonth.parse(run.period)
+                val end=(employee.left?.let(LocalDate::parse)
+                    ?.takeIf { YearMonth.from(it)==month } ?: month.atEndOfMonth()).toString()
+                putBill(db,run.id,"PAYROLL","Salary · ${employee.name}",
+                    "employee:${employee.id}",employee.name,employee.department,
+                    end,run.dueDate,run.period,run.amountPaise,0L,false)
+            }
+            // A separate, explicit company-only exit benefit is issued once, with a stable ID.
+            // The manager-approved exit review is immutable; statutory leave remains outside
+            // this simplified DEV ledger and is NEVER forfeited by notice choice.
+            approvedCompanyExitBenefits.forEach { (review,employee) ->
+                putBill(db,"payroll-company-exit:${employee.id}","PAYROLL",
+                    "Company leave benefit · ${employee.name}","employee:${employee.id}",
+                    employee.name,employee.department,review.lastDay,review.lastDay,
+                    YearMonth.from(LocalDate.parse(review.lastDay)).toString(),
+                    review.companyAmountPaise,0L,false)
+            }
         }
     }
 
     fun bills():List<Bill> = select(readableDatabase,"""
         SELECT b.id,b.source,b.title,b.vendor_id,b.vendor,b.department,b.bill_date,b.due_date,
         b.period,b.amount_paise,b.opening_paid,
-        COALESCE((SELECT SUM(a.amount_paise) FROM finance_allocations a WHERE a.bill_id=b.id),0),b.stock_pending
+        COALESCE((SELECT SUM(a.amount_paise) FROM finance_allocations a
+            WHERE a.bill_id=b.id AND NOT EXISTS(
+                SELECT 1 FROM finance_payment_reversals r WHERE r.payment_id=a.payment_id)),0),b.stock_pending
         FROM finance_bills b WHERE b.active=1 ORDER BY b.bill_date DESC,b.id
     """.trimIndent()) { c -> Bill(c.getString(0),c.getString(1),c.getString(2),c.getString(3),
         c.getString(4),c.getString(5),c.getString(6),c.getString(7),c.getString(8),
         c.getLong(9),c.getLong(10),c.getLong(11),c.getInt(12)==1) }
     fun bill(id:String):Bill?=bills().firstOrNull { it.id==id }
-    fun payments():List<Payment> = select(readableDatabase,"""
+    fun payments(includeReversed:Boolean=false):List<Payment> = select(readableDatabase,"""
         SELECT p.id,p.vendor_id,p.vendor,p.payment_date,p.amount_paise,p.method,p.reference,p.kind,
         COALESCE((SELECT SUM(a.amount_paise) FROM finance_allocations a WHERE a.payment_id=p.id),0)
-        FROM finance_payments p ORDER BY p.payment_date DESC,p.created_at DESC
+        FROM finance_payments p
+        ${if(includeReversed) "" else "WHERE NOT EXISTS(SELECT 1 FROM finance_payment_reversals r WHERE r.payment_id=p.id)"}
+        ORDER BY p.payment_date DESC,p.created_at DESC
     """.trimIndent()) { c -> Payment(c.getString(0),c.getString(1),c.getString(2),c.getString(3),
         c.getLong(4),c.getString(5),c.getString(6),c.getString(7),c.getLong(8)) }
+    /** One posted salary bill: distinguish prior advances from actual later cash salary payments.
+     * These are projections of the existing allocations, not new money movements. */
+    data class SalarySettlement(val advancePaise:Long,val paidLaterPaise:Long)
+    fun salarySettlement(billId:String):SalarySettlement = select(readableDatabase,"""
+        SELECT COALESCE(SUM(CASE WHEN p.kind='ADVANCE' THEN a.amount_paise ELSE 0 END),0),
+               COALESCE(SUM(CASE WHEN p.kind='PAYMENT' THEN a.amount_paise ELSE 0 END),0)
+        FROM finance_allocations a JOIN finance_payments p ON p.id=a.payment_id
+        WHERE a.bill_id=? AND NOT EXISTS(
+            SELECT 1 FROM finance_payment_reversals r WHERE r.payment_id=p.id)
+    """.trimIndent(),arrayOf(billId)) { c -> SalarySettlement(c.getLong(0),c.getLong(1)) }.single()
+
     fun outstanding(asOf:LocalDate=LocalDate.now()):List<Bill> = bills().filter {
         !LocalDate.parse(it.dueDate).isAfter(asOf) && it.due>0L
     }.sortedWith(compareBy<Bill> { it.dueDate }.thenBy { it.id })
@@ -226,7 +284,7 @@ internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context
         checkDuplicateReference(db,vendorId,method,reference)
         val id=UUID.randomUUID().toString()
         newPayment(db,id,null,vendorId,vendor,date,amount,method,reference,"ADVANCE")
-        audit(db,id,"VENDOR_ADVANCE","$vendor · $amount paise · $date")
+        audit(db,id,if(vendorId.startsWith("employee:"))"EMPLOYEE_ADVANCE" else "VENDOR_ADVANCE","$vendor · $amount paise · $date")
         id
     }
     private fun checkDuplicateReference(db:SQLiteDatabase,vendorId:String,method:String,reference:String) {
@@ -256,6 +314,9 @@ internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context
             Triple(it.getString(0),it.getString(1),it.getLong(2))
         }.singleOrNull() ?: error("Advance not found")
         require(p.second=="ADVANCE") { "Only vendor advances can be adjusted" }
+        require(select(db,"SELECT COUNT(*) FROM finance_payment_reversals WHERE payment_id=?",arrayOf(paymentId)) { it.getInt(0) }.single()==0) {
+            "This advance was reversed"
+        }
         val b=select(db,"SELECT vendor_id,amount_paise,opening_paid FROM finance_bills WHERE id=?",arrayOf(billId)) {
             Triple(it.getString(0),it.getLong(1),it.getLong(2))
         }.singleOrNull() ?: error("Bill not found")
@@ -266,6 +327,38 @@ internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context
         FinanceActivityPolicy.validateSettlement(amount,minOf(available,due))
         newAllocation(db,paymentId,billId,amount,appliedOn)
         audit(db,paymentId,"ADVANCE_APPLIED","$amount paise → $billId · $appliedOn")
+    }
+    /** Resolve an event's immutable allocation key back to its underlying payment. */
+    fun paymentIdForEvent(eventId:String):String? = when {
+        eventId.startsWith("advance:")->eventId.removePrefix("advance:")
+        eventId.startsWith("allocation:")->select(readableDatabase,
+            "SELECT payment_id FROM finance_allocations WHERE id=?",
+            arrayOf(eventId.removePrefix("allocation:"))) { it.getString(0) }.singleOrNull()
+        else->null
+    }
+    /** Correct an erroneous locally recorded payment. Keep the original entry plus reversal.
+     * No actual bank refund, journal entry or transfer occurs here.
+     * Legacy fixed-bill payments are immutable until corrected in their original source. */
+    fun reversePayment(paymentId:String,reason:String) = transaction { db ->
+        require(reason.trim().length>=8) { "Provide a specific reversal reason (at least 8 characters)" }
+        val payment=select(db,"SELECT source_id,kind,vendor_id,amount_paise FROM finance_payments WHERE id=?",arrayOf(paymentId)) {
+            listOf(if(it.isNull(0)) "" else it.getString(0),it.getString(1),it.getString(2),it.getLong(3).toString())
+        }.singleOrNull() ?: error("Payment not found")
+        require(payment[0].isBlank() && !paymentId.startsWith("legacy-fixed:")) {
+            "Legacy payment must be corrected in its original fixed expense records"
+        }
+        require(select(db,"SELECT COUNT(*) FROM finance_payment_reversals WHERE payment_id=?",arrayOf(paymentId)) {
+            it.getInt(0)
+        }.single()==0) { "This payment was already reversed" }
+        if(payment[1]=="ADVANCE")require(select(db,
+            "SELECT COUNT(*) FROM finance_allocations WHERE payment_id=?",arrayOf(paymentId)) { it.getInt(0) }.single()==0) {
+            "Allocated advances cannot be cancelled; accountant review and adjustment required"
+        }
+        db.insertOrThrow("finance_payment_reversals",null,ContentValues().apply {
+            put("payment_id",paymentId);put("reason",reason.trim());put("reversed_on",LocalDate.now().toString())
+            put("created_at",System.currentTimeMillis())
+        })
+        audit(db,paymentId,"PAYMENT_REVERSAL",reason.trim())
     }
     /** Idempotent downstream import contract, NOT an authenticated connection to Booking Register. */
     fun importRevenueFromBookingRegister(item:RevenueInput) = transaction { db ->
@@ -312,11 +405,20 @@ internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context
                 c.getLong(3),c.getString(8),c.getString(9),c.getString(2),kind!="ADVANCE")
         }
         results.addAll(allocations)
-        payments().filter { it.kind=="ADVANCE" }.forEach { p ->
-            results.add(Event("advance:${p.id}",p.date,"ADVANCE","Vendor advance · ${p.vendor}",
+        payments(includeReversed=true).filter { it.kind=="ADVANCE" }.forEach { p ->
+            results.add(Event("advance:${p.id}",p.date,"ADVANCE",if(p.vendorId.startsWith("employee:"))"Salary advance · ${p.vendor}" else "Vendor advance · ${p.vendor}",
                 "${p.method}"+(if(p.reference.isNotEmpty())" · ${p.reference}" else ""),p.amount,
                 p.vendorId,p.vendor,null,true))
         }
+        results.addAll(select(readableDatabase,"""
+            SELECT r.payment_id,r.reversed_on,r.reason,p.payment_date,p.vendor_id,p.vendor,p.kind,p.amount_paise
+            FROM finance_payment_reversals r JOIN finance_payments p ON p.id=r.payment_id
+        """.trimIndent()) { c -> Event("reversal:${c.getString(0)}",c.getString(1),"REVERSAL",
+            "Reversed ${if(c.getString(6)=="ADVANCE") "advance" else "payment"} · ${c.getString(5)}",
+            "Original ${c.getString(3)} · ${c.getString(6)} · ${c.getString(2)}",
+            c.getLong(7),c.getString(4),c.getString(5),
+            select(readableDatabase,"SELECT bill_id FROM finance_allocations WHERE payment_id=? LIMIT 1",
+                arrayOf(c.getString(0))) { it.getString(0) }.firstOrNull(),false) })
         results.addAll(select(readableDatabase,"""
             SELECT source_id,revenue_date,department,amount_paise,reference FROM finance_revenue
         """.trimIndent()) { c -> Event("revenue:${c.getString(0)}",c.getString(1),"REVENUE",

@@ -46,10 +46,16 @@ import java.util.Locale
 class FinanceDevSafetyActivity : AppCompatActivity() {
     @Deprecated("Handled for isolated Finance DEV purchasing navigation")
     override fun onBackPressed() {
+        if (currentTab == "Payments" || currentTab == "Reports") {
+            currentTab = if (currentTab == "Payments") "Expenses" else "Dashboard"
+            refresh()
+            return
+        }
         if (currentTab == "Purchase" && purchaseScreen?.navigateBack() == true) return
         super.onBackPressed()
     }
-    private val tabs = listOf("Dashboard", "Expenses", "Payments", "Purchase", "Reports")
+    // FINANCE_PURCHASE_STOCK_HOME_V18: Purchasing actions are on page, no header overflow.
+    private val tabs = listOf("Dashboard", "Expenses", "Purchase", "Manpower")
     private var currentTab = "Dashboard"
     private var purchaseScreen: HotelPurchaseOrderScreen? = null
     private val pageBackgroundColor = Color.rgb(247, 248, 250)
@@ -101,6 +107,12 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 val snapshot = withContext(Dispatchers.IO) {
+                    try {
+                        FinanceSalaryDueService.issueIfDue(applicationContext)
+                        FinanceSalaryDueService.reconcileIssuedAdvances(applicationContext)
+                    } catch (salaryError:Exception) {
+                        android.util.Log.e("FinanceSalaryDue", "Scheduled salary review needed", salaryError)
+                    }
                     val dao = localDatabase.drafts()
                     ScreenSnapshot(
                         drafts = dao.allActive(
@@ -140,22 +152,10 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
     private val gold = Color.rgb(193, 132, 13)
     private val purple = Color.rgb(113, 57, 211)
 
-    /** Shared Finance DEV vendor directory. Same vendor IDs and preferences used by Purchase. */
-    private fun showGlobalCatalog() {
-        FinanceGlobalCatalogScreen(this).show { refresh() }
-    }
-
-    private fun showGlobalVendors() {
-        val vendorContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-        }
-        HotelPurchaseVendorScreen(this).render(vendorContainer)
-        AlertDialog.Builder(this)
-            .setTitle("Vendors")
-            .setView(ScrollView(this).apply { addView(vendorContainer) })
-            .setPositiveButton("Close") { _, _ -> refresh() }
-            .show()
+    /** Master data can only be edited from the Settings icon on the Finance header. */
+    // FINANCE_LEDGER_HUB_V18: Settings available only through Dashboard overflow.
+    private fun showMasters() {
+        FinanceMastersScreen(this) { refresh() }.show()
     }
     private fun showScreen(snapshot: ScreenSnapshot) {
         purchaseScreen = if (currentTab == "Purchase") HotelPurchaseOrderScreen(this) else null
@@ -174,58 +174,57 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(16), dp(8), dp(16), dp(7))
         }
-        header.addView(label("⌂", 26f, forest, true).apply { gravity = Gravity.CENTER },
-            LinearLayout.LayoutParams(dp(40), dp(42)))
-        header.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(label("Booking Register", 18f, Color.BLACK, true).apply { isSingleLine = true })
-            addView(label("Finance", 13f, ink, false))
+        val screenTitle = when(currentTab) {
+            "Expenses" -> "Finance Statement"
+            "Payments" -> "Payments & Dues"
+            "Purchase" -> "Purchasing"
+            "Manpower" -> "Manpower"
+            "Reports" -> "Reports"
+            else -> "Dashboard"
+        }
+        if (currentTab == "Payments" || currentTab == "Reports") {
+            header.addView(label("‹", 26f, ink, true).apply {
+                contentDescription = "Back"
+                setOnClickListener { currentTab = if (currentTab == "Payments") "Expenses" else "Dashboard"; refresh() }
+            }, LinearLayout.LayoutParams(dp(38), dp(42)))
+        }
+        header.addView(label(screenTitle, 21f, navy, true).apply {
+            isSingleLine = true
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         header.addView(label("⋮", 25f, ink, true).apply {
             gravity = Gravity.CENTER
+            visibility = if (currentTab == "Dashboard" || currentTab == "Expenses") View.VISIBLE else View.GONE
             setOnClickListener { anchor ->
-                if (currentTab == "Expenses") {
+                if (currentTab == "Dashboard") {
+                    PopupMenu(this@FinanceDevSafetyActivity, anchor).apply {
+                        menu.add("Settings")
+                        setOnMenuItemClickListener { item ->
+                            if (item.title.toString() == "Settings") showMasters()
+                            true
+                        }
+                        show()
+                    }
+                } else if (currentTab == "Expenses") {
                     PopupMenu(this@FinanceDevSafetyActivity, anchor).apply {
                         expenseFilters.forEachIndexed { index, filter ->
-                            menu.add(0, index, index, if (filter == "All") "All Expenses" else filter).apply {
-                                isCheckable = true
-                                isChecked = expenseFilter == filter
+                            menu.add(0,index,index,if (filter == "All") "All Expenses" else filter).apply {
+                                isCheckable=true
+                                isChecked=expenseFilter==filter
                             }
                         }
-                        menu.add(0, 100, 100, "Accounting Standards & Tax Rules")
-                        menu.add(0, 101, 101, "Vendors")
-                        menu.add(0, 102, 102, "Global Catalog")
+                        menu.add(0,100,100,"Accounting Standards & Tax Rules")
                         setOnMenuItemClickListener { item ->
-                            if (item.itemId == 100) {
-                                showAccountingRules()
-                            } else if (item.itemId == 101) {
-                                showGlobalVendors()
-                            } else if (item.itemId == 102) {
-                                showGlobalCatalog()
-                            } else {
-                                expenseFilter = expenseFilters[item.itemId]
-                                refresh()
-                            }
+                            if(item.itemId==100) showAccountingRules()
+                            else { expenseFilter=expenseFilters[item.itemId];refresh() }
                             true
                         }
                         show()
                     }
                 } else if (currentTab == "Purchase") {
                     purchaseScreen?.showMenu(anchor)
-                } else {
-                                        PopupMenu(this@FinanceDevSafetyActivity, anchor).apply {
-                        menu.add("Vendors")
-                        menu.add("Global Catalog")
-                        setOnMenuItemClickListener { selected ->
-                            if (selected.title.toString() == "Global Catalog") showGlobalCatalog()
-                            else showGlobalVendors()
-                            true
-                        }
-                        show()
-                    }
                 }
             }
-        }, LinearLayout.LayoutParams(dp(34), dp(42)))
+        }, LinearLayout.LayoutParams(dp(34),dp(42)))
         root.addView(header)
         val scroller = ScrollView(this).apply {
             isFillViewport = false
@@ -237,7 +236,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         }
         when (currentTab) {
             "Dashboard" -> dashboard(content, snapshot)
-            "Expenses" -> FinanceUnifiedStatementScreen(this) { refresh() }.renderExpenses(
+            "Expenses" -> FinanceUnifiedStatementScreen(this) { refresh() }.withUnpaidAction { currentTab = "Payments"; refresh() }.renderExpenses(
                 content, snapshot.drafts, expenseFilter,
                 { draft -> showStatementDraftActions(draft) },
                 { showPendingStockTasks() }
@@ -246,7 +245,8 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                 content, snapshot.drafts, { draft -> showStatementDraftActions(draft) }
             )
             "Purchase" -> purchaseScreen?.apply { bindToolbar(header); render(content) }
-            "Reports" -> unavailable(content, "Reports", "Financial reports are coming soon.")
+            "Manpower" -> FinanceManpowerDirectoryScreen(this) { refresh() }.render(content)
+            "Reports" -> FinanceMonthlyExpenseReportScreen(this).render(content, snapshot.drafts)
         }
         val contentArea = FrameLayout(this)
         if (currentTab == "Purchase") {
@@ -288,7 +288,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         orientation = LinearLayout.HORIZONTAL
         setPadding(dp(4), dp(4), dp(4), dp(4))
         background = rounded(Color.rgb(250, 251, 252), 0f)
-        val symbols = listOf("⌂", "▤", "⇄", "♙", "▥")
+        val symbols = listOf("⌂", "▤", "♙", "♧")
         tabs.forEachIndexed { index, tab ->
             val selected = currentTab == tab
             val item = LinearLayout(this@FinanceDevSafetyActivity).apply {
@@ -310,6 +310,16 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
     }
 
     private fun dashboard(page: LinearLayout, snapshot: ScreenSnapshot) {
+        page.addView(TextView(this).apply {
+            text = "Reports  ›"
+            textSize = 15f
+            setTextColor(ink)
+            setTypeface(null, Typeface.BOLD)
+            setPadding(dp(15),dp(12),dp(15),dp(12))
+            background = outlinedCard(0xFFF0F3F8.toInt(), 12f)
+            setOnClickListener { currentTab = "Reports"; refresh() }
+        })
+        page.addView(space(12))
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         controls.addView(selector("▦  Demo Property 01  ⌄"), LinearLayout.LayoutParams(0, dp(44), 1.5f))
         controls.addView(spaceHorizontal(10))
@@ -368,17 +378,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         }
         page.addView(draftPanel)
         page.addView(space(10))
-        page.addView(TextView(this).apply {
-            text = "â–£  Fixed Expenses  Â·  Contracts, bills & dues  â€º"
-            textSize = 15f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(navy)
-            gravity = Gravity.CENTER_VERTICAL
-            background = outlinedCard(0xFFEAF8EF.toInt(), 12f)
-            setPadding(dp(16), dp(8), dp(16), dp(8))
-            minHeight = dp(58)
-            setOnClickListener { FinanceFixedExpensesScreen(this@FinanceDevSafetyActivity).show() }
-        })
+
     }
 
     private fun selector(title: String): TextView = label(title, 13f, navy, true).apply {

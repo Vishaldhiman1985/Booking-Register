@@ -222,6 +222,38 @@ internal class FinanceExpenseStockLinkStore(private val context: Context) {
         ), "VERIFIED_PO_ATTACHED")
     }
 
+    /** FINANCE_V18_MANUAL_DELIVERED_PO_MATCH
+     * Records only a manual reference to an already delivered PO. Existing goods
+     * receipts remain the sole source of PO stock quantities. This action does
+     * not certify the supplier invoice or create a second receipt/payment.
+     */
+    fun attachDeliveredOrderByManualMatch(draft: FinanceDemoDraftBill, order: HotelPurchaseOrder) {
+        val before = get(draft.draftId) ?: error("Pending stock task not found; reopen expense")
+        require(before.state == FinanceExpenseStockPolicy.PENDING) { "This stock task has already been completed" }
+        require(draft.status == FinanceDemoDraftPolicy.STATUS_ACTIVE) { "Expense is no longer active" }
+        require(draft.vendorCode == order.vendorId) { "Vendor must match this Purchase Order" }
+        require(order.status == "PLACED") { "Only placed Purchase Orders can be delivered" }
+
+        val delivery = HotelPurchaseSimpleClosureStore(context).get(order.id)
+        require(delivery.closed) { "This Purchase Order has not been marked Delivered" }
+        val finalAmount = delivery.finalAmount ?: error("Delivered order has no final bill amount")
+        require(FinanceExpenseStockPolicy.poAmountInPaise(finalAmount) == draft.amountPaise) {
+            "PO final amount does not match this expense; review the two amounts"
+        }
+        val receiptList = HotelPurchaseGoodsReceiptStore(context).forOrder(order.id)
+        require(receiptList.any { receipt -> receipt.lines.any { it.receivedQuantity > 0.0 } }) {
+            "The delivered PO has no accepted goods quantities"
+        }
+        require(all().none { it.state == FinanceExpenseStockPolicy.LINKED_PO && it.poOrderId == order.id }) {
+            "This Purchase Order is already attached to another expense"
+        }
+        persist(before.copy(
+            state = FinanceExpenseStockPolicy.LINKED_PO,
+            poOrderId = order.id,
+            updatedAtMillis = System.currentTimeMillis()
+        ), "DELIVERED_PO_MANUAL_VENDOR_AMOUNT_MATCH")
+    }
+
     fun synchronizeAfterChange(draft: FinanceDemoDraftBill) {
         val old = get(draft.draftId)
         if (draft.status == FinanceDemoDraftPolicy.STATUS_DISCARDED) {

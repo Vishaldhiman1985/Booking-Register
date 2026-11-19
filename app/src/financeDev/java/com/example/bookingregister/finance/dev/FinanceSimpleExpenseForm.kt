@@ -79,14 +79,13 @@ internal class FinanceSimpleExpenseForm(
         onSave: (FinanceDemoDraftPolicy.DraftInput, String) -> Unit
     ) {
         val oldSelection = initialSelection ?: existing?.expenseTypeCode?.let(catalog::findType)
-        val allCategories = catalog.categories.filter { category ->
-            (visibility.categoryVisible(category) && category.types.any { visibility.typeVisible(category, it) }) ||
-                category.code == oldSelection?.first?.code
-        }
-        if (allCategories.isEmpty()) {
-            Toast.makeText(activity, "Enable an expense category in Global Catalog settings", Toast.LENGTH_LONG).show()
+        if (oldSelection?.first?.code == FinanceExpenseCategoryRules.STAFF_ONLY) {
+            Toast.makeText(activity, "Staff expenses must be managed through Manpower. Existing records remain in Reports for review.", Toast.LENGTH_LONG).show()
             return
         }
+        val propertyId = existing?.propertyId ?: FinanceDemoDraftPolicy.PROPERTY
+        val vendorCategoryPrefs = FinanceVendorExpenseCategories(activity, propertyId)
+        var allCategories: List<SmartExpenseCategory> = emptyList()
         val form = column().apply { setPadding(dp(20), dp(10), dp(20), dp(18)) }
         form.addView(info("FINANCE DEV · Local draft only. Nothing is posted to hotel accounts or stock."))
         form.addView(gap(16))
@@ -97,7 +96,7 @@ internal class FinanceSimpleExpenseForm(
         val vendorOptions = vendors + listOfNotNull(legacyVendorCode?.let { code ->
             FinanceDemoDraftPolicy.vendors.firstOrNull { it.code == code }
         })
-        val vendorNames = listOf("No vendor / payee", "One-time payee") + vendorOptions.map { it.name }
+        val vendorNames = listOf("No Vendor", "Un-Registered Vendor") + vendorOptions.map { it.name }
         val vendor = spinner(vendorNames)
         val previousPayee = existing?.vendorCode.orEmpty()
         val vendorIndex = when {
@@ -105,21 +104,16 @@ internal class FinanceSimpleExpenseForm(
             else -> vendorOptions.indexOfFirst { it.code == previousPayee }.let { if (it < 0) 0 else it + 2 }
         }
         vendor.setSelection(vendorIndex)
-        field(form, "VENDOR / PAYEE", vendor)
-        val oneTimeName = entry("Enter the one-time payee name", previousPayee.removePrefix("one_time:").takeIf {
+        field(form, "VENDOR", vendor)
+        val oneTimeName = entry("Enter un-registered vendor name", previousPayee.removePrefix("one_time:").takeIf {
             previousPayee.startsWith("one_time:")
         }.orEmpty())
         oneTimeName.visibility = if (vendorIndex == 1) View.VISIBLE else View.GONE
         form.addView(oneTimeName)
         form.addView(gap(10))
-        vendor.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                oneTimeName.visibility = if (position == 1) View.VISIBLE else View.GONE
-            }
-        }
 
-        val category = spinner(allCategories.map { it.name })
+
+        val category = spinner(listOf("Choose expense category"))
         field(form, "CA CATEGORY  *", category)
         val type = spinner(listOf("Choose expense type"))
         field(form, "EXPENSE TYPE  *", type)
@@ -157,24 +151,121 @@ internal class FinanceSimpleExpenseForm(
                 syncStockInfo(selected, changed)
             }
         }
+        fun categoriesForCurrentVendor(): List<SmartExpenseCategory> {
+            val vendorCode = vendorOptions.getOrNull(vendor.selectedItemPosition - 2)?.code
+            val assigned = vendorCode?.let { vendorCategoryPrefs.allowed(it) }
+            return catalog.categories.filter { ca ->
+                ca.code != FinanceExpenseCategoryRules.STAFF_ONLY &&
+                    ((this@FinanceSimpleExpenseForm.visibility.categoryVisible(ca) && ca.types.any { this@FinanceSimpleExpenseForm.visibility.typeVisible(ca, it) }) ||
+                        (existing != null && ca.code == oldSelection?.first?.code)) &&
+                    (vendorCode == null || ca.code in (assigned ?: emptySet()) ||
+                        (existing != null && existing.vendorCode == vendorCode && ca.code == oldSelection?.first?.code))
+            }
+        }
         fun updateTypes(position: Int, preferCode: String? = null) {
-            val ca = allCategories[position]
-            visibleTypes = ca.types.filter { visibility.typeVisible(ca, it) || it.code == oldSelection?.second?.code }
-            type.adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item, visibleTypes.map { it.name })
-            val selectedIndex = visibleTypes.indexOfFirst { it.code == preferCode }
-            type.setSelection(if (selectedIndex >= 0) selectedIndex else 0)
-            syncStockInfo(visibleTypes.getOrNull(type.selectedItemPosition), ca.code != oldSelection?.first?.code)
+            val ca = allCategories.getOrNull(position)
+            visibleTypes = if (ca == null) emptyList() else ca.types.filter {
+                this@FinanceSimpleExpenseForm.visibility.typeVisible(ca, it) || (existing != null && it.code == oldSelection?.second?.code)
+            }
+            type.adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item,
+                if (visibleTypes.isEmpty()) listOf("Select category first") else visibleTypes.map { it.name })
+            type.isEnabled = visibleTypes.isNotEmpty()
+            if (visibleTypes.isNotEmpty()) {
+                val selectedIndex = visibleTypes.indexOfFirst { it.code == preferCode }
+                type.setSelection(if (selectedIndex >= 0) selectedIndex else 0)
+            }
+            syncStockInfo(visibleTypes.getOrNull(type.selectedItemPosition), ca?.code != oldSelection?.first?.code)
+        }
+        fun refreshCategories(preferCode: String? = null) {
+            val currentCode = allCategories.getOrNull(category.selectedItemPosition)?.code
+            allCategories = categoriesForCurrentVendor()
+            category.adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item,
+                if (allCategories.isEmpty()) listOf("Choose categories below first") else allCategories.map { it.name })
+            category.isEnabled = allCategories.isNotEmpty()
+            if (allCategories.isNotEmpty()) {
+                val index = allCategories.indexOfFirst { it.code == (preferCode ?: currentCode) }
+                category.setSelection(if (index >= 0) index else 0)
+                val preferredType = if (allCategories[category.selectedItemPosition].code == oldSelection?.first?.code)
+                    oldSelection?.second?.code else null
+                updateTypes(category.selectedItemPosition, preferredType)
+            } else updateTypes(-1)
         }
         category.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val preferred = if (allCategories[position].code == oldSelection?.first?.code) oldSelection?.second?.code else null
+                if (position !in allCategories.indices) return
+                val preferred = if (allCategories[position].code == oldSelection?.first?.code)
+                    oldSelection?.second?.code else null
                 updateTypes(position, preferred)
             }
         }
-        val initialIndex = allCategories.indexOfFirst { it.code == oldSelection?.first?.code }.coerceAtLeast(0)
-        category.setSelection(initialIndex)
-        updateTypes(initialIndex, oldSelection?.second?.code)
+        val propertyOptions = caption("Categories used at this property  ›", 13f, true).apply {
+            setTextColor(teal); setPadding(dp(1), dp(9), dp(1), dp(11)); isClickable = true
+            setOnClickListener {
+                val options = catalog.categories.filter { it.code != FinanceExpenseCategoryRules.STAFF_ONLY }
+                val checked = options.map { this@FinanceSimpleExpenseForm.visibility.categoryVisible(it) }.toBooleanArray()
+                AlertDialog.Builder(activity)
+                    .setTitle("Choose active expense categories")
+                    .setMultiChoiceItems(options.map { it.name }.toTypedArray(), checked) { _, index, isChecked ->
+                        checked[index] = isChecked
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Save") { _, _ ->
+                        if (!checked.any { it }) Toast.makeText(activity, "Keep at least one active category", Toast.LENGTH_LONG).show()
+                        else {
+                            options.forEachIndexed { index, ca -> this@FinanceSimpleExpenseForm.visibility.setCategoryVisible(ca.code, checked[index]) }
+                            refreshCategories()
+                        }
+                    }.show()
+            }
+        }
+        form.addView(propertyOptions)
+        val vendorOptionsAction = caption("Choose categories for this vendor  ›", 13f, true).apply {
+            setTextColor(teal); setPadding(dp(1), dp(9), dp(1), dp(11)); isClickable = true
+            setOnClickListener {
+                val chosenVendor = vendorOptions.getOrNull(vendor.selectedItemPosition - 2) ?: return@setOnClickListener
+                val options = catalog.categories.filter { ca ->
+                    ca.code != FinanceExpenseCategoryRules.STAFF_ONLY && this@FinanceSimpleExpenseForm.visibility.categoryVisible(ca) &&
+                        ca.types.any { this@FinanceSimpleExpenseForm.visibility.typeVisible(ca, it) }
+                }
+                if (options.isEmpty()) {
+                    Toast.makeText(activity, "First select active property categories", Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
+                }
+                val saved = vendorCategoryPrefs.allowed(chosenVendor.code).orEmpty()
+                val checked = options.map { it.code in saved }.toBooleanArray()
+                AlertDialog.Builder(activity)
+                    .setTitle("Allowed categories · ${chosenVendor.name}")
+                    .setMultiChoiceItems(options.map { it.name }.toTypedArray(), checked) { _, index, isChecked ->
+                        checked[index] = isChecked
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Save") { _, _ ->
+                        val allowed = options.filterIndexed { index, _ -> checked[index] }.map { it.code }.toSet()
+                        if (allowed.isEmpty()) Toast.makeText(activity, "Choose at least one vendor category", Toast.LENGTH_LONG).show()
+                        else {
+                            try {
+                                vendorCategoryPrefs.assign(chosenVendor.code, allowed)
+                                refreshCategories()
+                            } catch (error: Exception) {
+                                Toast.makeText(activity, error.message ?: "Vendor category error", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }.show()
+            }
+        }
+        form.addView(vendorOptionsAction)
+        vendor.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                oneTimeName.visibility = if (position == 1) View.VISIBLE else View.GONE
+                vendorOptionsAction.visibility = if (position >= 2) View.VISIBLE else View.GONE
+                refreshCategories(if (existing?.vendorCode == vendorOptions.getOrNull(position - 2)?.code)
+                    oldSelection?.first?.code else null)
+            }
+        }
+        vendorOptionsAction.visibility = if (vendor.selectedItemPosition >= 2) View.VISIBLE else View.GONE
+        refreshCategories(oldSelection?.first?.code)
 
         val amount = entry("0.00", existing?.let {
             FinanceDemoDraftPolicy.moneyText(it.amountPaise).removePrefix("₹")
@@ -242,17 +333,28 @@ internal class FinanceSimpleExpenseForm(
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 try {
-                    val ca = allCategories[category.selectedItemPosition]
+                    val ca = allCategories.getOrNull(category.selectedItemPosition)
+                        ?: error("Choose an allowed expense category. Registered vendors need assigned categories first.")
                     val exType = visibleTypes.getOrNull(type.selectedItemPosition)
                         ?: error("Select a valid expense type")
-                    require(visibility.typeVisible(ca, exType) || exType.code == existing?.expenseTypeCode) {
-                        "This expense type is not enabled"
+                    require(ca.code != FinanceExpenseCategoryRules.STAFF_ONLY) {
+                        "Staff & Employee Benefits is managed in Manpower, not Add Expense"
+                    }
+                    val registeredCode = vendorOptions.getOrNull(vendor.selectedItemPosition - 2)?.code
+                    val allowedVendorCategories = registeredCode?.let { vendorCategoryPrefs.allowed(it)
+                        ?: error("First choose categories for this registered vendor") }
+                    require(FinanceExpenseCategoryRules.permitted(ca.code, allowedVendorCategories)) {
+                        "This category is not assigned to this vendor"
+                    }
+                    require((this@FinanceSimpleExpenseForm.visibility.categoryVisible(ca) && this@FinanceSimpleExpenseForm.visibility.typeVisible(ca, exType)) ||
+                        (existing != null && exType.code == existing.expenseTypeCode && ca.code == oldSelection?.first?.code)) {
+                        "This expense category or type is not enabled for this property"
                     }
                     val selectedPayee = when (vendor.selectedItemPosition) {
                         0 -> "no_payee"
                         1 -> {
                             val text = oneTimeName.text.toString().trim()
-                            require(text.isNotBlank() && text.length <= 120) { "Enter a one-time payee name (max 120 letters)" }
+                            require(text.isNotBlank() && text.length <= 120) { "Enter un-registered vendor name (max 120 letters)" }
                             "one_time:$text"
                         }
                         else -> vendorOptions[vendor.selectedItemPosition - 2].code

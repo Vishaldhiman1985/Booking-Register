@@ -104,7 +104,7 @@ internal class FinanceExpenseStockScreen(private val activity: Activity) {
                 onChanged()
             })
             container.addView(gap(9))
-            container.addView(action("3  Attach Received Purchase Order", "Link an already received and invoice-verified PO; do not duplicate stock receipts.") {
+            container.addView(action("3  Attach Received Purchase Order", "Choose a delivered PO for this vendor with the same final amount. The existing stock receipt is not added again.") {
                 dialog.dismiss(); attachOrder(draft, onChanged)
             })
             dialog = AlertDialog.Builder(activity)
@@ -283,43 +283,96 @@ internal class FinanceExpenseStockScreen(private val activity: Activity) {
         openPicker()
     }
 
+    /** FINANCE_V18_MANUAL_DELIVERED_PO_MATCH
+     * Show ONLY delivered orders belonging to this expense vendor whose final bill
+     * exactly equals the expense amount. The operator picks the order manually.
+     * This selection does not create another goods receipt or verify an invoice.
+     */
     private fun attachOrder(draft: FinanceDemoDraftBill, onChanged: () -> Unit) {
         if (draft.vendorCode == "no_payee" || draft.vendorCode.startsWith("one_time:")) {
             AlertDialog.Builder(activity).setTitle("Registered vendor required")
-                .setMessage("To link an existing Purchase Order, the expense must use that PO's registered vendor. Edit the pending expense and select the vendor first.")
+                .setMessage("Select the same registered vendor used on the delivered Purchase Order.")
                 .setPositiveButton("OK", null).show()
             return
         }
+
         val receipts = HotelPurchaseGoodsReceiptStore(activity)
+        val closures = HotelPurchaseSimpleClosureStore(activity)
         val invoices = HotelPurchaseInvoiceStore(activity)
-        val attached = store.all().filter { it.state == FinanceExpenseStockPolicy.LINKED_PO }.mapNotNull { it.poOrderId }.toSet()
-        val orders = HotelPurchaseOrderStore(activity).all().filter { order ->
-            order.vendorId == draft.vendorCode && order.status == "PLACED" && order.id !in attached &&
-                receipts.forOrder(order.id).any { r -> r.lines.any { it.receivedQuantity > 0 } } &&
-                invoices.isVerifiedFor(order.id, receipts.forOrder(order.id))
-        }
-        if (orders.isEmpty()) {
-            AlertDialog.Builder(activity).setTitle("No verified received orders")
-                .setMessage("Receive the goods and verify the supplier invoice in Purchase first. The expense and PO must use the same vendor.")
+        val linked = store.all().filter { it.state == FinanceExpenseStockPolicy.LINKED_PO }
+            .mapNotNull { it.poOrderId }.toSet()
+
+        val matchingOrders = HotelPurchaseOrderStore(activity).all().filter { order ->
+            val delivery = closures.get(order.id)
+            order.vendorId == draft.vendorCode && order.status == "PLACED" &&
+                delivery.closed && delivery.finalAmount?.let { amount ->
+                    runCatching { FinanceExpenseStockPolicy.poAmountInPaise(amount) }.getOrNull() == draft.amountPaise
+                } == true &&
+                order.id !in linked &&
+                receipts.forOrder(order.id).any { receipt ->
+                    receipt.lines.any { line -> line.receivedQuantity > 0.0 }
+                }
+        }.sortedWith(compareByDescending<HotelPurchaseOrder> { closures.get(it.id).closedAtMillis }
+            .thenBy { it.id })
+
+        if (matchingOrders.isEmpty()) {
+            AlertDialog.Builder(activity).setTitle("No matching delivered Purchase Orders")
+                .setMessage("No unlinked delivered order from this vendor has a final bill of " +
+                    "${FinanceDemoDraftPolicy.moneyText(draft.amountPaise)}. " +
+                    "Check the expense vendor, amount and delivered orders in Purchasing.")
                 .setPositiveButton("OK", null).show()
             return
         }
-        val labels = orders.map { order ->
-            "${order.vendorName} · ${order.id.take(8)}\nVerified ₹${invoices.netAmount(order.id)} · ${receipts.forOrder(order.id).size} receipt(s)"
+
+        val choices = matchingOrders.map { order ->
+            val closed = closures.get(order.id)
+            val deliveredOn = java.time.Instant.ofEpochMilli(closed.closedAtMillis)
+                .atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString()
+            val savedInvoice = invoices.forOrder(order.id).firstOrNull { it.kind == "INVOICE" }
+            val invoiceDetail = savedInvoice?.let { "  |  Bill ${it.invoiceNumber}" }.orEmpty()
+            "PO: ${order.id.take(8)}$invoiceDetail\n" +
+                "Delivered: $deliveredOn  |  ${FinanceDemoDraftPolicy.moneyText(draft.amountPaise)}"
         }
-        AlertDialog.Builder(activity).setTitle("Attach received Purchase Order")
-            .setItems(labels.toTypedArray()) { _, position ->
-                val chosen = orders[position]
-                AlertDialog.Builder(activity).setTitle("Confirm PO link")
-                    .setMessage("This links the verified invoice to the expense draft. Monthly Stock already receives the PO's goods receipts. No quantities will be added again.\n\nExpense: ${draft.draftId.take(8)}\nPO: ${chosen.id.take(8)}")
-                    .setNegativeButton("Cancel", null)
+        var picked = -1
+        val picker = AlertDialog.Builder(activity)
+            .setTitle("Delivered PO · ${matchingOrders.size} matching ${FinanceDemoDraftPolicy.moneyText(draft.amountPaise)}")
+            .setSingleChoiceItems(choices.toTypedArray(), -1) { _, position -> picked = position }
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Review selected PO", null)
+            .create()
+        picker.setOnShowListener {
+            picker.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (picked !in matchingOrders.indices) {
+                    showError("Select the correct Purchase Order first")
+                    return@setOnClickListener
+                }
+                val selected = matchingOrders[picked]
+                val closed = closures.get(selected.id)
+                val deliveredOn = java.time.Instant.ofEpochMilli(closed.closedAtMillis)
+                    .atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString()
+                picker.dismiss()
+                AlertDialog.Builder(activity)
+                    .setTitle("Confirm Purchase Order")
+                    .setMessage("Vendor: ${selected.vendorName}\n" +
+                        "Order no: ${selected.id}\n" +
+                        "Delivered: $deliveredOn\n" +
+                        "Final bill: ${FinanceDemoDraftPolicy.moneyText(draft.amountPaise)}\n" +
+                        "Expense: ${FinanceDemoDraftPolicy.moneyText(draft.amountPaise)}\n\n" +
+                        "Attach this order to the expense? The PO receipt is already included " +
+                        "in stock; no quantities will be added again. " +
+                        "This manual link does not verify the supplier invoice.")
+                    .setNegativeButton("Back") { _, _ -> attachOrder(draft, onChanged) }
                     .setPositiveButton("Attach") { _, _ ->
                         try {
-                            store.attachVerifiedOrder(draft, chosen)
-                            showError("Purchase Order attached. No duplicate stock receipt was created.")
+                            store.attachDeliveredOrderByManualMatch(draft, selected)
+                            showError("Selected Purchase Order linked. No duplicate stock receipt.")
                             onChanged()
-                        } catch (error: Exception) { showError(error.message ?: "Could not link Purchase Order") }
+                        } catch (error: Exception) {
+                            showError(error.message ?: "Could not link selected Purchase Order")
+                        }
                     }.show()
-            }.setNegativeButton("Cancel", null).show()
+            }
+        }
+        picker.show()
     }
 }

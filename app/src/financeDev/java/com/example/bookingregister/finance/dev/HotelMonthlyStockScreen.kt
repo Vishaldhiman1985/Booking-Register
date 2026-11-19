@@ -12,6 +12,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
+import java.time.LocalDate
 import java.time.YearMonth
 import java.util.Locale
 
@@ -155,6 +156,10 @@ class HotelMonthlyStockScreen(private val activity: Activity) {
         dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
     }
 
+    // FINANCE_STOCK_LEDGER_DIRECT_V18: entry points for the Stock Ledger menu.
+    fun editOpening(month: String) { start(month, true) }
+    fun editClosing(month: String) { start(month, false) }
+
     private fun start(month: String, initial: Boolean) {
         try {
             val period = HotelMonthlyStockPolicy.validMonth(month)
@@ -165,7 +170,7 @@ class HotelMonthlyStockScreen(private val activity: Activity) {
                 }
                 require(store.opening(month) == null) { "Opening is inherited from the preceding month. Edit that month's closing to correct it." }
             } else {
-                require(period < YearMonth.now()) { "Select a completed month for closing." }
+                require(period < YearMonth.now() || (period == YearMonth.now() && LocalDate.now().dayOfMonth == period.lengthOfMonth())) { "Close stock on the final calendar day, or afterward if overdue." }
                 if (store.all().any { it.month == month }) { showSummary(month); return }
                 require(store.opening(month) != null) { "First set opening stock for your initial month." }
             }
@@ -504,7 +509,7 @@ class HotelMonthlyStockScreen(private val activity: Activity) {
                 if (initial && !correction) {
                     store.setInitialOpening(month, result)
                     dialog.dismiss()
-                    toast("Opening stock saved. View or edit it from Opening Stock / Stock Ledger.")
+                    toast("Initial month saved; subsequent months inherit approved closing stock."); HotelMonthlyStockLedgerScreen(activity).show(month)
                 } else {
                     val details = linear().apply { padding(this, 16, 8) }
                     val zeroCount = result.count { it.quantity == 0.0 }

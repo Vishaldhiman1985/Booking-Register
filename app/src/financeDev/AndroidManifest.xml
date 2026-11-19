@@ -11,6 +11,9 @@
         android:name="android.permission.INTERNET"
         tools:node="remove" />
 
+    <!-- FINANCE_STOCK_LEDGER_DIRECT_V18: optional monthly-stock notifications in Finance DEV only. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:name="com.example.bookingregister.finance.dev.FinanceDevApplication"
         android:icon="@drawable/ic_finance_dev_launcher"

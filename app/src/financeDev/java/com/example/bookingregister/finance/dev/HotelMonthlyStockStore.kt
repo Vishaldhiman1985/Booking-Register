@@ -4,6 +4,7 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
+import java.time.LocalDate
 import java.time.YearMonth
 import java.time.ZoneId
 
@@ -137,14 +138,16 @@ class HotelMonthlyStockStore(context: Context) {
         require(all().none { it.month < month }) { "Cannot introduce a new initial stock after stock closing has begun" }
         val merged = HotelMonthlyStockPolicy.merge(quantities)
         val root = JSONObject(prefs.getString("initialOpenings", "{}") ?: "{}")
-        require(!root.has(month)) { "Initial opening stock is already saved; use Edit Opening with a reason" }
+                require(!root.has(month)) { "Initial opening stock is already saved; use Edit Opening with a reason" }
+        // FINANCE_STOCK_LEDGER_DIRECT_V18: only one initial month per inventory timeline.
+        require(savedInitialMonths().isEmpty()) { "Initial stock month was already declared. Correct that original month instead." }
         root.put(month, encodeLines(merged))
         check(prefs.edit().putString("initialOpenings", root.toString()).commit()) { "Opening stock was not saved" }
     }
 
     fun approve(month: String, counts: List<HotelStockQuantity>, managerName: String): HotelStockMonth {
         val period = HotelMonthlyStockPolicy.validMonth(month)
-        require(period < YearMonth.now()) { "Only completed months may be closed" }
+        require(period < YearMonth.now() || (period == YearMonth.now() && LocalDate.now().dayOfMonth == period.lengthOfMonth())) { "Closing is allowed on the last calendar day, or afterward when overdue" }
         require(managerName.isNotBlank()) { "Manager name is required" }
         val overdueStock = directReceipts.pendingThroughMonth(month)
         require(overdueStock.isEmpty()) {

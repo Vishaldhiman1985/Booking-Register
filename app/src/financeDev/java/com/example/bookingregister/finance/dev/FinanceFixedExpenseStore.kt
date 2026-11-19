@@ -83,6 +83,9 @@ internal class FinanceFixedExpenseStore(context: Context) : SQLiteOpenHelper(con
         "SELECT id,category_code,category,type_code,type,vendor_id,vendor,department,due_day,start_month,end_month,active FROM fixed_rules ORDER BY active DESC, created_at DESC", convert=::rule)
     fun create(categoryCode: String, category: String, typeCode: String, type: String, vendorId: String, vendor: String, department: String, dueDay: Int, startMonth: String, amountPaise: Long): String {
         require(categoryCode.isNotBlank() && typeCode.isNotBlank() && vendor.isNotBlank() && department.isNotBlank())
+        require(categoryCode != FinanceExpenseCategoryRules.STAFF_ONLY) {
+            "Staff & Employee Benefits must be recorded in Manpower, not recurring expenses"
+        }
         require(amountPaise > 0 && dueDay in 1..31)
         FinanceFixedPolicy.month(startMonth)
         val id = UUID.randomUUID().toString()

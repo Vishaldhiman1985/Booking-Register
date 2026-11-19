@@ -36,6 +36,10 @@ internal class FinanceUnifiedStatementScreen(
     private val green=Color.rgb(7,111,75)
     private val red=Color.rgb(177,55,67)
     private val amber=Color.rgb(157,99,27)
+    private var onUnpaidClick:()->Unit = {}
+    fun withUnpaidAction(action:()->Unit):FinanceUnifiedStatementScreen {
+        onUnpaidClick=action;return this
+    }
     private val muted=Color.rgb(105,116,132)
     private val surface=Color.rgb(246,248,250)
     private val rule=Color.rgb(228,232,237)
@@ -74,34 +78,47 @@ internal class FinanceUnifiedStatementScreen(
         }
         return store
     }
+    /** Section heading is rendered once in the main Finance toolbar. */
     private fun header(parent:LinearLayout,title:String,detail:String) {
-        parent.addView(row().apply {
-            addView(col().apply {
-                addView(txt(title,23f,true));addView(space(3));addView(txt(detail,12f,false,muted))
-            },LinearLayout.LayoutParams(0,-2,1f))
-            addView(txt("Recurring  ›",13f,true,green).apply {
-                setPadding(dp(6),dp(10),0,dp(10))
-                setOnClickListener { FinanceFixedExpensesScreen(activity,onChanged).show() }
-            })
-        });parent.addView(space(14))
+        parent.addView(space(3))
     }
-    private fun summary(parent:LinearLayout,total:FinanceActivityStore.Overview) {
-        val content=row().apply { background=rounded(surface,15);setPadding(dp(10),dp(13),dp(10),dp(13)) }
-        listOf(Triple("Bills",total.billed,ink),Triple("Paid / settled",total.settled,green),
-            Triple("Unpaid",total.due,red)).forEachIndexed { index,part ->
-            val cell=col().apply {
-                setPadding(dp(6),0,dp(3),0)
-                addView(txt(part.first,10.5f,false,muted));addView(space(5))
-                addView(txt(money(part.second),14.5f,true,part.third).apply { maxLines=2 })
-            }
-            if(index>0) content.addView(View(activity).apply { setBackgroundColor(rule) },LinearLayout.LayoutParams(dp(1),dp(42)))
-            content.addView(cell,LinearLayout.LayoutParams(0,-2,1f))
+    private fun summary(parent:LinearLayout,total:FinanceActivityStore.Overview,
+                        stockCount:Int,onPendingStock:()->Unit) {
+        fun cell(title:String,value:String,color:Int):LinearLayout=col().apply {
+            setPadding(dp(12),dp(12),dp(10),dp(12));background=rounded(surface,13)
+            addView(txt(title,11f,false,muted));addView(space(6))
+            addView(txt(value,16f,true,color))
         }
-        parent.addView(content)
-        parent.addView(space(9))
-        if(total.advances>0L)parent.addView(txt("Unallocated vendor advances: ${money(total.advances)}",12f,true,amber))
-        if(total.revenue!=0L)parent.addView(txt("Imported revenue: ${money(total.revenue)}",12f,true,green))
-        parent.addView(space(14))
+        val first=row()
+        listOf(Triple("Bills",money(total.billed),ink),
+            Triple("Paid / settled",money(total.settled),green),
+            Triple("Unpaid  ›",money(total.due),red)).forEachIndexed { index,part ->
+            if(index>0) first.addView(View(activity),LinearLayout.LayoutParams(dp(6),1))
+            first.addView(cell(part.first,part.second,part.third).apply {
+                if(index==2) {
+                    isClickable=true
+                    contentDescription="Open Unpaid bills in Payments"
+                    setOnClickListener { onUnpaidClick() }
+                }
+            },LinearLayout.LayoutParams(0,-2,1f))
+        }
+        parent.addView(first);parent.addView(space(8))
+        val second=row()
+        second.addView(cell("Ledger  ›","Vendors · Advances",Color.rgb(43,87,151)).apply {
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Open Ledger - Vendor Ledger and Vendor Advances"
+            setOnClickListener { openLedgerHub() }
+        }, LinearLayout.LayoutParams(0,-2,1f))
+        second.addView(View(activity),LinearLayout.LayoutParams(dp(8),1))
+        second.addView(cell("Quantities List",stockCount.toString(),if(stockCount>0)amber else green).apply {
+            setOnClickListener { onPendingStock() }
+        },LinearLayout.LayoutParams(0,-2,1f))
+        parent.addView(second)
+        if(total.revenue!=0L) {
+            parent.addView(space(7));parent.addView(txt("Imported revenue: ${money(total.revenue)}",12f,true,green))
+        }
+        parent.addView(space(15))
     }
     private fun chip(name:String,active:Boolean,click:()->Unit):TextView=txt(name,12f,active,if(active)Color.WHITE else green).apply {
         setPadding(dp(14),dp(9),dp(14),dp(9))
@@ -121,20 +138,21 @@ internal class FinanceUnifiedStatementScreen(
     }
     private fun typeVisible(type:String):Boolean=when(activityFilter) {
         "Bills"->type=="BILL"
-        "Payments"->type=="PAYMENT" || type=="ADJUSTMENT"
-        "Advances"->type=="ADVANCE" || type=="ADJUSTMENT"
+        "Payments"->type=="PAYMENT" || type=="ADJUSTMENT" || type=="REVERSAL"
+        "Advances"->type=="ADVANCE" || type=="ADJUSTMENT" || type=="REVERSAL"
         "Revenue"->type=="REVENUE"
         else->true
     }
     private fun eventColor(type:String)=when(type) {
         "REVENUE"->green
         "PAYMENT","ADJUSTMENT"->green
-        "ADVANCE"->amber
+        "ADVANCE","REVERSAL"->amber
         else->ink
     }
     private fun formatEventAmount(event:FinanceActivityStore.Event):String = when(event.type) {
         "PAYMENT","ADVANCE","ADJUSTMENT"->"−"+money(event.amount)
         "REVENUE"->"+"+money(event.amount)
+        "REVERSAL"->"+"+money(event.amount)
         else->money(event.amount)
     }
     private fun eventRow(parent:LinearLayout,event:FinanceActivityStore.Event,
@@ -163,12 +181,23 @@ internal class FinanceUnifiedStatementScreen(
         },LinearLayout.LayoutParams(0,-2,1f))
         head.addView(col().apply {
             gravity=Gravity.RIGHT
-            addView(txt(formatEventAmount(event),14f,true,eventColor(event.type)).apply {
+            val salaryBill = event.billId?.let(bills::get)?.takeIf {
+                event.type=="BILL" && it.source=="PAYROLL" && it.title.startsWith("Salary ·")
+            }
+            addView(txt(salaryBill?.let { money(it.due) } ?: formatEventAmount(event),14f,true,
+                if(salaryBill!=null) (if(salaryBill.due>0)red else green) else eventColor(event.type)).apply {
                 gravity=Gravity.END;maxLines=2
             })
             if(event.type=="BILL") bills[event.billId]?.let { bill ->
                 addView(space(3))
-                addView(txt("Paid ${money(bill.paid)}",10f,false,green).apply { gravity=Gravity.END })
+                if(salaryBill!=null) {
+                    val applied=store.salarySettlement(bill.id)
+                    addView(txt("Gross expense ${money(bill.amount)}",10f,false,muted).apply { gravity=Gravity.END })
+                    addView(txt("Advance used ${money(applied.advancePaise)}",10f,false,muted).apply { gravity=Gravity.END })
+                    addView(txt("Salary paid ${money(applied.paidLaterPaise)}",10f,false,green).apply { gravity=Gravity.END })
+                } else {
+                    addView(txt("Paid ${money(bill.paid)}",10f,false,green).apply { gravity=Gravity.END })
+                }
                 addView(txt("Due ${money(bill.due)}",10f,true,if(bill.due>0)red else green).apply { gravity=Gravity.END })
             }
         },LinearLayout.LayoutParams(dp(119),-2))
@@ -176,6 +205,7 @@ internal class FinanceUnifiedStatementScreen(
         layout.setOnClickListener {
             val bill=event.billId?.let(bills::get)
             when {
+                event.type=="PAYMENT" || event.type=="ADVANCE" -> showPaymentActions(event,store)
                 bill!=null -> showBillActions(bill,store,openManual)
                 event.vendorId.isNotBlank() -> showVendorLedger(event.vendorId)
             }
@@ -185,9 +215,10 @@ internal class FinanceUnifiedStatementScreen(
     private fun showBillActions(b:FinanceActivityStore.Bill,store:FinanceActivityStore,onManual:(String)->Unit) {
         val choices=buildList {
             add("Bill details and dated payments")
-            if(b.due>0 && !LocalDate.parse(b.dueDate).isAfter(LocalDate.now()))add("Record payment")
-            add("Vendor ledger")
-            if(b.source=="MANUAL")add("Edit / stock / history")
+            if(b.source=="PAYROLL") add("Open Manpower")
+            else if(b.due>0 && !LocalDate.parse(b.dueDate).isAfter(LocalDate.now()))add("Record payment")
+            if(!b.vendorId.startsWith("employee:") && b.vendorId!="no_payee") add("Vendor ledger")
+            if(b.source=="MANUAL")add("Edit / delete draft (reason required)")
         }
         AlertDialog.Builder(activity).setTitle(b.title)
             .setMessage("Bill ${money(b.amount)}\nPaid ${money(b.paid)}\nDue ${money(b.due)}\n${b.status}")
@@ -195,10 +226,45 @@ internal class FinanceUnifiedStatementScreen(
                 when(choices[index]) {
                     "Bill details and dated payments"->showBillHistory(b.id)
                     "Record payment"->showPaymentDialog(b.id)
+                    "Open Manpower"->FinanceSalaryPlannerScreen(activity,onChanged).show()
                     "Vendor ledger"->showVendorLedger(b.vendorId)
                     else->onManual(b.id)
                 }
             }.setNegativeButton("Close",null).show()
+    }
+    private fun showPaymentActions(event:FinanceActivityStore.Event,store:FinanceActivityStore) {
+        val paymentId=store.paymentIdForEvent(event.id)
+        if(paymentId==null) { toast("Payment reference unavailable");return }
+        val employee=event.vendorId.startsWith("employee:")
+        if(employee) {
+            AlertDialog.Builder(activity).setTitle("Employee payment")
+                .setMessage("Manage employee salary payments and allocations in Manpower.")
+                .setPositiveButton("Open Manpower") { _,_->FinanceSalaryPlannerScreen(activity,onChanged).show() }
+                .setNegativeButton("Close",null).show()
+            return
+        }
+        val actions=arrayOf("Open Vendor Ledger","Reverse incorrect payment entry")
+        AlertDialog.Builder(activity).setTitle(event.title).setItems(actions) { _,which ->
+            when(which) {
+                0 -> showVendorLedger(event.vendorId)
+                1 -> {
+                    val form=col().apply { setPadding(dp(18),dp(10),dp(18),dp(10)) }
+                    form.addView(txt("Reversal retains the original transaction and reason. Only use for an erroneous local entry. This does not refund bank money.",12f,false,amber))
+                    form.addView(space(10))
+                    val reason=edit("","Why was this recorded incorrectly?")
+                    field(form,"MANDATORY REVERSAL REASON",reason)
+                    val alert=AlertDialog.Builder(activity).setTitle("Reverse recorded payment?")
+                        .setView(form).setNegativeButton("Cancel",null).setPositiveButton("Reverse",null).create()
+                    alert.setOnShowListener { alert.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                        try {
+                            FinanceActivityStore(activity).use { it.reversePayment(paymentId,reason.text.toString()) }
+                            alert.dismiss();onChanged()
+                        } catch(e:Exception){ toast(e.message?:"Cannot reverse this payment") }
+                    } }
+                    alert.show()
+                }
+            }
+        }.show()
     }
     private fun showBillHistory(billId:String) {
         FinanceActivityStore(activity).use { store ->
@@ -223,20 +289,30 @@ internal class FinanceUnifiedStatementScreen(
             loaded(drafts).use { store ->
                 val today=LocalDate.now()
                 val overview=store.overview(today)
-                summary(parent,overview)
                 val stock=store.bills().count { it.stockPending }
-                if(stock>0) {
-                    parent.addView(txt("$stock purchase(s) need item quantities  ›",12f,true,amber).apply {
-                        setPadding(dp(2),dp(6),0,dp(13));setOnClickListener { onPendingStock() }
-                    })
-                }
+                summary(parent,overview,stock,onPendingStock)
                 val original=store.bills().associateBy { it.id }
                 val draftsById=drafts.associateBy { "manual:${it.draftId}" }
                 activityChips(parent) { renderExpenses(parent,drafts,filter,onManualActions,onPendingStock) }
-                parent.addView(row().apply {
-                    addView(txt("Transactions",17f,true),LinearLayout.LayoutParams(0,-2,1f))
-                    addView(txt(if(filter=="All")"All bills" else filter,11f,false,muted))
-                });parent.addView(space(9))
+                // Do not post unapproved payroll drafts as expense. Show actionable overdue reminder.
+                if(activityFilter=="All" || activityFilter=="Bills") {
+                    val pending=FinancePayrollStore(activity).use { payroll ->
+                        payroll.runs().filter { it.status=="DRAFT" && !LocalDate.parse(it.dueDate).isAfter(today) }
+                            .map { (payroll.employee(it.employeeId)?.name ?: "Employee") to it }
+                    }
+                    if(pending.isNotEmpty()) {
+                        val total=pending.sumOf { it.second.amountPaise }
+                        parent.addView(col().apply {
+                            setPadding(dp(12),dp(11),dp(12),dp(11));background=rounded(surface,12)
+                            addView(txt("Payroll due for approval · ${money(total)}",13f,true,red))
+                            addView(txt(pending.joinToString("  ·  ") { "${it.first} ${it.second.period}" },11f,false,muted))
+                            addView(txt("Not booked in bills until issued. Open Manpower  ›",11f,true,green))
+                            setOnClickListener { FinanceSalaryPlannerScreen(activity,onChanged).show() }
+                        })
+                        parent.addView(space(10))
+                    }
+                }
+                parent.addView(space(6))
                 val shown=store.events().filter { !LocalDate.parse(it.date).isAfter(today) }
                     .filter { typeVisible(it.type) }.filter { e ->
                         val b=e.billId?.let(original::get)
@@ -279,14 +355,10 @@ internal class FinanceUnifiedStatementScreen(
                     setPadding(dp(13),dp(13),dp(13),dp(13));background=rounded(surface,13)
                     addView(txt("Total unpaid bills",12f,false,muted))
                     addView(space(4));addView(txt(money(overview.due),26f,true,if(overview.due>0)red else green))
-                    addView(txt("Vendor advances available ${money(overview.advances)}",12f,false,muted))
+
                 })
                 parent.addView(space(12))
-                val actions=row()
-                actions.addView(chip("Vendor ledgers  ›",false) { showVendorChooser() },LinearLayout.LayoutParams(0,-2,1f))
-                actions.addView(View(activity),LinearLayout.LayoutParams(dp(7),1))
-                actions.addView(chip("+ Vendor advance",false) { showAdvanceDialog() },LinearLayout.LayoutParams(0,-2,1f))
-                parent.addView(actions);parent.addView(space(16))
+                parent.addView(space(15))
                 val due=store.outstanding(today)
                 parent.addView(txt("Bills to be paid",17f,true))
                 parent.addView(space(7))
@@ -309,20 +381,11 @@ internal class FinanceUnifiedStatementScreen(
                     item.addView(row().apply {
                         addView(txt("Bill ${money(bill.amount)} · Paid ${money(bill.paid)}",11f,false,muted),
                             LinearLayout.LayoutParams(0,-2,1f))
-                        addView(chip("Pay  ›",false) { showPaymentDialog(bill.id) })
+                        addView(chip("Pay  ›",false) {
+                            showPaymentDialog(bill.id)
+                        })
                     })
                     parent.addView(item);parent.addView(space(9))
-                }
-                if(overview.advances>0L) {
-                    parent.addView(space(9));parent.addView(txt("Unused vendor advances",17f,true));parent.addView(space(7))
-                    store.payments().filter { it.kind=="ADVANCE" && it.available>0 }.forEach { advance ->
-                        val item=row().apply { setPadding(dp(10),dp(11),dp(10),dp(11)) }
-                        item.addView(col().apply {
-                            addView(txt(advance.vendor,14f,true));addView(txt("${advance.date} · Available ${money(advance.available)}",11f,false,muted))
-                        },LinearLayout.LayoutParams(0,-2,1f))
-                        item.addView(chip("Allocate  ›",false) { showAllocateAdvance(advance.id) })
-                        parent.addView(item);parent.addView(line())
-                    }
                 }
                 parent.addView(space(11))
                 parent.addView(txt("Finance DEV: recording a payment documents a local claim; it does not transfer money or post a journal.",11f,false,muted))
@@ -333,8 +396,12 @@ internal class FinanceUnifiedStatementScreen(
         parent.addView(space(88))
     }
     private fun showPaymentDialog(billId:String) {
+        try { FinanceSalaryDueService.reconcileIssuedAdvances(activity) } catch(error:Exception) {
+            toast("Salary advance review needed: ${error.message}");return
+        }
         FinanceActivityStore(activity).use { store ->
             val bill=store.bill(billId) ?: run { toast("Bill not found");return }
+            // Payroll can be paid directly here; advances are reconciled before bill lookup.
             if(bill.due<=0) { toast("Bill already settled");return }
             val form=col().apply { setPadding(dp(18),dp(7),dp(18),dp(6)) }
             val amount=edit(money(bill.due).removePrefix("₹").replace(",",""),"Amount ₹",true)
@@ -364,7 +431,7 @@ internal class FinanceUnifiedStatementScreen(
     }
     private fun showAdvanceDialog() {
         val vendorChoices=HotelPurchaseVendorStore(activity).all()
-        if(vendorChoices.isEmpty()) { toast("Add a vendor in Purchase > Vendors first");return }
+        if(vendorChoices.isEmpty()) { toast("Add a vendor in Settings > Masters > Vendor Master first");return }
         val form=col().apply { setPadding(dp(18),dp(9),dp(18),dp(6)) }
         val vendor=spinner(vendorChoices.map { it.name })
         val amount=edit("","Amount ₹",true)
@@ -426,39 +493,21 @@ internal class FinanceUnifiedStatementScreen(
                 .setNegativeButton("Close",null).show()
         }
     }
+    // FINANCE_LEDGER_HUB_V18: Shared master and ledger records, no duplicate accounting store.
+    fun openLedgerHub() {
+        FinanceLedgerHubScreen(activity, onChanged, ::showAdvanceDialog, ::showAllocateAdvance).show()
+    }
+    fun openPayeeLedger(vendorId:String) { showVendorLedger(vendorId) }
+    // FINANCE_VENDOR_LEDGER_FULLSCREEN_V18: supplier details use full-screen navigation.
     private fun showVendorLedger(vendorId:String) {
-        FinanceActivityStore(activity).use { store ->
-            val bills=store.bills().filter { it.vendorId==vendorId }
-            val payments=store.payments().filter { it.vendorId==vendorId }
-            val events=store.events().filter { it.vendorId==vendorId }
-                .filter { !LocalDate.parse(it.date).isAfter(LocalDate.now()) }
-                .sortedWith(compareBy<FinanceActivityStore.Event> { it.date }
-                    .thenBy { if(it.type=="BILL")0 else if(it.type=="ADVANCE")1 else 2 }.thenBy { it.id })
-            val due=bills.filter { !LocalDate.parse(it.date).isAfter(LocalDate.now()) }.sumOf { it.due }
-            val credit=payments.filter { it.kind=="ADVANCE" }.sumOf { it.available }
-            val name=bills.firstOrNull()?.vendor ?: payments.firstOrNull()?.vendor ?: "Vendor"
-            val container=col().apply { setPadding(dp(16),dp(10),dp(16),dp(12)) }
-            container.addView(txt("Outstanding bills ${money(due)}",17f,true,if(due>0)red else green))
-            container.addView(txt("Unallocated advances ${money(credit)}",13f,false,amber))
-            container.addView(space(14))
-            if(events.isEmpty())container.addView(txt("No dated transactions.",13f,false,muted))
-            var running=0L
-            events.forEach { event ->
-                if(event.type=="BILL") running=Math.addExact(running,event.amount)
-                if(event.type=="PAYMENT" || event.type=="ADJUSTMENT") running=Math.subtractExact(running,event.amount)
-                val row=col().apply { setPadding(0,dp(7),0,dp(7)) }
-                row.addView(txt("${event.date} · ${event.title}",12f,true))
-                row.addView(txt("${formatEventAmount(event)} · ${event.detail}",11f,false,eventColor(event.type)))
-                row.addView(txt("Payables after dated events: ${money(running)}",10f,false,muted))
-                container.addView(row);container.addView(line())
-            }
-            if(bills.any { it.openingPaid>0 }) {
-                container.addView(space(10))
-                container.addView(txt("Earlier manual payment totals lack dates; they are included in dues but not assigned a fictitious transaction date. Running balances above omit these undated opening settlements.",11f,false,amber))
-            }
-            AlertDialog.Builder(activity).setTitle("Vendor Ledger · $name")
-                .setView(ScrollView(activity).apply { addView(container) })
-                .setPositiveButton("Close",null).show()
+        if(vendorId.startsWith("employee:")) {
+            FinanceSalaryPlannerScreen(activity,onChanged).showForEmployee(vendorId.removePrefix("employee:"))
+            return
         }
+        if(vendorId.isBlank() || vendorId=="no_payee") {
+            toast("No vendor associated with this entry")
+            return
+        }
+        FinanceLedgerHubScreen(activity, onChanged, ::showAdvanceDialog, ::showAllocateAdvance).showVendor(vendorId)
     }
 }

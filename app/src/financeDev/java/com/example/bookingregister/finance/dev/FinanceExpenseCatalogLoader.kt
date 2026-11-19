@@ -44,20 +44,30 @@ internal object FinanceExpenseCatalogLoader {
 }
 
 /** Display preferences only; accounting codes and historical entries are never changed. */
-internal class FinanceExpenseVisibility(context: Context) {
+internal class FinanceExpenseVisibility(
+    context: Context,
+    private val propertyId: String = FinanceDemoDraftPolicy.PROPERTY
+) {
     private val prefs = context.getSharedPreferences("finance_dev_expense_visibility_v1", Context.MODE_PRIVATE)
+    private fun scopeKey(name: String) = "property:${propertyId.length}:$propertyId:$name"
 
     fun categoryVisible(category: SmartExpenseCategory): Boolean =
-        prefs.getBoolean("category_${category.code}", category.visibleByDefault)
+        prefs.getBoolean(scopeKey("category_${category.code}"),
+            prefs.getBoolean("category_${category.code}", category.visibleByDefault))
 
     fun typeVisible(category: SmartExpenseCategory, type: SmartExpenseType): Boolean =
-        categoryVisible(category) && prefs.getBoolean("type_${type.code}", type.enabledByDefault)
+        categoryVisible(category) && prefs.getBoolean(scopeKey("type_${type.code}"),
+            prefs.getBoolean("type_${type.code}", type.enabledByDefault))
 
     fun setCategoryVisible(code: String, visible: Boolean) {
-        prefs.edit().putBoolean("category_$code", visible).apply()
+        check(prefs.edit().putBoolean(scopeKey("category_$code"), visible).commit()) {
+            "Could not save property category visibility"
+        }
     }
 
     fun setTypeVisible(code: String, visible: Boolean) {
-        prefs.edit().putBoolean("type_$code", visible).apply()
+        check(prefs.edit().putBoolean(scopeKey("type_$code"), visible).commit()) {
+            "Could not save property type visibility"
+        }
     }
 }
