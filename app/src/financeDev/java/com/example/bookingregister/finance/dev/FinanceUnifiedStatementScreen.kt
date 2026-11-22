@@ -291,6 +291,25 @@ internal class FinanceUnifiedStatementScreen(
                 val overview=store.overview(today)
                 val stock=store.bills().count { it.stockPending }
                 summary(parent,overview,stock,onPendingStock)
+                val monthlyLeaseTaxDue = try {
+                    val recurringRentBills = FinanceFixedExpenseStore(activity).use { fixed ->
+                        fixed.issueThrough(YearMonth.now()); fixed.bills()
+                    }
+                    FinanceLeaseTaxStore(activity).use { tax ->
+                        tax.issueForBills(recurringRentBills)
+                        tax.bills().sumOf { it.remainingPaise }
+                    }
+                } catch(error: Exception) {
+                    parent.addView(txt("Rent tax balances need review: ${error.message}",12f,false,red))
+                    null
+                }
+                parent.addView(txt("Rent GST / RCM Due · ${monthlyLeaseTaxDue?.let(::money) ?: "Review"}  ›",14f,true,green).apply {
+                    setPadding(dp(13),dp(12),dp(13),dp(12))
+                    background=rounded(surface,12)
+                    isClickable=true;isFocusable=true
+                    setOnClickListener { FinanceLeaseTaxScreen(activity,onChanged).show() }
+                })
+                parent.addView(space(10))
                 val original=store.bills().associateBy { it.id }
                 val draftsById=drafts.associateBy { "manual:${it.draftId}" }
                 activityChips(parent) { renderExpenses(parent,drafts,filter,onManualActions,onPendingStock) }

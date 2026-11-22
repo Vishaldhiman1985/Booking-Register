@@ -119,6 +119,9 @@ internal class FinanceFixedExpensesScreen(private val activity: AppCompatActivit
         }
         content.addView(hero);content.addView(gap(14))
         content.addView(action("+  Add Fixed Expense",true) { showAdd() });content.addView(gap(12))
+        content.addView(action("Lease & Rent · GST / RCM") {
+            FinanceLeaseTaxScreen(activity) { render() }.show()
+        });content.addView(gap(12))
         content.addView(row().apply {
             addView(action("Refresh Bills") { render() },LinearLayout.LayoutParams(0,dp(45),1f))
             addView(View(activity),LinearLayout.LayoutParams(dp(8),1))
