@@ -208,6 +208,10 @@ internal class FinanceDashboardV19(
             addView(action("View lease dues") { openLease() })
         })
         target.addView(gap(9))
+        target.addView(action("V24 accounting controls") {
+            FinanceV24ControlCenter(activity, drafts).show()
+        })
+        target.addView(gap(9))
         target.addView(action("View reports") { openReports() })
         target.addView(gap(9))
         target.addView(text(
