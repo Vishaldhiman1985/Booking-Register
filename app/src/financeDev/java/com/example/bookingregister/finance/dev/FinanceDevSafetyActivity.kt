@@ -235,7 +235,12 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             setPadding(dp(14), dp(4), dp(14), dp(12))
         }
         when (currentTab) {
-            "Dashboard" -> dashboard(content, snapshot)
+            "Dashboard" -> FinanceDashboardV19(
+                this,
+                { currentTab = "Expenses"; refresh() },
+                { FinanceLeaseTaxScreen(this) { refresh() }.show() },
+                { currentTab = "Reports"; refresh() }
+            ).render(content, snapshot.drafts)
             "Expenses" -> FinanceUnifiedStatementScreen(this) { refresh() }.withUnpaidAction { currentTab = "Payments"; refresh() }.renderExpenses(
                 content, snapshot.drafts, expenseFilter,
                 { draft -> showStatementDraftActions(draft) },

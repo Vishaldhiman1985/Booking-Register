@@ -82,43 +82,47 @@ internal class FinanceUnifiedStatementScreen(
     private fun header(parent:LinearLayout,title:String,detail:String) {
         parent.addView(space(3))
     }
+    /** Bill balances and declared rent taxes: same definitions as Dashboard. */
     private fun summary(parent:LinearLayout,total:FinanceActivityStore.Overview,
-                        stockCount:Int,onPendingStock:()->Unit) {
+                        taxDue:Long?,stockCount:Int,onPendingStock:()->Unit) {
         fun cell(title:String,value:String,color:Int):LinearLayout=col().apply {
-            setPadding(dp(12),dp(12),dp(10),dp(12));background=rounded(surface,13)
-            addView(txt(title,11f,false,muted));addView(space(6))
+            setPadding(dp(10),dp(11),dp(9),dp(11));background=rounded(surface,13)
+            addView(txt(title,11f,false,muted));addView(space(5))
             addView(txt(value,16f,true,color))
         }
-        val first=row()
+        val top=row()
         listOf(Triple("Bills",money(total.billed),ink),
             Triple("Paid / settled",money(total.settled),green),
-            Triple("Unpaid  ›",money(total.due),red)).forEachIndexed { index,part ->
-            if(index>0) first.addView(View(activity),LinearLayout.LayoutParams(dp(6),1))
-            first.addView(cell(part.first,part.second,part.third).apply {
-                if(index==2) {
-                    isClickable=true
-                    contentDescription="Open Unpaid bills in Payments"
+            Triple("Unpaid bills",money(total.due),red)).forEachIndexed { index,part ->
+            if(index>0) top.addView(View(activity),LinearLayout.LayoutParams(dp(6),1))
+            top.addView(cell(part.first,part.second,part.third).apply {
+                if(index==2) { isClickable=true;isFocusable=true
+                    contentDescription="Open bills due for payment"
                     setOnClickListener { onUnpaidClick() }
                 }
             },LinearLayout.LayoutParams(0,-2,1f))
         }
-        parent.addView(first);parent.addView(space(8))
-        val second=row()
-        second.addView(cell("Ledger  ›","Vendors · Advances",Color.rgb(43,87,151)).apply {
-            isClickable = true
-            isFocusable = true
-            contentDescription = "Open Ledger - Vendor Ledger and Vendor Advances"
-            setOnClickListener { openLedgerHub() }
-        }, LinearLayout.LayoutParams(0,-2,1f))
-        second.addView(View(activity),LinearLayout.LayoutParams(dp(8),1))
-        second.addView(cell("Quantities List",stockCount.toString(),if(stockCount>0)amber else green).apply {
-            setOnClickListener { onPendingStock() }
+        parent.addView(top);parent.addView(space(8))
+        val dues=row()
+        val combined = taxDue?.let { Math.addExact(total.due,it) }
+        dues.addView(cell("Total outstanding",combined?.let(::money) ?: "Review",if((combined ?: 0L)>0)red else ink),
+            LinearLayout.LayoutParams(0,-2,1f))
+        dues.addView(View(activity),LinearLayout.LayoutParams(dp(8),1))
+        dues.addView(cell("Rent GST / RCM  ›",taxDue?.let(::money) ?: "Review",amber).apply {
+            isClickable=true;isFocusable=true
+            contentDescription="Open declared rent GST and RCM obligations"
+            setOnClickListener { FinanceLeaseTaxScreen(activity,onChanged).show() }
         },LinearLayout.LayoutParams(0,-2,1f))
-        parent.addView(second)
-        if(total.revenue!=0L) {
-            parent.addView(space(7));parent.addView(txt("Imported revenue: ${money(total.revenue)}",12f,true,green))
-        }
-        parent.addView(space(15))
+        parent.addView(dues);parent.addView(space(9))
+        val links=row()
+        links.addView(chip("Vendors · Advances  ›",false) { openLedgerHub() },
+            LinearLayout.LayoutParams(0,-2,1f))
+        links.addView(View(activity),LinearLayout.LayoutParams(dp(8),1))
+        links.addView(chip("Quantities ($stockCount)  ›",false) { onPendingStock() },
+            LinearLayout.LayoutParams(0,-2,1f))
+        parent.addView(links);parent.addView(space(6))
+        parent.addView(txt("Bill period selected · current outstanding balances; rent tax is separate from expenses.",11f,false,muted))
+        parent.addView(space(12))
     }
     private fun chip(name:String,active:Boolean,click:()->Unit):TextView=txt(name,12f,active,if(active)Color.WHITE else green).apply {
         setPadding(dp(14),dp(9),dp(14),dp(9))
@@ -285,31 +289,42 @@ internal class FinanceUnifiedStatementScreen(
                        onManualActions:(FinanceDemoDraftBill)->Unit,onPendingStock:()->Unit) {
         parent.removeAllViews()
         header(parent,"Finance Statement","Bills · Payments · Adjustments · Revenue")
+        val selection = FinancePeriodSelectionV19(activity).read()
+        FinancePeriodSelectionV19(activity).render(parent) {
+            renderExpenses(parent,drafts,filter,onManualActions,onPendingStock)
+        }
         try {
             loaded(drafts).use { store ->
                 val today=LocalDate.now()
-                val overview=store.overview(today)
-                val stock=store.bills().count { it.stockPending }
-                summary(parent,overview,stock,onPendingStock)
-                val monthlyLeaseTaxDue = try {
-                    val recurringRentBills = FinanceFixedExpenseStore(activity).use { fixed ->
+                // Monthly figures refer to the bill's accounting period, not a filtered payment date.
+                val selectedBills = store.bills().filter { b ->
+                    !LocalDate.parse(b.date).isAfter(today) &&
+                        (selection.allTime || b.period == selection.month.toString())
+                }
+                fun exact(values:List<Long>):Long = values.fold(0L) { a,b -> Math.addExact(a,b) }
+                val billed = exact(selectedBills.map { it.amount })
+                val settled = exact(selectedBills.map { it.paid })
+                val unpaid = exact(selectedBills.map { it.due })
+                val selectedRevenue = if (selection.allTime) store.revenueRecordsAll()
+                    else store.revenueRecords(selection.month.toString())
+                        .filter { !LocalDate.parse(it.date).isAfter(today) }
+                val overview = FinanceActivityStore.Overview(billed,settled,unpaid,0L,
+                    exact(selectedRevenue.map { it.amountPaise }))
+                val stock = selectedBills.count { it.stockPending }
+                val taxDue:Long? = try {
+                    val rents = FinanceFixedExpenseStore(activity).use { fixed ->
                         fixed.issueThrough(YearMonth.now()); fixed.bills()
                     }
                     FinanceLeaseTaxStore(activity).use { tax ->
-                        tax.issueForBills(recurringRentBills)
-                        tax.bills().sumOf { it.remainingPaise }
+                        tax.issueForBills(rents)
+                        exact(tax.bills().filter { selection.allTime || it.month == selection.month.toString() }
+                            .map { it.remainingPaise })
                     }
-                } catch(error: Exception) {
+                } catch(error:Exception) {
                     parent.addView(txt("Rent tax balances need review: ${error.message}",12f,false,red))
                     null
                 }
-                parent.addView(txt("Rent GST / RCM Due · ${monthlyLeaseTaxDue?.let(::money) ?: "Review"}  ›",14f,true,green).apply {
-                    setPadding(dp(13),dp(12),dp(13),dp(12))
-                    background=rounded(surface,12)
-                    isClickable=true;isFocusable=true
-                    setOnClickListener { FinanceLeaseTaxScreen(activity,onChanged).show() }
-                })
-                parent.addView(space(10))
+                summary(parent,overview,taxDue,stock,onPendingStock)
                 val original=store.bills().associateBy { it.id }
                 val draftsById=drafts.associateBy { "manual:${it.draftId}" }
                 activityChips(parent) { renderExpenses(parent,drafts,filter,onManualActions,onPendingStock) }
@@ -335,7 +350,8 @@ internal class FinanceUnifiedStatementScreen(
                 val shown=store.events().filter { !LocalDate.parse(it.date).isAfter(today) }
                     .filter { typeVisible(it.type) }.filter { e ->
                         val b=e.billId?.let(original::get)
-                        (b==null || filter=="All" || b.status==filter)
+                        (selection.allTime || (b?.period ?: e.date.take(7)) == selection.month.toString()) &&
+                            (b==null || filter=="All" || b.status==filter)
                     }
                 if(shown.isEmpty())parent.addView(txt("No transactions in this view.",13f,false,muted))
                 var group=""
@@ -348,9 +364,9 @@ internal class FinanceUnifiedStatementScreen(
                     }
                     eventRow(parent,event,original,{ id -> draftsById[id]?.let(onManualActions) },store)
                 }
-                if(overview.revenue==0L) {
+                if(selectedRevenue.isEmpty()) {
                     parent.addView(space(13))
-                    parent.addView(txt("Booking Register revenue sync is not connected yet. No revenue figures have been invented.",11f,false,muted))
+                    parent.addView(txt("No locally imported revenue for this period. Live Booking Register revenue sync is not connected.",11f,false,muted))
                 }
                 if(original.values.any { it.openingPaid>0 }) {
                     parent.addView(space(9))
@@ -366,19 +382,21 @@ internal class FinanceUnifiedStatementScreen(
                        onManualPreview:(FinanceDemoDraftBill)->Unit) {
         parent.removeAllViews()
         header(parent,"Payments & Dues","One bill · one balance · pay any outstanding amount")
+        val selection = FinancePeriodSelectionV19(activity).read()
+        FinancePeriodSelectionV19(activity).render(parent) { renderPayments(parent,drafts,onManualPreview) }
         try {
             loaded(drafts).use { store ->
                 val today=LocalDate.now()
-                val overview=store.overview(today)
+                val due=store.outstanding(today).filter { selection.allTime || it.period == selection.month.toString() }
+                val dueNow=due.fold(0L) { amount,bill -> Math.addExact(amount,bill.due) }
                 parent.addView(col().apply {
                     setPadding(dp(13),dp(13),dp(13),dp(13));background=rounded(surface,13)
-                    addView(txt("Total unpaid bills",12f,false,muted))
-                    addView(space(4));addView(txt(money(overview.due),26f,true,if(overview.due>0)red else green))
-
+                    addView(txt("Bills due now · ${selection.periodLabel}",12f,false,muted))
+                    addView(space(4))
+                    addView(txt(money(dueNow),26f,true,if(dueNow>0)red else green))
+                    addView(txt("Not-yet-due bills remain in Statement unpaid totals.",11f,false,muted))
                 })
                 parent.addView(space(12))
-                parent.addView(space(15))
-                val due=store.outstanding(today)
                 parent.addView(txt("Bills to be paid",17f,true))
                 parent.addView(space(7))
                 if(due.isEmpty())parent.addView(txt("No bills are outstanding.",13f,false,muted))

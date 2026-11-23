@@ -382,6 +382,27 @@ internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context
             audit(db,item.sourceId,"REVENUE_IMPORTED","Booking Register · ${item.department} · ${item.date}")
         }
     }
+    /** Read-only monthly revenue import snapshot. Does NOT fetch or authenticate live PMS data. */
+    data class RevenueRecord(val date: String, val department: String, val amountPaise: Long)
+    fun revenueRecords(period: String): List<RevenueRecord> {
+        val start = YearMonth.parse(period).atDay(1).toString()
+        val finish = YearMonth.parse(period).plusMonths(1).atDay(1).toString()
+        return select(readableDatabase, """
+            SELECT revenue_date,department,amount_paise FROM finance_revenue
+            WHERE revenue_date>=? AND revenue_date<? ORDER BY revenue_date,source_id
+        """.trimIndent(), arrayOf(start,finish)) { c ->
+            RevenueRecord(c.getString(0),c.getString(1),c.getLong(2))
+        }
+    }
+
+    /** All locally imported revenue records, for ALL TIME read-only reporting. */
+    fun revenueRecordsAll(): List<RevenueRecord> = select(readableDatabase, """
+        SELECT revenue_date,department,amount_paise FROM finance_revenue
+        WHERE revenue_date<=? ORDER BY revenue_date,source_id
+    """.trimIndent(), arrayOf(LocalDate.now().toString())) { c ->
+        RevenueRecord(c.getString(0),c.getString(1),c.getLong(2))
+    }
+
     fun events():List<Event> {
         val results=mutableListOf<Event>()
         bills().forEach { b ->
