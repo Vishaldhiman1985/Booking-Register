@@ -16,6 +16,7 @@ import java.util.UUID
  */
 internal class FinanceLeaseTaxStore(context: Context) :
     SQLiteOpenHelper(context, "finance_dev_lease_tax_v19.db", null, 1) {
+    private val entryLock = FinancePeriodEntryLock(context.applicationContext)
 
     data class Declaration(
         val ruleId: String, val property: String, val month: String,
@@ -168,6 +169,7 @@ internal class FinanceLeaseTaxStore(context: Context) :
     fun recordPayment(taxBillId: String, amountPaise: Long, paidOn: String,
                       method: String, reference: String) = tx { db ->
         val day = LocalDate.parse(paidOn)
+        entryLock.requireDateOpen(paidOn)
         require(!day.isAfter(LocalDate.now())) { "Future transfers cannot be recorded as paid" }
         require(amountPaise > 0) { "Enter a positive amount" }
         require(method.trim().isNotEmpty() && reference.trim().length >= 3) {

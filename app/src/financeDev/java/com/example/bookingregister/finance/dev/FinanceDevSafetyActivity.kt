@@ -1326,9 +1326,11 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         ).show(existing, initialSelection) { input, editReason ->
             val now = System.currentTimeMillis()
             if (existing == null) {
+                FinancePeriodEntryLock(this).requireDateOpen(input.invoiceDate)
                 val row = FinanceDemoDraftPolicy.create(input, UUID.randomUUID().toString(), now)
                 persistCreate(row)
             } else {
+                FinancePeriodEntryLock(this).requireEditOpen(existing.invoiceDate, input.invoiceDate)
                 val row = FinanceDemoDraftPolicy.edit(existing, input, editReason, now)
                 FinanceExpenseStockPolicy.requireEditable(existing, row,
                     FinanceExpenseStockLinkStore(this).get(existing.draftId))
@@ -1360,6 +1362,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                     val reasonText = reason.text.toString()
                     FinanceExpenseStockPolicy.requireDiscardable(
                         FinanceExpenseStockLinkStore(this@FinanceDevSafetyActivity).get(draft.draftId))
+                    FinancePeriodEntryLock(this@FinanceDevSafetyActivity).requireDateOpen(draft.invoiceDate)
                     val row = FinanceDemoDraftPolicy.discard(
                         original = draft,
                         reason = reasonText,
@@ -1380,6 +1383,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 withContext(Dispatchers.IO) {
+                    FinancePeriodEntryLock(applicationContext).requireDateOpen(row.invoiceDate)
                     localDatabase.drafts().createWithEvent(row, FinanceDemoDraftPolicy.createdEvent(row))
                 }
                 var pending = false
@@ -1403,6 +1407,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 withContext(Dispatchers.IO) {
+                    FinancePeriodEntryLock(applicationContext).requireDateOpen(row.invoiceDate)
                     localDatabase.drafts().replaceWithEvent(row, event)
                 }
                 try {

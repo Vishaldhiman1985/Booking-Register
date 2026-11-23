@@ -260,6 +260,7 @@ internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context
     /** All new bill settlements are written HERE; one bank/UPI payment, one allocation. */
     fun payBill(billId:String,amount:Long,date:String,method:String,reference:String):String = transaction { db ->
         val dateValue=LocalDate.parse(date)
+        FinancePeriodEntryLock(contextForStore).requireDateOpen(date)
         require(!dateValue.isAfter(LocalDate.now())) { "Future payments cannot be marked as completed" }
         require(method.trim().isNotEmpty())
         val b=select(db,"SELECT vendor_id,vendor,amount_paise,opening_paid,bill_date FROM finance_bills WHERE id=?",arrayOf(billId)) {
@@ -281,6 +282,7 @@ internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context
     fun advance(vendorId:String,vendor:String,amount:Long,date:String,method:String,reference:String):String = transaction { db ->
         require(vendorId.isNotBlank() && vendor.isNotBlank() && amount>0)
         require(!LocalDate.parse(date).isAfter(LocalDate.now()))
+        FinancePeriodEntryLock(contextForStore).requireDateOpen(date)
         checkDuplicateReference(db,vendorId,method,reference)
         val id=UUID.randomUUID().toString()
         newPayment(db,id,null,vendorId,vendor,date,amount,method,reference,"ADVANCE")
@@ -310,6 +312,7 @@ internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context
     /** Apply an earlier advance to a specific bill, without recording a second cash payment. */
     fun allocateAdvance(paymentId:String,billId:String,amount:Long,appliedOn:String):Unit = transaction { db ->
         require(!LocalDate.parse(appliedOn).isAfter(LocalDate.now()))
+        FinancePeriodEntryLock(contextForStore).requireDateOpen(appliedOn)
         val p=select(db,"SELECT vendor_id,kind,amount_paise FROM finance_payments WHERE id=?",arrayOf(paymentId)) {
             Triple(it.getString(0),it.getString(1),it.getLong(2))
         }.singleOrNull() ?: error("Advance not found")
@@ -340,6 +343,7 @@ internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context
      * No actual bank refund, journal entry or transfer occurs here.
      * Legacy fixed-bill payments are immutable until corrected in their original source. */
     fun reversePayment(paymentId:String,reason:String) = transaction { db ->
+        FinancePeriodEntryLock(contextForStore).requireDateOpen(LocalDate.now().toString())
         require(reason.trim().length>=8) { "Provide a specific reversal reason (at least 8 characters)" }
         val payment=select(db,"SELECT source_id,kind,vendor_id,amount_paise FROM finance_payments WHERE id=?",arrayOf(paymentId)) {
             listOf(if(it.isNull(0)) "" else it.getString(0),it.getString(1),it.getString(2),it.getLong(3).toString())

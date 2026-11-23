@@ -11,6 +11,7 @@ import java.util.UUID
 
 /** Isolated on-device DEV ledger. Not a production journal, tax engine or bank payment. */
 internal class FinanceFixedExpenseStore(context: Context) : SQLiteOpenHelper(context, "finance_dev_fixed_expenses_v16.db", null, 1) {
+    private val entryLock = FinancePeriodEntryLock(context.applicationContext)
     data class Rule(
         val id: String, val categoryCode: String, val category: String, val typeCode: String,
         val type: String, val vendorId: String, val vendor: String, val department: String,
@@ -172,6 +173,7 @@ internal class FinanceFixedExpenseStore(context: Context) : SQLiteOpenHelper(con
     fun pay(billId:String,amount:Long,date:String,method:String,reference:String):String {
         require(amount>0 && method.trim().isNotBlank())
         LocalDate.parse(date)
+        entryLock.requireDateOpen(date)
         val id=UUID.randomUUID().toString()
         tx { db ->
             val rows=select(db,"""SELECT b.amount_paise,COALESCE((SELECT SUM(p.amount_paise) FROM fixed_payments p WHERE p.bill_id=b.id),0) FROM fixed_bills b WHERE b.id=?""",arrayOf(billId)){c->c.getLong(0) to c.getLong(1)}

@@ -158,7 +158,7 @@ internal class FinanceV24ControlCenter(
                 val outcome = withContext(Dispatchers.IO) { runCatching { load(month) } }
                 if (request != token || activity.isFinishing || activity.isDestroyed || !alert.isShowing) return@launch
                 body.removeAllViews()
-                outcome.fold(onSuccess = { report -> render(body, report) }, onFailure = { error ->
+                outcome.fold(onSuccess = { report -> render(body, report) { refresh() } }, onFailure = { error ->
                     body.addView(text("Unable to reconcile: ${error.message ?: "Local ledger error"}", 13f, true, red))
                 })
             }
@@ -171,7 +171,7 @@ internal class FinanceV24ControlCenter(
         refresh()
     }
 
-    private fun render(body: LinearLayout, report: FinanceV24Reconciliation.Report) {
+    private fun render(body: LinearLayout, report: FinanceV24Reconciliation.Report, onRefresh: () -> Unit) {
         val source = panel()
         source.addView(text("V20 | Payables and advances", 15f, true))
         line(source, "Expense bills", money(report.billsPaise))
@@ -253,6 +253,7 @@ internal class FinanceV24ControlCenter(
                                     reviewsStore.save(report.month,report.fingerprint,reason.text.toString())
                                     dismiss()
                                     Toast.makeText(activity,"Local review snapshot saved",Toast.LENGTH_LONG).show()
+                                    onRefresh()
                                 } catch (error:Exception) { reason.error = error.message ?: "Enter review note" }
                             }
                         }
@@ -261,6 +262,55 @@ internal class FinanceV24ControlCenter(
             }
         }
         controls.addView(save)
+        controls.addView(gap(9))
+        val entryLock = FinancePeriodEntryLock(activity.applicationContext)
+        val locked = entryLock.isLocked(report.month)
+        val pastPeriod = YearMonth.parse(report.month).isBefore(YearMonth.now())
+        controls.addView(text(
+            if (locked) "PROVISIONAL ENTRY LOCK ACTIVE for ${report.month}"
+            else "Provisional entry lock: inactive for ${report.month}",
+            13f, true, if (locked) amber else muted))
+        controls.addView(text(
+            "Scope: manual expense drafts and dated payments in this month only. " +
+                "Payroll, stock, purchase orders, recurring issuance and imported revenue remain editable. " +
+                "This is NOT a final period close.", 11f, false, amber))
+        val canLock = pastPeriod && prior == report.fingerprint && report.reconciliationPass
+        val toggle = Button(activity).apply {
+            text = if (locked) "Reopen provisional entries" else "Lock manual and cash entries (provisional)"
+            isAllCaps = false
+            isEnabled = locked || canLock
+            setOnClickListener {
+                val note = EditText(activity).apply {
+                    hint = "Reason / reviewer note (8+ characters)"
+                    minLines = 2
+                    maxLines = 3
+                }
+                AlertDialog.Builder(activity)
+                    .setTitle(if (locked) "Reopen provisional entries" else "Apply provisional entry lock")
+                    .setMessage("Only manual drafts and payment dates are protected. No month is posted or finally closed.")
+                    .setView(note)
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton(if (locked) "Reopen" else "Lock", null)
+                    .create().apply {
+                        setOnShowListener {
+                            getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                                try {
+                                    entryLock.setLocked(report.month, !locked, report.fingerprint, note.text.toString())
+                                    dismiss()
+                                    onRefresh()
+                                } catch (error: Exception) {
+                                    note.error = error.message ?: "Cannot change provisional lock"
+                                }
+                            }
+                        }
+                        show()
+                    }
+            }
+        }
+        controls.addView(toggle)
+        if (!locked && !canLock) controls.addView(text(
+            "To lock: select a past month, resolve blockers and save a matching review snapshot first.",
+            11f, false, muted))
         body.addView(controls)
         body.addView(gap(12))
     }
