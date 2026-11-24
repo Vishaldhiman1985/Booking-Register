@@ -204,7 +204,12 @@ internal class FinanceV24ControlCenter(
         labour.addView(text(if (report.stock?.approved == true)
             "Stock month approved | ${report.stock?.itemCount} closing item lines"
             else "Stock month not approved or not recorded", 12f))
-        labour.addView(text("Stock consumption quantities may be available, but monetary valuation is not yet certified.", 11f, false, muted))
+        labour.addView(text("V22 supports evidence-backed cost previews; no inventory cost is posted or CA-certified.", 11f, false, muted))
+        labour.addView(Button(activity).apply {
+            text = "Open V22 stock valuation & payroll checks"
+            isAllCaps = false
+            setOnClickListener { FinanceV22StockValuationScreen(activity).show(report.month) }
+        })
         body.addView(labour); body.addView(gap(9))
 
         val profit = panel()
@@ -277,7 +282,7 @@ internal class FinanceV24ControlCenter(
             13f, true, if (locked) amber else muted))
         controls.addView(text(
             "Scope: manual expense drafts, V21 tax documents and dated payments in this month only. " +
-                "Payroll, stock, purchase orders, recurring issuance and imported revenue remain editable. " +
+                "Payroll runs, physical stock, purchase orders, recurring issuance and imported revenue remain editable. V22 item cost evidence respects the provisional lock. " +
                 "This is NOT a final period close.", 11f, false, amber))
         val canLock = pastPeriod && prior == report.fingerprint && report.reconciliationPass
         val toggle = Button(activity).apply {
