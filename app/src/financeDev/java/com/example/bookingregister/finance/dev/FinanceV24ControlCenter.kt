@@ -190,6 +190,11 @@ internal class FinanceV24ControlCenter(
         line(tax, "GST payable to landlord", money(report.landlordGstDuePaise))
         tax.addView(text("GST invoices: Yes ${report.gstBillsYes} | No ${report.gstBillsNo} | Unrecorded ${report.gstBillsUnrecorded}", 12f))
         tax.addView(text("TDS/TCS, ITC, GST filing and legal applicability are not calculated in this register.", 11f, false, amber))
+        tax.addView(Button(activity).apply {
+            text = "Open V21 tax document register"
+            isAllCaps = false
+            setOnClickListener { FinanceV21TaxEvidenceScreen(activity).show(report.month) }
+        })
         body.addView(tax); body.addView(gap(9))
 
         val labour = panel()
@@ -271,7 +276,7 @@ internal class FinanceV24ControlCenter(
             else "Provisional entry lock: inactive for ${report.month}",
             13f, true, if (locked) amber else muted))
         controls.addView(text(
-            "Scope: manual expense drafts and dated payments in this month only. " +
+            "Scope: manual expense drafts, V21 tax documents and dated payments in this month only. " +
                 "Payroll, stock, purchase orders, recurring issuance and imported revenue remain editable. " +
                 "This is NOT a final period close.", 11f, false, amber))
         val canLock = pastPeriod && prior == report.fingerprint && report.reconciliationPass
@@ -287,7 +292,7 @@ internal class FinanceV24ControlCenter(
                 }
                 AlertDialog.Builder(activity)
                     .setTitle(if (locked) "Reopen provisional entries" else "Apply provisional entry lock")
-                    .setMessage("Only manual drafts and payment dates are protected. No month is posted or finally closed.")
+                    .setMessage("Manual drafts, V21 tax documents and payment dates are protected. No month is posted or finally closed.")
                     .setView(note)
                     .setNegativeButton("Cancel", null)
                     .setPositiveButton(if (locked) "Reopen" else "Lock", null)
