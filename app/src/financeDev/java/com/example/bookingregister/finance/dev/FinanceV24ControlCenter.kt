@@ -64,7 +64,7 @@ internal class FinanceV24ControlCenter(
         parent.addView(r)
     }
 
-    private fun load(month: String): FinanceV24Reconciliation.Report {
+    internal fun load(month: String): FinanceV24Reconciliation.Report {
         val (bills, payments, revenues) = FinanceActivityStore(activity.applicationContext).use { store ->
             store.synchronize(drafts)
             Triple(store.bills().filter { !LocalDate.parse(it.date).isAfter(LocalDate.now()) }.map {
@@ -323,6 +323,11 @@ internal class FinanceV24ControlCenter(
             }
         }
         controls.addView(toggle)
+        controls.addView(Button(activity).apply {
+            text = "Open V24 source-integrity & CA review report"
+            isAllCaps = false
+            setOnClickListener { FinanceV24AuditIntegrityScreen(activity, drafts).show(report.month) }
+        })
         if (!locked && !canLock) controls.addView(text(
             "To lock: select a past month, resolve blockers and save a matching review snapshot first.",
             11f, false, muted))

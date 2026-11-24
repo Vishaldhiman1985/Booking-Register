@@ -31,6 +31,13 @@ internal class FinanceV23CostCenterStore(context: Context) {
     fun get(month: String, source: String): Stored? = JSONObject(prefs.getString("allocations", "{}") ?: "{}")
         .optJSONObject(key(month, source))?.let(::decode)
 
+    /** Expose current period assignments for read-only orphan and drift checks. */
+    fun allForMonth(month: String): List<Stored> {
+        YearMonth.parse(month)
+        val root = JSONObject(prefs.getString("allocations", "{}") ?: "{}")
+        return root.keys().asSequence().mapNotNull { key -> root.optJSONObject(key)?.let(::decode) }
+            .filter { it.month == month }.toList()
+    }
     /** Changing a split requires a reason; amount+ID ties it to the specific source version. */
     fun save(month: String, source: String, amountPaise: Long,
              split: FinanceV23ProfitBridgePolicy.Split, reason: String) {
