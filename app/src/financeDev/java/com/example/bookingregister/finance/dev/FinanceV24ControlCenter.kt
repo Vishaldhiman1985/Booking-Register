@@ -222,6 +222,11 @@ internal class FinanceV24ControlCenter(
             profit.addView(gap(3))
         }
         profit.addView(text("NOT final P&L: stock valuation, complete sales import, allocation and CA treatment are unverified.", 11f, false, amber))
+        profit.addView(Button(activity).apply {
+            text = "Open V23 departmental cost & profit bridge"
+            isAllCaps = false
+            setOnClickListener { FinanceV23ProfitBridgeScreen(activity).show(report.month) }
+        })
         body.addView(profit); body.addView(gap(9))
 
         val controls = panel()
