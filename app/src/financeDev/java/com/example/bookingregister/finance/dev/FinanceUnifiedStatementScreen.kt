@@ -534,6 +534,22 @@ internal class FinanceUnifiedStatementScreen(
     fun openLedgerHub() {
         FinanceLedgerHubScreen(activity, onChanged, ::showAdvanceDialog, ::showAllocateAdvance).show()
     }
+    /** Pay a supplier only through the established V17 payable ledger method. */
+    fun payVendorBills(vendorId:String) {
+        if(vendorId.isBlank() || vendorId == "no_payee" || vendorId.startsWith("employee:")) {
+            toast("Only suppliers can be paid here. Staff payments belong in Manpower.");return
+        }
+        try {
+            FinanceActivityStore(activity).use { store ->
+                val open = store.bills().filter { it.vendorId == vendorId && it.due > 0L }
+                if(open.isEmpty()) { toast("No outstanding vendor bills");return }
+                AlertDialog.Builder(activity).setTitle("Select bill to pay")
+                    .setItems(open.map { "${it.title} · ${it.period} · ${money(it.due)} due" }.toTypedArray()) { _, index ->
+                        showPaymentDialog(open[index].id)
+                    }.setNegativeButton("Cancel",null).show()
+            }
+        } catch(error:Exception) { toast(error.message ?: "Unable to open vendor payments") }
+    }
     fun openPayeeLedger(vendorId:String) { showVendorLedger(vendorId) }
     // FINANCE_VENDOR_LEDGER_FULLSCREEN_V18: supplier details use full-screen navigation.
     private fun showVendorLedger(vendorId:String) {

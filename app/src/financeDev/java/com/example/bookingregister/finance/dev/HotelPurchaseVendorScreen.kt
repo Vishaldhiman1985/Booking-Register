@@ -84,7 +84,15 @@ class HotelPurchaseVendorScreen(private val activity:Activity) {
                 catch(e:Exception){ alert(e.message?:"Unable to update vendor status") }
             }.show()
     }
-    private fun editVendor(parent:LinearLayout,existing:HotelPurchaseVendor?=null) {
+    /** Same vendor master editor reused from the new Vendors tab, never a second vendor database. */
+    fun showCreate(onSaved: () -> Unit) { editVendor(col(), null, onSaved) }
+    fun showEdit(id: String, onSaved: () -> Unit) {
+        val existing = store.allIncludingArchived().firstOrNull { it.id == id }
+            ?: error("Vendor not found in the master; historical payees are read-only")
+        editVendor(col(), existing, onSaved)
+    }
+    private fun editVendor(parent:LinearLayout,existing:HotelPurchaseVendor?=null,
+                           onSaved: () -> Unit = { render(parent) }) {
         val body=col().apply { setPadding(dp(16),dp(12),dp(16),dp(20)) }
         val name=EditText(activity).apply { hint="Vendor / landlord legal name";setText(existing?.name.orEmpty()) }
         val phone=EditText(activity).apply { hint="Phone (optional)";inputType=InputType.TYPE_CLASS_PHONE;setText(existing?.phone.orEmpty()) }
@@ -137,7 +145,7 @@ class HotelPurchaseVendorScreen(private val activity:Activity) {
                         suppliedCategoryIds=existing?.suppliedCategoryIds.orEmpty()+purchaseGroups
                     )
                     store.saveWithTypes(v,selected,reason.text.toString())
-                    dialog.dismiss();render(parent)
+                    dialog.dismiss();onSaved()
                 }catch(e:Exception){alert(e.message?:"Unable to save vendor")}
             }
         }

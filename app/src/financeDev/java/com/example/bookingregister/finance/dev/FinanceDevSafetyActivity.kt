@@ -1,6 +1,8 @@
 package com.example.bookingregister.finance.dev
 
 import android.app.DatePickerDialog
+import android.content.Intent
+import androidx.activity.result.contract.ActivityResultContracts
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -46,8 +48,13 @@ import java.util.Locale
 class FinanceDevSafetyActivity : AppCompatActivity() {
     @Deprecated("Handled for isolated Finance DEV purchasing navigation")
     override fun onBackPressed() {
+        if (currentTab == "Vendors" && selectedVendorId != null) {
+            selectedVendorId = null
+            refresh()
+            return
+        }
         if (currentTab == "Payments" || currentTab == "Reports") {
-            currentTab = if (currentTab == "Payments") "Expenses" else "Dashboard"
+            currentTab = "Expenses"
             refresh()
             return
         }
@@ -55,8 +62,23 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         super.onBackPressed()
     }
     // FINANCE_PURCHASE_STOCK_HOME_V18: Purchasing actions are on page, no header overflow.
-    private val tabs = listOf("Dashboard", "Expenses", "Purchase", "Manpower")
-    private var currentTab = "Dashboard"
+    private val tabs = listOf("Expenses", "Purchase", "Vendors", "Manpower", "Reports")
+    private var currentTab = "Expenses"
+    private var selectedVendorId: String? = null
+    private var vendorCsvContents: String? = null
+    private val vendorCsvLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
+        val text = vendorCsvContents
+        vendorCsvContents = null
+        if (uri != null && text != null) {
+            try {
+                val stream = contentResolver.openOutputStream(uri) ?: error("Cannot open selected destination")
+                stream.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                Toast.makeText(this, "Vendor statement saved", Toast.LENGTH_SHORT).show()
+            } catch (error: Exception) {
+                Toast.makeText(this, "Download failed: ${error.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
     private var purchaseScreen: HotelPurchaseOrderScreen? = null
     private val pageBackgroundColor = Color.rgb(247, 248, 250)
     private val ink = Color.rgb(32, 42, 56)
@@ -89,12 +111,14 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = true
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars = true
         currentTab = savedInstanceState?.getString("finance_dev_tab")
-            ?.takeIf { it in tabs } ?: "Dashboard"
+            ?.takeIf { it in tabs } ?: "Expenses"
+        selectedVendorId = savedInstanceState?.getString("finance_v25_selected_vendor")
         refresh()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("finance_dev_tab", currentTab)
+        outState.putString("finance_v25_selected_vendor", selectedVendorId)
         super.onSaveInstanceState(outState)
     }
 
@@ -175,17 +199,18 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
             setPadding(dp(16), dp(8), dp(16), dp(7))
         }
         val screenTitle = when(currentTab) {
-            "Expenses" -> "Finance Statement"
+            "Expenses" -> "Expenses"
+            "Vendors" -> "Vendors"
             "Payments" -> "Payments & Dues"
             "Purchase" -> "Purchasing"
             "Manpower" -> "Manpower"
             "Reports" -> "Reports"
             else -> "Dashboard"
         }
-        if (currentTab == "Payments" || currentTab == "Reports") {
+        if (currentTab == "Payments") {
             header.addView(label("‹", 26f, ink, true).apply {
                 contentDescription = "Back"
-                setOnClickListener { currentTab = if (currentTab == "Payments") "Expenses" else "Dashboard"; refresh() }
+                setOnClickListener { currentTab = "Expenses"; refresh() }
             }, LinearLayout.LayoutParams(dp(38), dp(42)))
         }
         header.addView(label(screenTitle, 21f, navy, true).apply {
@@ -213,8 +238,10 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                             }
                         }
                         menu.add(0,100,100,"Accounting Standards & Tax Rules")
+                        menu.add(0,101,101,"Masters and recurring settings")
                         setOnMenuItemClickListener { item ->
                             if(item.itemId==100) showAccountingRules()
+                            else if(item.itemId==101) showMasters()
                             else { expenseFilter=expenseFilters[item.itemId];refresh() }
                             true
                         }
@@ -241,17 +268,49 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                 { FinanceLeaseTaxScreen(this) { refresh() }.show() },
                 { currentTab = "Reports"; refresh() }
             ).render(content, snapshot.drafts)
-            "Expenses" -> FinanceUnifiedStatementScreen(this) { refresh() }.withUnpaidAction { currentTab = "Payments"; refresh() }.renderExpenses(
-                content, snapshot.drafts, expenseFilter,
-                { draft -> showStatementDraftActions(draft) },
-                { showPendingStockTasks() }
-            )
+            "Expenses" -> {
+                FinanceUnifiedStatementScreen(this) { refresh() }.withUnpaidAction { currentTab = "Payments"; refresh() }.renderExpenses(
+                    content, snapshot.drafts, expenseFilter,
+                    { draft -> showStatementDraftActions(draft) },
+                    { showPendingStockTasks() }
+                )
+                content.addView(Button(this).apply {
+                    text = "Recurring bills / manage schedules"
+                    isAllCaps = false
+                    setOnClickListener { FinanceFixedExpensesScreen(this@FinanceDevSafetyActivity) { refresh() }.show() }
+                }, 0)
+            }
             "Payments" -> FinanceUnifiedStatementScreen(this) { refresh() }.renderPayments(
                 content, snapshot.drafts, { draft -> showStatementDraftActions(draft) }
             )
             "Purchase" -> purchaseScreen?.apply { bindToolbar(header); render(content) }
+            "Vendors" -> FinanceV25VendorsScreen(
+                this, snapshot.drafts, selectedVendorId,
+                onOpen = { id -> selectedVendorId = id; refresh() },
+                onAdd = { HotelPurchaseVendorScreen(this).showCreate { refresh() } },
+                onEdit = { id -> HotelPurchaseVendorScreen(this).showEdit(id) { refresh() } },
+                onPay = { id -> FinanceUnifiedStatementScreen(this) { refresh() }.payVendorBills(id) },
+                onShare = { statement ->
+                    val share = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, statement)
+                    }
+                    startActivity(Intent.createChooser(share, "Share vendor ledger"))
+                },
+                onDownload = { name, csv ->
+                    vendorCsvContents = csv
+                    vendorCsvLauncher.launch(name)
+                }
+            ).render(content)
             "Manpower" -> FinanceManpowerDirectoryScreen(this) { refresh() }.render(content)
-            "Reports" -> FinanceMonthlyExpenseReportScreen(this).render(content, snapshot.drafts)
+            "Reports" -> {
+                FinanceMonthlyExpenseReportScreen(this).render(content, snapshot.drafts)
+                content.addView(Button(this).apply {
+                    text = "Accounting review / CA records"
+                    isAllCaps = false
+                    setOnClickListener { FinanceV24ControlCenter(this@FinanceDevSafetyActivity, snapshot.drafts).show() }
+                }, 0)
+            }
         }
         val contentArea = FrameLayout(this)
         if (currentTab == "Purchase") {
@@ -293,7 +352,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         orientation = LinearLayout.HORIZONTAL
         setPadding(dp(4), dp(4), dp(4), dp(4))
         background = rounded(Color.rgb(250, 251, 252), 0f)
-        val symbols = listOf("⌂", "▤", "♙", "♧")
+        val symbols = listOf("▤", "♧", "▣", "♙", "▥")
         tabs.forEachIndexed { index, tab ->
             val selected = currentTab == tab
             val item = LinearLayout(this@FinanceDevSafetyActivity).apply {
