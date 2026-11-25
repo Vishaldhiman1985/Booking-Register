@@ -65,6 +65,24 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
     private val tabs = listOf("Expenses", "Purchase", "Vendors", "Manpower", "Reports")
     private var currentTab = "Expenses"
     private var selectedVendorId: String? = null
+
+    /** Period-independent lifetime dues, launched from the period-specific Expenses Dues tile. */
+    fun openV25Payments() {
+        currentTab = "Payments"
+        refresh()
+    }
+
+    /** UI navigation only: all vendor links arrive in the V25 Vendors tab/profile. */
+    fun openV25Vendor(vendorId: String?) {
+        if (vendorId != null && (vendorId.isBlank() || vendorId == "no_payee" || vendorId.startsWith("employee:"))) {
+            Toast.makeText(this, "This payee is not a vendor. Employee records belong in Manpower.", Toast.LENGTH_LONG).show()
+            return
+        }
+        selectedVendorId = vendorId
+        currentTab = "Vendors"
+        paymentVendorIndex = null
+        refresh()
+    }
     private var vendorCsvContents: String? = null
     private val vendorCsvLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
         val text = vendorCsvContents
@@ -111,7 +129,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = true
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars = true
         currentTab = savedInstanceState?.getString("finance_dev_tab")
-            ?.takeIf { it in tabs } ?: "Expenses"
+            ?.takeIf { it in tabs || it == "Payments" } ?: "Expenses"
         selectedVendorId = savedInstanceState?.getString("finance_v25_selected_vendor")
         refresh()
     }
@@ -238,7 +256,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                             }
                         }
                         menu.add(0,100,100,"Accounting Standards & Tax Rules")
-                        menu.add(0,101,101,"Masters and recurring settings")
+                        menu.add(0,101,101,"Masters and settings")
                         setOnMenuItemClickListener { item ->
                             if(item.itemId==100) showAccountingRules()
                             else if(item.itemId==101) showMasters()
@@ -268,20 +286,20 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                 { FinanceLeaseTaxScreen(this) { refresh() }.show() },
                 { currentTab = "Reports"; refresh() }
             ).render(content, snapshot.drafts)
-            "Expenses" -> {
-                FinanceUnifiedStatementScreen(this) { refresh() }.withUnpaidAction { currentTab = "Payments"; refresh() }.renderExpenses(
-                    content, snapshot.drafts, expenseFilter,
-                    { draft -> showStatementDraftActions(draft) },
-                    { showPendingStockTasks() }
-                )
-                content.addView(Button(this).apply {
-                    text = "Recurring bills / manage schedules"
-                    isAllCaps = false
-                    setOnClickListener { FinanceFixedExpensesScreen(this@FinanceDevSafetyActivity) { refresh() }.show() }
-                }, 0)
-            }
-            "Payments" -> FinanceUnifiedStatementScreen(this) { refresh() }.renderPayments(
-                content, snapshot.drafts, { draft -> showStatementDraftActions(draft) }
+            "Expenses" -> FinanceV25ExpensesScreen(
+                this,
+                { refresh() },
+                { showPendingStockTasks() },
+                { draft -> showStatementDraftActions(draft) },
+                { vendorId ->
+                    selectedVendorId = vendorId
+                    currentTab = "Vendors"
+                    paymentVendorIndex = null
+                    refresh()
+                }
+            ).render(content, snapshot.drafts, expenseFilter)
+            "Payments" -> FinanceV25PaymentsDuesScreen(this) { refresh() }.render(
+                content, snapshot.drafts
             )
             "Purchase" -> purchaseScreen?.apply { bindToolbar(header); render(content) }
             "Vendors" -> FinanceV25VendorsScreen(
@@ -289,7 +307,10 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                 onOpen = { id -> selectedVendorId = id; refresh() },
                 onAdd = { HotelPurchaseVendorScreen(this).showCreate { refresh() } },
                 onEdit = { id -> HotelPurchaseVendorScreen(this).showEdit(id) { refresh() } },
-                onPay = { id -> FinanceUnifiedStatementScreen(this) { refresh() }.payVendorBills(id) },
+                onRecurringContracts = { FinanceFixedExpensesScreen(this) { refresh() }.show() },
+                onPay = { id -> FinanceV25PaymentsDuesScreen(this) { refresh() }.openPaymentDialog(id, snapshot.drafts) },
+                onRecordAdvance = { id -> FinanceUnifiedStatementScreen(this) { refresh() }.recordVendorAdvance(id) },
+                onAllocateAdvance = { paymentId -> FinanceUnifiedStatementScreen(this) { refresh() }.allocateVendorAdvance(paymentId) },
                 onShare = { statement ->
                     val share = Intent(Intent.ACTION_SEND).apply {
                         type = "text/plain"
@@ -656,7 +677,7 @@ class FinanceDevSafetyActivity : AppCompatActivity() {
                 }
                 val labels = pending.map { "${it.expenseTypeLabel ?: it.category}  ·  ${formatRupees(it.amountPaise)}  ·  ${it.invoiceDate}" }
                 AlertDialog.Builder(this@FinanceDevSafetyActivity)
-                    .setTitle("Stock Pending · ${pending.size} expense(s)")
+                    .setTitle("Stock Pending - All periods (${pending.size})")
                     .setItems(labels.toTypedArray()) { _, index ->
                         FinanceExpenseStockScreen(this@FinanceDevSafetyActivity).show(pending[index]) { refresh() }
                     }.setNegativeButton("Close", null).show()

@@ -1,6 +1,7 @@
 package com.example.bookingregister.finance.dev
 
 import android.app.Dialog
+import com.example.bookingregister.finance.domain.FinanceV25RecurringGuide
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -20,6 +21,8 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import java.time.LocalDate
 import java.time.YearMonth
 
@@ -90,139 +93,450 @@ internal class FinanceFixedExpensesScreen(private val activity: AppCompatActivit
         }
     }
 
-    private fun render() {
-        try { db.issueThrough(YearMonth.now()) }
-        catch(e:Exception) { notify(e.message?:"Unable to load scheduled bills") }
-        val d=dialog?:return
-        val root=column().apply { setBackgroundColor(this@FinanceFixedExpensesScreen.background) }
-        val header=row().apply { setPadding(dp(18),dp(20),dp(18),dp(14));setBackgroundColor(Color.WHITE) }
-        header.addView(action("‹") { d.dismiss() },LinearLayout.LayoutParams(dp(48),dp(46)))
-        header.addView(column().apply {
-            addView(txt("Fixed Expenses",21f,true));addView(txt("Recurring commitments · Finance DEV",12f,false,muted))
-        },LinearLayout.LayoutParams(0,-2,1f))
-        root.addView(header)
-        val scroller=ScrollView(activity).apply { isFillViewport=false;clipToPadding=false }
-        val content=column().apply { setPadding(dp(16),dp(18),dp(16),dp(28)) }
-        val rules=db.rules()
-        // V17 is the authoritative local balance for both manual and recurring bills.
-        val ledgerBills=FinanceActivityStore(activity).use { ledger ->
-            ledger.synchronize(includeManual=false)
-            ledger.bills().associateBy { it.id }
-        }
-        val bills=db.bills().map { b -> b.copy(paid=ledgerBills[b.id]?.paid ?: b.paid) }
-        val open=bills.filter { it.remaining>0L && !LocalDate.parse(it.dueDate).isAfter(LocalDate.now()) }
-        val overdue=open.filter { LocalDate.parse(it.dueDate).isBefore(LocalDate.now()) }
-        val hero=card().apply { background=rounded(pale,pale,20)
-            addView(txt("OUTSTANDING RECURRING DUES",11f,true,green))
-            addView(gap(5));addView(txt(FinanceFixedPolicy.rupees(open.sumOf{it.remaining}),29f,true))
-            addView(txt("${overdue.size} overdue bills  ·  ${rules.count{it.active}} active schedules",12f,false,muted))
-        }
-        content.addView(hero);content.addView(gap(14))
-        content.addView(action("+  Add Fixed Expense",true) { showAdd() });content.addView(gap(12))
-        content.addView(action("Lease & Rent · GST / RCM") {
-            FinanceLeaseTaxScreen(activity) { render() }.show()
-        });content.addView(gap(12))
-        content.addView(row().apply {
-            addView(action("Refresh Bills") { render() },LinearLayout.LayoutParams(0,dp(45),1f))
-            addView(View(activity),LinearLayout.LayoutParams(dp(8),1))
-            addView(action("Audit History") { showHistory() },LinearLayout.LayoutParams(0,dp(45),1f))
-        });content.addView(gap(18))
-        content.addView(txt("Payment reminders",18f,true));content.addView(gap(4))
-        content.addView(txt("Bills are snapshots. Payments reduce dues, never expense twice.",12f,false,muted));content.addView(gap(9))
-        if(open.isEmpty())content.addView(card().apply {addView(txt("No payment is currently due.",14f,false,muted))})
-        open.take(40).forEach { bill ->
-            content.addView(card().apply {
-                addView(row().apply {
-                    addView(column().apply {
-                        addView(txt(bill.type,15f,true));addView(txt(bill.vendor+"  ·  "+bill.month,12f,false,muted))
-                    },LinearLayout.LayoutParams(0,-2,1f))
-                    addView(txt(FinanceFixedPolicy.rupees(bill.remaining),16f,true,if(LocalDate.parse(bill.dueDate)<LocalDate.now())danger else navy))
-                })
-                addView(gap(9));addView(txt("Due ${bill.dueDate}  ·  ${bill.department}",12f,false,muted));addView(gap(9))
-                addView(action("Record Payment") { showPayment(bill) })
-            });content.addView(gap(9))
-        }
-        content.addView(gap(12));content.addView(txt("Recurring contracts",18f,true));content.addView(gap(9))
-        if(rules.isEmpty())content.addView(card().apply{addView(txt("Create your first recurring obligation above.",14f,false,muted))})
-        rules.forEach { rule ->
-            val current=db.revisions(rule.id).lastOrNull()?.second ?:0L
-            content.addView(card().apply {
-                addView(row().apply {
-                    addView(txt(rule.type,15f,true),LinearLayout.LayoutParams(0,-2,1f))
-                    addView(txt(if(rule.active)"ACTIVE" else "STOPPED",11f,true,if(rule.active)green else muted))
-                })
-                addView(gap(6));addView(txt(rule.vendor+" · "+rule.department,12f,false,muted))
-                addView(txt("Current rate ${FinanceFixedPolicy.rupees(current)}   ·   Due day ${rule.dueDay}",13f,true))
-                addView(txt("From ${rule.startMonth}"+(rule.endMonth?.let { "  ·  Until $it" }?:""),12f,false,muted))
-                if(rule.active){addView(gap(12));addView(row().apply {
-                    addView(action("Change Amount") { showRevision(rule) },LinearLayout.LayoutParams(0,dp(44),1f))
-                    addView(View(activity),LinearLayout.LayoutParams(dp(8),1))
-                    addView(action("Stop") { showStop(rule) },LinearLayout.LayoutParams(0,dp(44),.65f))
-                })}
-            });content.addView(gap(9))
-        }
-        content.addView(gap(10));content.addView(txt("OFFLINE DEV · These are local schedules and payment records, not posted accounting journals.",11f,false,muted))
-        scroller.addView(content);root.addView(scroller,LinearLayout.LayoutParams(-1,0,1f))
-        d.setContentView(root)
-        d.window?.setLayout(WindowManager.LayoutParams.MATCH_PARENT,WindowManager.LayoutParams.MATCH_PARENT)
+    /** V25: contract maintenance lives under Vendors. Bills and settlements stay in Expenses. */
+    private fun contractMoney(paise: Long): String {
+        val raw = java.math.BigDecimal.valueOf(paise, 2).toPlainString()
+        val digits = raw.removePrefix("-").substringBefore(".")
+        val head = digits.dropLast(3)
+        val grouped = if (head.isEmpty()) digits else
+            head.reversed().chunked(2).map { it.reversed() }.asReversed().joinToString(",") +
+                "," + digits.takeLast(3)
+        val cents = if (paise % 100L == 0L) "" else "." + raw.substringAfter(".")
+        return (if (paise < 0L) "-₹" else "₹") + grouped + cents
     }
-    private fun showAdd() {
-        val catalog=FinanceExpenseCatalogLoader.load(activity)
-        val visibility=FinanceExpenseVisibility(activity)
-        val categories=catalog.categories.filter {
-            it.code != FinanceExpenseCategoryRules.STAFF_ONLY && visibility.categoryVisible(it)
+
+    private var showPreviousContracts = false
+
+    private fun render() {
+        // Original bill issuance remains idempotent; no new payable or stock path is introduced.
+        try { db.issueThrough(YearMonth.now()) }
+        catch (error: Exception) { notify(error.message ?: "Unable to refresh recurring contracts") }
+        val d = dialog ?: return
+        val root = column().apply { setBackgroundColor(this@FinanceFixedExpensesScreen.background) }
+        // Full-screen dialog can render edge-to-edge. Reserve the actual status-bar inset
+        // so the back arrow and title never overlap Android's clock / notification icons.
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val statusTop = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
+            view.setPadding(0, statusTop, 0, 0)
+            insets
         }
-        if(categories.isEmpty()) {notify("Enable a non-staff expense category in Add Expense first.");return}
-        val vendors=HotelPurchaseVendorStore(activity).all()
-        if(vendors.isEmpty()){notify("Create a vendor in Settings > Masters > Vendor Master first.");return}
-        val form=column().apply { setPadding(dp(16),dp(12),dp(16),dp(8)) }
-        val category=spinner(categories.map{it.name})
-        val types=spinner(categories.first().types.map{it.name})
-        category.onItemSelectedListener=object:AdapterView.OnItemSelectedListener {
-            override fun onNothingSelected(parent:AdapterView<*>?)=Unit
-            override fun onItemSelected(parent:AdapterView<*>?,view:View?,position:Int,id:Long) {
-                types.adapter=ArrayAdapter(activity,android.R.layout.simple_spinner_dropdown_item,categories[position].types.map{it.name})
-            }
+        val header = row().apply {
+            setPadding(dp(16), dp(16), dp(16), dp(12))
+            setBackgroundColor(Color.WHITE)
         }
-        val vendor=spinner(vendors.map{it.name})
-        vendor.onItemSelectedListener=object:AdapterView.OnItemSelectedListener {
-            override fun onNothingSelected(parent:AdapterView<*>?)=Unit
-            override fun onItemSelected(parent:AdapterView<*>?,view:View?,position:Int,id:Long) {
-                val preferred=HotelPurchaseVendorStore(activity).typeCodes(vendors[position].id)
-                val match=categories.flatMapIndexed { ci,c ->
-                    c.types.mapIndexedNotNull { ti,t -> if(t.code in preferred)Triple(ci,ti,t.code) else null }
-                }.firstOrNull()
-                if(match!=null) {
-                    category.setSelection(match.first)
-                    types.post { types.setSelection(match.second) }
+        header.addView(action("‹") { d.dismiss() }, LinearLayout.LayoutParams(dp(46), dp(44)))
+        header.addView(column().apply {
+            addView(txt("Recurring Contracts", 20f, true))
+            addView(txt("Manage regular vendor commitments", 12f, false, muted))
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        root.addView(header)
+
+        val scroller = ScrollView(activity).apply { isFillViewport = false; clipToPadding = false }
+        val content = column().apply { setPadding(dp(15), dp(16), dp(15), dp(28)) }
+        val rules = db.rules()
+        val active = rules.filter { it.active }.sortedWith(compareBy({ it.vendor.lowercase() }, { it.type.lowercase() }))
+        val previous = rules.filterNot { it.active }.sortedWith(compareBy({ it.vendor.lowercase() }, { it.type.lowercase() }))
+
+        content.addView(action("+ Add Contract", true) { showAdd() })
+        content.addView(gap(19))
+        content.addView(row().apply {
+            addView(txt("Existing Contracts", 18f, true), LinearLayout.LayoutParams(0, -2, 1f))
+            addView(txt("${active.size} active", 12f, true, muted))
+        })
+        content.addView(gap(10))
+
+        if (active.isEmpty()) {
+            content.addView(card().apply {
+                addView(txt("No active contracts. Tap Add Contract to create one.", 13f, false, muted))
+            })
+            content.addView(gap(10))
+        }
+        fun addContract(rule: FinanceFixedExpenseStore.Rule) {
+            val monthlyRate = db.revisions(rule.id).lastOrNull()?.second ?: 0L
+            content.addView(card().apply {
+                addView(row().apply {
+                    addView(txt(rule.type, 16f, true), LinearLayout.LayoutParams(0, -2, 1f))
+                    addView(txt(if (rule.active) "ACTIVE" else "ENDED", 10f, true, if (rule.active) green else muted))
+                })
+                addView(gap(5))
+                addView(txt("${rule.vendor} · ${rule.department}", 12f, false, muted))
+                addView(gap(7))
+                addView(txt("${contractMoney(monthlyRate)} / month", 16f, true))
+                addView(gap(3))
+                addView(txt("Due on day ${rule.dueDay} of each month", 12f, false, muted))
+                if (rule.active) {
+                    addView(gap(10))
+                    addView(row().apply {
+                        addView(action("Edit Contract", true) { showEditContract(rule) }, LinearLayout.LayoutParams(0, dp(44), 1f))
+                        addView(View(activity), LinearLayout.LayoutParams(dp(8), dp(1)))
+                        addView(action("Stop") { showStop(rule) }, LinearLayout.LayoutParams(0, dp(44), .7f))
+                    })
+                } else {
+                    addView(gap(6))
+                    addView(txt("Previous agreement · Ended ${rule.endMonth ?: "before current period"}", 11f, false, muted))
                 }
+            })
+            content.addView(gap(9))
+        }
+        active.forEach(::addContract)
+        if (previous.isNotEmpty()) {
+            content.addView(gap(7))
+            content.addView(action(if (showPreviousContracts) "Hide Previous Contracts" else "View ${previous.size} Previous Contracts") {
+                showPreviousContracts = !showPreviousContracts
+                render()
+            })
+            if (showPreviousContracts) {
+                content.addView(gap(10))
+                previous.forEach(::addContract)
             }
         }
-        val departments=FinanceGlobalCatalogDefaults.departments
-        val dept=spinner(departments)
-        val amount=edit("","₹ Monthly base amount",true)
-        val day=edit("5","1 to 31",true)
-        val start=edit(YearMonth.now().toString(),"YYYY-MM")
-        field(form,"CATEGORY",category);field(form,"EXPENSE TYPE",types)
-        field(form,"VENDOR",vendor);field(form,"DEPARTMENT",dept)
-        field(form,"MONTHLY AMOUNT (EXCLUDING SEPARATELY ACCOUNTED TAX)",amount)
-        field(form,"DUE DAY OF MONTH",day);field(form,"START MONTH (YYYY-MM)",start)
-        form.addView(txt("Recurring bills are generated by month. GST and statutory posting require the future accounting engine.",12f,false,muted))
-        val alert=AlertDialog.Builder(activity).setTitle("New Fixed Expense").setView(ScrollView(activity).apply{addView(form)})
-            .setNegativeButton("Cancel",null).setPositiveButton("Create",null).create()
+        scroller.addView(content)
+        root.addView(scroller, LinearLayout.LayoutParams(-1, 0, 1f))
+        d.setContentView(root)
+        d.window?.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT)
+        ViewCompat.requestApplyInsets(root)
+    }
+    /** V25: vendor-first recurring setup. Same underlying fixed_rules + fixed_bills store. */
+    private fun showAdd() {
+        val catalog = FinanceExpenseCatalogLoader.load(activity)
+        val visibility = FinanceExpenseVisibility(activity)
+        val configurations = FinanceGlobalCatalogSettings(activity)
+        val vendorStore = HotelPurchaseVendorStore(activity)
+        val vendors = vendorStore.all().filterNot { it.id.startsWith("employee:") }
+        if (vendors.isEmpty()) {
+            notify("Add a supplier or landlord in Vendors before setting up a recurring expense.")
+            return
+        }
+        val allCategories = catalog.categories.filter { category ->
+            category.code != FinanceExpenseCategoryRules.STAFF_ONLY &&
+                visibility.categoryVisible(category) &&
+                category.types.any { visibility.typeVisible(category, it) }
+        }
+        if (allCategories.isEmpty()) { notify("No active expense categories are available."); return }
+        val form = column().apply { setPadding(dp(16), dp(12), dp(16), dp(9)) }
+        form.addView(txt("Use this for agreed monthly commitments such as rent, Wi-Fi, software, maintenance contracts or equipment hire.", 13f, false, muted))
+        form.addView(gap(10))
+        val vendor = spinner(vendors.map { it.name })
+        val category = spinner(listOf("Select category"))
+        val type = spinner(listOf("Select expense type"))
+        val detail = txt("", 12f, false, muted)
+        val departments = FinanceGlobalCatalogDefaults.departments
+        val dept = spinner(departments)
+        val amount = edit("", "Amount in rupees", true)
+        val day = edit("5", "Day of month: 1–31", true)
+        val start = edit(YearMonth.now().toString(), "YYYY-MM")
+        fun selectable(c: SmartExpenseCategory, t: SmartExpenseType, assigned: Set<String>): Boolean =
+            if (assigned.isEmpty()) visibility.typeVisible(c, t)
+            else t.code in assigned && visibility.typeSelectableForVendor(c, t)
+
+        var shownCategories = emptyList<SmartExpenseCategory>()
+        var shownTypes = emptyList<SmartExpenseType>()
+
+        fun chosenType(): Pair<SmartExpenseCategory, SmartExpenseType>? {
+            val c = shownCategories.getOrNull(category.selectedItemPosition)
+            val t = shownTypes.getOrNull(type.selectedItemPosition)
+            return if (c != null && t != null) c to t else null
+        }
+        fun updateAdvice() {
+            val chosen = chosenType()
+            if (chosen == null) { detail.text = "Choose a category and expense type."; return }
+            val advice = FinanceV25RecurringGuide.advise(chosen.first.name, chosen.second.name)
+            val settings = configurations.forType(chosen.second.code)
+            detail.text = if (settings.stockable)
+                "This is a stock-tracked expense type. Use the existing Purchase / Stock flow so quantity receipts are not bypassed."
+            else FinanceV25RecurringGuide.hint(advice)
+            detail.setTextColor(if (settings.stockable || advice == FinanceV25RecurringGuide.Advice.MANPOWER_ONLY) danger else muted)
+            val suggestedDept = settings.department
+            val idx = departments.indexOf(suggestedDept)
+            if (idx >= 0) dept.setSelection(idx)
+        }
+        fun refreshTypes() {
+            val c = shownCategories.getOrNull(category.selectedItemPosition)
+            val allowedCodes = vendorStore.typeCodes(vendors[vendor.selectedItemPosition].id)
+            shownTypes = c?.types.orEmpty().filter { t ->
+                selectable(c!!, t, allowedCodes)
+            }.sortedWith(compareBy<SmartExpenseType> {
+                when (FinanceV25RecurringGuide.advise(c!!.name, it.name)) {
+                    FinanceV25RecurringGuide.Advice.RECOMMENDED -> 0
+                    FinanceV25RecurringGuide.Advice.REVIEW -> 1
+                    FinanceV25RecurringGuide.Advice.VARIABLE -> 2
+                    FinanceV25RecurringGuide.Advice.MANPOWER_ONLY -> 3
+                }
+            }.thenBy { it.name })
+            type.adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item, shownTypes.map { it.name })
+            type.isEnabled = shownTypes.isNotEmpty()
+            updateAdvice()
+        }
+        fun refreshCategories() {
+            val allowedCodes = vendorStore.typeCodes(vendors[vendor.selectedItemPosition].id)
+            shownCategories = allCategories.filter { c ->
+                c.types.any { t -> selectable(c, t, allowedCodes) }
+            }.sortedWith(compareBy<SmartExpenseCategory> { c ->
+                if (c.types.any { t -> selectable(c, t, allowedCodes) &&
+                        FinanceV25RecurringGuide.advise(c.name, t.name) == FinanceV25RecurringGuide.Advice.RECOMMENDED }) 0 else 1
+            }.thenBy { it.name })
+            category.adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item, shownCategories.map { it.name })
+            category.isEnabled = shownCategories.isNotEmpty()
+            refreshTypes()
+            if (shownCategories.isEmpty()) {
+                detail.text = "This vendor has no enabled expense types. Open Vendors and edit the vendor categories first."
+            }
+        }
+        vendor.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = refreshCategories()
+        }
+        category.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = refreshTypes()
+        }
+        type.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = updateAdvice()
+        }
+        field(form, "1. VENDOR / LANDLORD", vendor)
+        field(form, "2. EXPENSE CATEGORY", category)
+        field(form, "3. EXPENSE TYPE", type)
+        form.addView(detail); form.addView(gap(13))
+        field(form, "4. FIXED MONTHLY AMOUNT (EXCLUDING SEPARATE TAX)", amount)
+        field(form, "5. DUE DAY EACH MONTH", day)
+        field(form, "6. FIRST MONTH (YYYY-MM)", start)
+        val advanced = column().apply { this.visibility = View.GONE }
+        field(advanced, "DEPARTMENT (SUGGESTED FROM EXPENSE TYPE)", dept)
+        form.addView(action("Change department  ▾") {
+            advanced.visibility = if (advanced.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        })
+        form.addView(advanced)
+        form.addView(gap(12))
+        form.addView(txt("Monthly schedules only. The bill becomes payable; it is never marked paid automatically. Salaries stay in Manpower. Existing stock purchases stay in Purchase/Stock.", 12f, false, muted))
+        refreshCategories()
+
+        val alert = AlertDialog.Builder(activity).setTitle("Add Recurring Expense")
+            .setView(ScrollView(activity).apply { addView(form) })
+            .setNegativeButton("Cancel", null).setPositiveButton("Save Schedule", null).create()
         alert.setOnShowListener {
             alert.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 try {
-                    val c=categories[category.selectedItemPosition]
-                    val t=c.types[types.selectedItemPosition]
-                    val v=vendors[vendor.selectedItemPosition]
-                    db.create(c.code,c.name,t.code,t.name,v.id,v.name,departments[dept.selectedItemPosition],
-                        day.text.toString().toInt(),start.text.toString().trim(),FinanceFixedPolicy.amount(amount.text.toString()))
-                    alert.dismiss();render()
-                } catch(e:Exception){notify(e.message?:"Please check the contract details")}
+                    val selected = chosenType() ?: error("Select a vendor category and expense type first")
+                    val c = selected.first
+                    val t = selected.second
+                    val v = vendors[vendor.selectedItemPosition]
+                    val advice = FinanceV25RecurringGuide.advise(c.name, t.name)
+                    require(advice != FinanceV25RecurringGuide.Advice.MANPOWER_ONLY) {
+                        "Staff salaries and employee benefits must be recorded in Manpower"
+                    }
+                    require(FinanceV25RecurringGuide.permittedForMonthlySchedule(
+                        advice, configurations.forType(t.code).stockable)) {
+                        "Stock-managed expense types must use the original Purchase / Stock flow"
+                    }
+                    val month = YearMonth.parse(start.text.toString().trim())
+                    val amountPaise = FinanceFixedPolicy.amount(amount.text.toString())
+                    val dueDay = day.text.toString().trim().toInt()
+                    require(dueDay in 1..31) { "Choose a due day from 1 to 31" }
+                    require(db.rules().none { rule ->
+                        rule.vendorId == v.id && rule.typeCode == t.code &&
+                            (rule.endMonth == null || !YearMonth.parse(rule.endMonth).isBefore(month))
+                    }) {
+                        "A monthly schedule already covers this vendor and expense type. Change the existing schedule instead."
+                    }
+                    val selectedDepartment = departments[dept.selectedItemPosition]
+                    fun saveOnce() {
+                        try {
+                            // Original authoritative recurring engine: one fixed rule and its idempotent monthly bills.
+                            db.create(c.code, c.name, t.code, t.name, v.id, v.name,
+                                selectedDepartment, dueDay, month.toString(), amountPaise)
+                            alert.dismiss()
+                            render()
+                        } catch (error: Exception) { notify(error.message ?: "Could not save recurring expense") }
+                    }
+                    if (advice == FinanceV25RecurringGuide.Advice.RECOMMENDED) saveOnce()
+                    else AlertDialog.Builder(activity)
+                        .setTitle("Confirm monthly agreement")
+                        .setMessage(FinanceV25RecurringGuide.hint(advice) +
+                            "\n\nCreate a fixed monthly bill for ${v.name} from $month?")
+                        .setNegativeButton("Go back", null)
+                        .setPositiveButton("Create anyway") { _, _ -> saveOnce() }
+                        .show()
+                } catch (error: Exception) { notify(error.message ?: "Check the schedule details") }
             }
-        };alert.show()
+        }
+        alert.show()
     }
+    /** Full contract editing with an effective date and immutable already-issued bills. */
+    private fun showEditContract(rule: FinanceFixedExpenseStore.Rule) {
+        val vendorStore = HotelPurchaseVendorStore(activity)
+        val vendors = vendorStore.all().filterNot { it.id.startsWith("employee:") }
+        val vendorPosition = vendors.indexOfFirst { it.id == rule.vendorId }
+        if (vendorPosition < 0) {
+            notify("This agreement's vendor is archived. Restore the vendor before editing.")
+            return
+        }
+        val catalog = FinanceExpenseCatalogLoader.load(activity)
+        val visibility = FinanceExpenseVisibility(activity)
+        val settings = FinanceGlobalCatalogSettings(activity)
+        val departments = FinanceGlobalCatalogDefaults.departments
+        val form = column().apply { setPadding(dp(16), dp(12), dp(16), dp(10)) }
+        val issued = db.latestBillMonth(rule.id)
+        val earliestMonth = if (issued == null) YearMonth.parse(rule.startMonth)
+                            else maxOf(YearMonth.now().plusMonths(1), issued.plusMonths(1))
+        form.addView(txt(if (issued == null)
+            "No bills have been issued yet. You can correct the agreement directly."
+            else "Existing bills stay unchanged. Your edits will create a new version from the selected future month.",
+            13f, false, muted))
+        form.addView(gap(12))
+        val vendor = spinner(vendors.map { it.name })
+        val category = spinner(emptyList())
+        val type = spinner(emptyList())
+        val dept = spinner(departments)
+        val rate = db.revisions(rule.id).lastOrNull()?.second ?: 0L
+        val amount = edit(FinanceFixedPolicy.rupees(rate).removePrefix("₹"), "Monthly amount ₹", true)
+        val day = edit(rule.dueDay.toString(), "Day 1–31", true)
+        val effective = edit(earliestMonth.toString(), "YYYY-MM")
+        val reason = edit("", "Required: why is this contract changing?")
+        val advice = txt("", 12f, false, muted)
+        var shownCategories = emptyList<SmartExpenseCategory>()
+        var shownTypes = emptyList<SmartExpenseType>()
+        var pendingPreferredType: String? = null
+        var firstVendorSelection = true
+        val selectable: (SmartExpenseCategory, SmartExpenseType, Set<String>) -> Boolean = { c, t, assigned ->
+            if (assigned.isEmpty()) visibility.typeVisible(c, t)
+            else t.code in assigned && visibility.typeSelectableForVendor(c, t)
+        }
+        fun chosen(): Pair<SmartExpenseCategory, SmartExpenseType>? {
+            val c = shownCategories.getOrNull(category.selectedItemPosition)
+            val t = shownTypes.getOrNull(type.selectedItemPosition)
+            return if (c == null || t == null) null else c to t
+        }
+        fun updateAdvice() {
+            val selected = chosen()
+            advice.text = when {
+                selected == null -> "Select an expense category and type."
+                settings.forType(selected.second.code).stockable ->
+                    "Stock-managed expenses must remain in the original Purchase / Stock flow."
+                else -> FinanceV25RecurringGuide.hint(
+                    FinanceV25RecurringGuide.advise(selected.first.name, selected.second.name))
+            }
+        }
+        fun refreshTypes(preferredCode: String? = null) {
+            val c = shownCategories.getOrNull(category.selectedItemPosition)
+            val assigned = vendorStore.typeCodes(vendors[vendor.selectedItemPosition].id)
+            shownTypes = c?.types.orEmpty().filter { t ->
+                c != null && selectable(c, t, assigned)
+            }
+            type.adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item,
+                shownTypes.map { it.name })
+            type.isEnabled = shownTypes.isNotEmpty()
+            val index = shownTypes.indexOfFirst { it.code == preferredCode }
+            if (index >= 0) type.setSelection(index)
+            updateAdvice()
+        }
+        fun refreshCategories(preferredCode: String? = null, preferredTypeCode: String? = null) {
+            val assigned = vendorStore.typeCodes(vendors[vendor.selectedItemPosition].id)
+            shownCategories = catalog.categories.filter { c ->
+                c.code != FinanceExpenseCategoryRules.STAFF_ONLY && visibility.categoryVisible(c) &&
+                    c.types.any { t -> selectable(c, t, assigned) }
+            }
+            pendingPreferredType = preferredTypeCode
+            category.adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item,
+                shownCategories.map { it.name })
+            category.isEnabled = shownCategories.isNotEmpty()
+            val index = shownCategories.indexOfFirst { it.code == preferredCode }
+            if (index >= 0) category.setSelection(index)
+            refreshTypes(preferredTypeCode)
+        }
+        vendor.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (firstVendorSelection && position == vendorPosition) {
+                    firstVendorSelection = false
+                    refreshCategories(rule.categoryCode, rule.typeCode)
+                } else {
+                    firstVendorSelection = false
+                    refreshCategories()
+                }
+            }
+        }
+        category.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val preferred = pendingPreferredType
+                pendingPreferredType = null
+                refreshTypes(preferred)
+            }
+        }
+        type.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = updateAdvice()
+        }
+        field(form, "VENDOR / LANDLORD", vendor)
+        field(form, "CATEGORY", category)
+        field(form, "EXPENSE TYPE", type)
+        form.addView(advice);form.addView(gap(10))
+        field(form, "DEPARTMENT", dept)
+        field(form, "MONTHLY AMOUNT (EXCLUDING SEPARATE TAX)", amount)
+        field(form, "DUE DAY", day)
+        field(form, if (issued == null) "AGREEMENT START MONTH (YYYY-MM)" else "APPLY FROM (YYYY-MM)", effective)
+        field(form, "REASON FOR CHANGE", reason)
+        form.addView(txt("Existing bills, payments and rent GST/RCM obligations will not be changed.",
+            12f, false, muted))
+        // Initialize before showing the form. Delayed Spinner callbacks only refresh dependent menus.
+        vendor.setSelection(vendorPosition)
+        refreshCategories(rule.categoryCode, rule.typeCode)
+        val deptIndex = departments.indexOf(rule.department)
+        if (deptIndex >= 0) dept.setSelection(deptIndex)
+        val alert = AlertDialog.Builder(activity).setTitle("Edit Recurring Contract")
+            .setView(ScrollView(activity).apply { addView(form) })
+            .setNegativeButton("Cancel", null).setPositiveButton("Save Changes", null).create()
+        alert.setOnShowListener {
+            alert.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                try {
+                    val chosen = chosen() ?: error("Select a category and expense type")
+                    val c = chosen.first
+                    val t = chosen.second
+                    val supplier = vendors[vendor.selectedItemPosition]
+                    val guidance = FinanceV25RecurringGuide.advise(c.name, t.name)
+                    require(guidance != FinanceV25RecurringGuide.Advice.MANPOWER_ONLY) {
+                        "Staff and salaries remain in Manpower"
+                    }
+                    require(FinanceV25RecurringGuide.permittedForMonthlySchedule(
+                        guidance, settings.forType(t.code).stockable)) {
+                        "Use Purchase / Stock for stock-tracked expense types"
+                    }
+                    val applied = YearMonth.parse(effective.text.toString().trim())
+                    require(issued != null || !applied.isBefore(YearMonth.now())) {
+                        "The contract must start this month or later"
+                    }
+                    val dueDay = day.text.toString().trim().toInt()
+                    val amountPaise = FinanceFixedPolicy.amount(amount.text.toString())
+                    val selectedDept = departments[dept.selectedItemPosition]
+                    val reasonText = reason.text.toString().trim()
+                    fun performEdit() {
+                        try {
+                            db.editContract(rule, c.code, c.name, t.code, t.name,
+                                supplier.id, supplier.name, selectedDept, dueDay,
+                                applied.toString(), amountPaise, reasonText)
+                            alert.dismiss()
+                            render()
+                        } catch (error: Exception) {
+                            notify(error.message ?: "Could not edit the agreement")
+                        }
+                    }
+                    if (guidance == FinanceV25RecurringGuide.Advice.RECOMMENDED) performEdit()
+                    else AlertDialog.Builder(activity)
+                        .setTitle("Review this monthly agreement")
+                        .setMessage(FinanceV25RecurringGuide.hint(guidance) +
+                            "\n\nSave these changes for ${supplier.name} from $applied?")
+                        .setNegativeButton("Go back", null)
+                        .setPositiveButton("Save") { _, _ -> performEdit() }
+                        .show()
+                } catch (error: Exception) {
+                    notify(error.message ?: "Review the contract details")
+                }
+            }
+        }
+        alert.show()
+    }
+
     private fun showRevision(rule:FinanceFixedExpenseStore.Rule) {
         val form=column().apply{setPadding(dp(18),dp(12),dp(18),dp(6))}
         val amount=edit("","New monthly amount",true)

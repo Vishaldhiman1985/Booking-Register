@@ -285,6 +285,38 @@ internal class FinanceUnifiedStatementScreen(
                 .setPositiveButton("Close",null).show()
         }
     }
+    /**
+     * V25 dashboard activity rows delegate to the ORIGINAL bill, payment, reversal,
+     * vendor-ledger and Manpower action handlers. No parallel transaction flow.
+     */
+    fun openExpenseEvent(
+        eventId: String,
+        drafts: List<FinanceDemoDraftBill>,
+        onManualActions: (FinanceDemoDraftBill) -> Unit
+    ) {
+        try {
+            loaded(drafts).use { store ->
+                val event = store.events().firstOrNull { it.id == eventId }
+                    ?: error("Activity entry no longer exists. Refresh Expenses.")
+                val bill = event.billId?.let(store::bill)
+                when {
+                    event.type == "PAYMENT" || event.type == "ADVANCE" ->
+                        showPaymentActions(event, store)
+                    bill != null -> showBillActions(bill, store) { id ->
+                        drafts.firstOrNull { "manual:${it.draftId}" == id }?.let(onManualActions)
+                    }
+                    event.vendorId.isNotBlank() && event.vendorId != "no_payee" ->
+                        showVendorLedger(event.vendorId)
+                    else -> AlertDialog.Builder(activity).setTitle(event.title)
+                        .setMessage("${event.date}\n${event.detail}\n${money(event.amount)}")
+                        .setPositiveButton("Close", null).show()
+                }
+            }
+        } catch (error: Exception) {
+            toast(error.message ?: "Could not open this activity")
+        }
+    }
+
     fun renderExpenses(parent:LinearLayout,drafts:List<FinanceDemoDraftBill>,filter:String,
                        onManualActions:(FinanceDemoDraftBill)->Unit,onPendingStock:()->Unit) {
         parent.removeAllViews()
@@ -466,11 +498,11 @@ internal class FinanceUnifiedStatementScreen(
             alert.show()
         }
     }
-    private fun showAdvanceDialog() {
-        val vendorChoices=HotelPurchaseVendorStore(activity).all()
+    private fun showAdvanceDialog(vendorId:String? = null) {
+        val vendorChoices=HotelPurchaseVendorStore(activity).all().filter { vendorId == null || it.id == vendorId }
         if(vendorChoices.isEmpty()) { toast("Add a vendor in Settings > Masters > Vendor Master first");return }
         val form=col().apply { setPadding(dp(18),dp(9),dp(18),dp(6)) }
-        val vendor=spinner(vendorChoices.map { it.name })
+        val vendor=spinner(vendorChoices.map{it.name}).apply { isEnabled = vendorId == null }
         val amount=edit("","Amount ₹",true)
         val date=edit(LocalDate.now().toString(),"YYYY-MM-DD")
         val methods=listOf("Bank","UPI","Cash","Other")
@@ -530,9 +562,22 @@ internal class FinanceUnifiedStatementScreen(
                 .setNegativeButton("Close",null).show()
         }
     }
-    // FINANCE_LEDGER_HUB_V18: Shared master and ledger records, no duplicate accounting store.
+    // Finance V25: legacy entry points now route to the unified Vendors tab.
     fun openLedgerHub() {
-        FinanceLedgerHubScreen(activity, onChanged, ::showAdvanceDialog, ::showAllocateAdvance).show()
+        val host = activity as? FinanceDevSafetyActivity
+        if (host != null) host.openV25Vendor(null)
+        else toast("Open Vendors from the Finance navigation")
+    }
+    /** V25 profile actions use the ORIGINAL vendor advance and allocation dialogs. */
+    fun recordVendorAdvance(vendorId:String) {
+        if(vendorId.isBlank() || vendorId=="no_payee" || vendorId.startsWith("employee:")) {
+            toast("Only a vendor can receive a vendor advance");return
+        }
+        showAdvanceDialog(vendorId)
+    }
+    fun allocateVendorAdvance(paymentId:String) {
+        if(paymentId.isBlank()) { toast("Advance reference missing");return }
+        showAllocateAdvance(paymentId)
     }
     /** Pay a supplier only through the established V17 payable ledger method. */
     fun payVendorBills(vendorId:String) {
@@ -551,7 +596,7 @@ internal class FinanceUnifiedStatementScreen(
         } catch(error:Exception) { toast(error.message ?: "Unable to open vendor payments") }
     }
     fun openPayeeLedger(vendorId:String) { showVendorLedger(vendorId) }
-    // FINANCE_VENDOR_LEDGER_FULLSCREEN_V18: supplier details use full-screen navigation.
+    // Direct individual routing: no second vendor list or legacy ledger page.
     private fun showVendorLedger(vendorId:String) {
         if(vendorId.startsWith("employee:")) {
             FinanceSalaryPlannerScreen(activity,onChanged).showForEmployee(vendorId.removePrefix("employee:"))
@@ -561,6 +606,8 @@ internal class FinanceUnifiedStatementScreen(
             toast("No vendor associated with this entry")
             return
         }
-        FinanceLedgerHubScreen(activity, onChanged, ::showAdvanceDialog, ::showAllocateAdvance).showVendor(vendorId)
+        val host = activity as? FinanceDevSafetyActivity
+        if(host != null) host.openV25Vendor(vendorId)
+        else toast("Open Vendors from the Finance navigation")
     }
 }

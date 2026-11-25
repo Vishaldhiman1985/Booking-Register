@@ -234,6 +234,32 @@ internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context
         c.getString(4),c.getString(5),c.getString(6),c.getString(7),c.getString(8),
         c.getLong(9),c.getLong(10),c.getLong(11),c.getInt(12)==1) }
     fun bill(id:String):Bill?=bills().firstOrNull { it.id==id }
+    /** Read-only historical advance projection over existing cash and allocation rows.
+     * For prior periods, exclude allocations and reversals effective AFTER the requested date.
+     * Does not touch salary, vendor or tax sources and creates no parallel balance table.
+     */
+    fun availableAdvancesAsOf(asOf: LocalDate): List<Payment> {
+        require(!asOf.isAfter(LocalDate.now())) { "Historical balance date cannot be in the future" }
+        val day = asOf.toString()
+        return select(readableDatabase, """
+            SELECT p.id,p.vendor_id,p.vendor,p.payment_date,p.amount_paise,
+                   p.method,p.reference,p.kind,
+                   COALESCE((SELECT SUM(a.amount_paise)
+                       FROM finance_allocations a
+                       WHERE a.payment_id=p.id AND a.applied_on<=?),0)
+            FROM finance_payments p
+            WHERE p.kind='ADVANCE' AND p.payment_date<=?
+              AND NOT EXISTS(
+                  SELECT 1 FROM finance_payment_reversals r
+                  WHERE r.payment_id=p.id AND r.reversed_on<=?
+              )
+            ORDER BY p.payment_date DESC,p.created_at DESC
+        """.trimIndent(), arrayOf(day,day,day)) { c ->
+            Payment(c.getString(0),c.getString(1),c.getString(2),c.getString(3),
+                c.getLong(4),c.getString(5),c.getString(6),c.getString(7),c.getLong(8))
+        }.filter { it.available > 0L }
+    }
+
     fun payments(includeReversed:Boolean=false):List<Payment> = select(readableDatabase,"""
         SELECT p.id,p.vendor_id,p.vendor,p.payment_date,p.amount_paise,p.method,p.reference,p.kind,
         COALESCE((SELECT SUM(a.amount_paise) FROM finance_allocations a WHERE a.payment_id=p.id),0)
@@ -256,6 +282,58 @@ internal class FinanceActivityStore(context: Context) : SQLiteOpenHelper(context
     fun outstanding(asOf:LocalDate=LocalDate.now()):List<Bill> = bills().filter {
         !LocalDate.parse(it.dueDate).isAfter(asOf) && it.due>0L
     }.sortedWith(compareBy<Bill> { it.dueDate }.thenBy { it.id })
+
+    /** One real cash movement for a payee, distributed to oldest existing unpaid bills.
+     * This is the existing Finance DEV payable DB: no second ledger or banking integration.
+     * A stable requestId prevents repeat submission from creating a second payment.
+     */
+    data class PayeePaymentReceipt(val paymentId: String, val amountPaise: Long, val replay: Boolean)
+    private data class PayeeBillRow(val id:String, val date:String, val dueDate:String,
+                                    val amount:Long, val openingPaid:Long)
+
+    fun recordPayeePayment(payeeId:String, amountPaise:Long, date:String, method:String,
+                           reference:String, requestId:String):PayeePaymentReceipt = transaction { db ->
+        require(payeeId.isNotBlank() && payeeId != "no_payee") { "A named payee is required" }
+        require(requestId.trim().length >= 8) { "Payment request ID is required" }
+        val day = LocalDate.parse(date)
+        FinancePeriodEntryLock(contextForStore).requireDateOpen(date)
+        require(!day.isAfter(LocalDate.now())) { "Future payments cannot be recorded" }
+        require(amountPaise > 0L) { "Enter a positive payment amount" }
+        require(method.trim().isNotBlank()) { "Select a payment method" }
+        val ref = reference.trim()
+        val requestKey = "v25-payee:" + requestId.trim()
+        val previous = select(db, """SELECT id,vendor_id,payment_date,amount_paise,method,reference
+            FROM finance_payments WHERE source_id=?""", arrayOf(requestKey)) { c ->
+            listOf(c.getString(0), c.getString(1), c.getString(2), c.getLong(3).toString(),
+                c.getString(4), c.getString(5))
+        }.singleOrNull()
+        if (previous != null) {
+            require(previous[1] == payeeId && previous[2] == date &&
+                previous[3].toLong() == amountPaise && previous[4] == method.trim() &&
+                previous[5] == ref) { "Payment request was already used for different details" }
+            return@transaction PayeePaymentReceipt(previous[0], amountPaise, true)
+        }
+        val raw = select(db, """SELECT id,bill_date,due_date,amount_paise,opening_paid
+            FROM finance_bills WHERE active=1 AND vendor_id=? AND bill_date<=?
+            ORDER BY bill_date,due_date,id""", arrayOf(payeeId, date)) { c ->
+            PayeeBillRow(c.getString(0), c.getString(1), c.getString(2), c.getLong(3), c.getLong(4))
+        }
+        val open = raw.map { b ->
+            FinancePayeeAllocationPolicy.OpenBill(b.id, b.date, b.dueDate,
+                FinanceActivityPolicy.due(b.amount, b.openingPaid, existingSettled(db,b.id)))
+        }
+        val allocations = FinancePayeeAllocationPolicy.plan(open, amountPaise)
+        val payee = select(db, """SELECT vendor FROM finance_bills WHERE id=?""",
+            arrayOf(allocations.first().billId)) { it.getString(0) }.single()
+        checkDuplicateReference(db, payeeId, method, ref)
+        val id = UUID.randomUUID().toString()
+        newPayment(db, id, requestKey, payeeId, payee, date, amountPaise, method, ref, "PAYMENT")
+        allocations.forEach { allocation ->
+            newAllocation(db, id, allocation.billId, allocation.amountPaise, date)
+        }
+        audit(db, id, "PAYEE_PAYMENT", "${payee} · ${amountPaise} paise · ${date} · ${allocations.size} bill(s)")
+        PayeePaymentReceipt(id, amountPaise, false)
+    }
 
     /** All new bill settlements are written HERE; one bank/UPI payment, one allocation. */
     fun payBill(billId:String,amount:Long,date:String,method:String,reference:String):String = transaction { db ->

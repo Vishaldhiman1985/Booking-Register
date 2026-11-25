@@ -106,6 +106,105 @@ internal class FinanceFixedExpenseStore(context: Context) : SQLiteOpenHelper(con
         }
         return id
     }
+    /**
+     * Safe recurring contract edit. Once bills exist the old rule remains immutable
+     * and a successor begins after all issued months. Both writes are one transaction.
+     * Historical bills continue to JOIN their original rule; no journal is rewritten.
+     */
+    fun editContract(
+        rule: Rule, categoryCode: String, category: String, typeCode: String, type: String,
+        vendorId: String, vendor: String, department: String, dueDay: Int,
+        effectiveMonth: String, amountPaise: Long, reason: String
+    ): String {
+        require(rule.active) { "Only active agreements can be edited" }
+        require(categoryCode.isNotBlank() && typeCode.isNotBlank() && vendorId.isNotBlank() &&
+            vendor.isNotBlank() && department.isNotBlank()) { "Complete all contract details" }
+        require(categoryCode != FinanceExpenseCategoryRules.STAFF_ONLY && !vendorId.startsWith("employee:")) {
+            "Employee expenses belong in Manpower"
+        }
+        require(amountPaise > 0L && dueDay in 1..31) { "Enter a positive amount and due day 1–31" }
+        require(reason.trim().length >= 3) { "Enter a reason for this change" }
+        val from = FinanceFixedPolicy.month(effectiveMonth)
+        return tx { database ->
+            val found = select(database,
+                "SELECT id,category_code,category,type_code,type,vendor_id,vendor,department,due_day,start_month,end_month,active FROM fixed_rules WHERE id=?",
+                arrayOf(rule.id), ::rule).singleOrNull()
+            require(found == rule && found.active) { "Contract changed. Reopen its latest version." }
+            val issued = select(database,
+                "SELECT MAX(month) FROM fixed_bills WHERE rule_id=?", arrayOf(rule.id)) {
+                cursor -> if (cursor.isNull(0)) null else YearMonth.parse(cursor.getString(0))
+            }.firstOrNull()
+            if (issued != null) {
+                require(from > issued && from > YearMonth.now()) {
+                    "Existing bills are locked. Apply structural changes from a future unissued month."
+                }
+                require(from > YearMonth.parse(rule.startMonth)) { "Choose a month after the original start" }
+                require(rule.endMonth == null || from <= YearMonth.parse(rule.endMonth)) {
+                    "The agreement already ends before that month"
+                }
+            } else {
+                require(!from.isBefore(YearMonth.now())) { "Unissued agreements must start this month or later" }
+            }
+            // Existing agreements may legitimately share a landlord and expense type.
+            // Check conflicts only when changing the vendor or expense type.
+            if (vendorId != rule.vendorId || typeCode != rule.typeCode) {
+                val overlaps = select(database,
+                    "SELECT id,category_code,category,type_code,type,vendor_id,vendor,department,due_day,start_month,end_month,active FROM fixed_rules WHERE id<>?",
+                    arrayOf(rule.id), ::rule).any { candidate ->
+                    candidate.vendorId == vendorId && candidate.typeCode == typeCode &&
+                        (candidate.endMonth == null || YearMonth.parse(candidate.endMonth) >= from) &&
+                        (issued == null || YearMonth.parse(candidate.startMonth) <= from || candidate.active)
+                }
+                require(!overlaps) { "Changing vendor or expense type conflicts with another agreement for the selected month" }
+            }
+            val rate = FinanceFixedPolicy.rupees(amountPaise)
+            if (issued == null) {
+                val count = select(database,"SELECT COUNT(*) FROM fixed_revisions WHERE rule_id=?", arrayOf(rule.id)) {
+                    it.getInt(0)
+                }.single()
+                require(count == 1) { "This contract has pending amount revisions. Review them before editing." }
+                val changed = database.update("fixed_rules", ContentValues().apply {
+                    put("category_code", categoryCode); put("category", category)
+                    put("type_code", typeCode); put("type", type)
+                    put("vendor_id", vendorId); put("vendor", vendor)
+                    put("department", department); put("due_day", dueDay)
+                    put("start_month", from.toString())
+                }, "id=? AND active=1", arrayOf(rule.id))
+                require(changed == 1) { "Could not update the agreement" }
+                val revision = database.update("fixed_revisions", ContentValues().apply {
+                    put("effective_month", from.toString()); put("amount_paise", amountPaise)
+                    put("reason", reason.trim())
+                }, "rule_id=?", arrayOf(rule.id))
+                require(revision == 1) { "Could not update the unissued amount" }
+                audit(database, rule.id, "EDIT_UNISSUED",
+                    "${rule.vendor}/${rule.type}/${rule.department} -> $vendor/$type/$department, day $dueDay, $rate from $from. ${reason.trim()}")
+                rule.id
+            } else {
+                val closed = database.update("fixed_rules", ContentValues().apply {
+                    put("end_month", from.minusMonths(1).toString()); put("active", 0)
+                }, "id=? AND active=1", arrayOf(rule.id))
+                require(closed == 1) { "Could not close the old agreement" }
+                val successorId = UUID.randomUUID().toString()
+                database.insertOrThrow("fixed_rules", null, ContentValues().apply {
+                    put("id", successorId); put("category_code", categoryCode); put("category", category)
+                    put("type_code", typeCode); put("type", type); put("vendor_id", vendorId)
+                    put("vendor", vendor); put("department", department); put("due_day", dueDay)
+                    put("start_month", from.toString()); put("active", 1)
+                    put("created_at", System.currentTimeMillis())
+                })
+                database.insertOrThrow("fixed_revisions", null, ContentValues().apply {
+                    put("id", UUID.randomUUID().toString()); put("rule_id", successorId)
+                    put("effective_month", from.toString()); put("amount_paise", amountPaise)
+                    put("reason", reason.trim()); put("created_at", System.currentTimeMillis())
+                })
+                audit(database, rule.id, "REPLACED", "Successor $successorId starts $from. ${reason.trim()}")
+                audit(database, successorId, "EDIT_SUCCESSOR",
+                    "From ${rule.id}: $vendor / $type / $department, day $dueDay, $rate. ${reason.trim()}")
+                successorId
+            }
+        }
+    }
+
     fun latestBillMonth(id: String): YearMonth? = select(readableDatabase,
         "SELECT MAX(month) FROM fixed_bills WHERE rule_id=?", arrayOf(id)) { c -> if(c.isNull(0))null else YearMonth.parse(c.getString(0)) }.firstOrNull()
     fun revisions(id: String): List<Pair<YearMonth,Long>> = select(readableDatabase,

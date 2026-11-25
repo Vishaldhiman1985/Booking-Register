@@ -23,7 +23,10 @@ internal class FinanceV25VendorsScreen(
     private val onOpen: (String?) -> Unit,
     private val onAdd: () -> Unit,
     private val onEdit: (String) -> Unit,
+    private val onRecurringContracts: () -> Unit,
     private val onPay: (String) -> Unit,
+    private val onRecordAdvance: (String) -> Unit,
+    private val onAllocateAdvance: (String) -> Unit,
     private val onShare: (String) -> Unit,
     private val onDownload: (String, String) -> Unit
 ) {
@@ -53,7 +56,16 @@ internal class FinanceV25VendorsScreen(
         gravity = Gravity.CENTER
         isClickable = true; isFocusable = true; setOnClickListener { action() }
     }
-    private fun money(paise: Long) = FinanceFixedPolicy.rupees(paise)
+    private fun money(paise: Long): String {
+        val raw = java.math.BigDecimal.valueOf(paise, 2).toPlainString()
+        val digits = raw.removePrefix("-").substringBefore(".")
+        val head = digits.dropLast(3)
+        val grouped = if (head.isEmpty()) digits else
+            head.reversed().chunked(2).map { it.reversed() }.asReversed().joinToString(",") +
+                "," + digits.takeLast(3)
+        val cents = if (paise % 100L == 0L) "" else "." + raw.substringAfter(".")
+        return (if (paise < 0L) "-₹" else "₹") + grouped + cents
+    }
     private fun exact(rows: List<Long>) = rows.fold(0L, Math::addExact)
     private fun isVendor(id: String) = FinanceV25VendorSelectionPolicy.canSelectVendor(id)
 
@@ -102,8 +114,7 @@ internal class FinanceV25VendorsScreen(
     private fun directory(parent: LinearLayout, all: List<Account>) {
         parent.addView(row().apply {
             addView(col().apply {
-                addView(label("Vendors", 21f, true))
-                addView(label("Suppliers and landlords · Staff remain in Manpower", 11f, false, muted))
+                addView(label("Suppliers and landlords", 12f, false, muted))
             }, LinearLayout.LayoutParams(0, -2, 1f))
             addView(button("+ Add vendor", onAdd))
         })
@@ -149,6 +160,26 @@ internal class FinanceV25VendorsScreen(
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { display(s?.toString().orEmpty()) }
             override fun afterTextChanged(s: Editable?) = Unit
         })
+        parent.addView(space(13))
+        val activeContracts = runCatching {
+            FinanceFixedExpenseStore(activity).use { store ->
+                store.rules().count { it.active }
+            }
+        }.getOrNull()
+        parent.addView(card().apply {
+            addView(row().apply {
+                addView(col().apply {
+                    addView(label("Recurring Contracts", 16f, true))
+                    addView(label("Rent and other regular vendor agreements", 11f, false, muted))
+                }, LinearLayout.LayoutParams(0, -2, 1f))
+                addView(label(if (activeContracts == null) "Open  ›"
+                    else "$activeContracts Contracts  ›", 12f, true, forest))
+            })
+            isClickable = true; isFocusable = true
+            contentDescription = "Open recurring contracts"
+            setOnClickListener { onRecurringContracts() }
+        })
+        parent.addView(space(16))
     }
 
     private fun vendor(parent: LinearLayout, account: Account) {
@@ -170,11 +201,36 @@ internal class FinanceV25VendorsScreen(
             addView(button("Edit categories") { onEdit(account.id) }.apply { isEnabled = account.registered }, LinearLayout.LayoutParams(0, -2, 1f))
         })
         parent.addView(space(8))
+        if (account.registered && !account.archived) {
+            parent.addView(button("+ Record vendor advance") { onRecordAdvance(account.id) })
+            parent.addView(space(8))
+        }
         parent.addView(row().apply {
             addView(button("Share ledger") { onShare(shareText(account.id)) }, LinearLayout.LayoutParams(0, -2, 1f))
             addView(space(7))
             addView(button("Download CSV") { val (name, content) = statement(account.id); onDownload(name, content) }, LinearLayout.LayoutParams(0, -2, 1f))
         })
+        val openAdvances = account.payments.filter { it.kind == "ADVANCE" && it.available > 0L }
+        if (openAdvances.isNotEmpty()) {
+            parent.addView(space(14))
+            parent.addView(label("Available vendor advances", 16f, true))
+            parent.addView(label("Allocate an existing advance to a bill without recording another payment.", 11f, false, muted))
+            parent.addView(space(8))
+            openAdvances.forEach { advance ->
+                parent.addView(card().apply {
+                    addView(row().apply {
+                        addView(col().apply {
+                            addView(label("Advance - ${advance.date}", 13f, true))
+                            addView(label("${advance.method}  ${advance.reference}", 11f, false, muted))
+                        }, LinearLayout.LayoutParams(0, -2, 1f))
+                        addView(label(money(advance.available), 14f, true, forest))
+                    })
+                    addView(space(9))
+                    addView(button("Allocate to bill") { onAllocateAdvance(advance.id) })
+                })
+                parent.addView(space(8))
+            }
+        }
         parent.addView(space(14))
         parent.addView(label("Recent ledger activity", 16f, true))
         parent.addView(label("Bills and payments below are from the existing payable ledger only.", 11f, false, muted))

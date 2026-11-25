@@ -83,10 +83,10 @@ internal class FinanceSalaryPlannerScreen(
     private fun form():LinearLayout=col().apply { setPadding(dp(20),dp(8),dp(20),dp(10)) }
     private fun scroll(body:LinearLayout)=ScrollView(activity).apply { addView(body) }
     private var launchedFromManpower=false
-    fun showForEmployee(employeeId:String) {
+    fun showForEmployee(employeeId:String, initialTab:Int=0) {
         launchedFromManpower=true
         selectedEmployeeId=employeeId
-        selectedTab=0
+        selectedTab=initialTab.coerceIn(0,4)
         FinancePayrollStore(activity).use { store ->
             val employee=store.employee(employeeId) ?: error("Employee not found")
             period=minOf(YearMonth.now(),employee.left?.let { YearMonth.from(LocalDate.parse(it)) } ?: YearMonth.now())

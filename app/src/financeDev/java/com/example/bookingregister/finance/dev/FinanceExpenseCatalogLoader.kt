@@ -59,6 +59,22 @@ internal class FinanceExpenseVisibility(
         categoryVisible(category) && prefs.getBoolean(scopeKey("type_${type.code}"),
             prefs.getBoolean("type_${type.code}", type.enabledByDefault))
 
+    /**
+     * Vendor master assignment can enable a catalog type that is hidden by DEFAULT,
+     * but never overrides a type explicitly disabled by the manager for this property.
+     * Existing visible types and all stock rules are untouched.
+     */
+    fun typeSelectableForVendor(category: SmartExpenseCategory, type: SmartExpenseType): Boolean {
+        if (!categoryVisible(category)) return false
+        val scoped = scopeKey("type_${type.code}")
+        val legacy = "type_${type.code}"
+        return when {
+            prefs.contains(scoped) -> prefs.getBoolean(scoped, false)
+            prefs.contains(legacy) -> prefs.getBoolean(legacy, false)
+            else -> true
+        }
+    }
+
     fun setCategoryVisible(code: String, visible: Boolean) {
         check(prefs.edit().putBoolean(scopeKey("category_$code"), visible).commit()) {
             "Could not save property category visibility"
