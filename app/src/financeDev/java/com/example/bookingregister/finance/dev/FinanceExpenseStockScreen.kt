@@ -18,6 +18,9 @@ import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import java.time.LocalDate
 
 /** Finance DEV local receipt workflow. No accounting or production writes. */
@@ -146,6 +149,17 @@ internal class FinanceExpenseStockScreen(private val activity: Activity) {
         fun page(): LinearLayout = column().apply {
             setBackgroundColor(Color.WHITE)
             setPadding(dp(10), dp(14), dp(10), dp(6))
+            // The full-screen dialog draws edge-to-edge; reserve real system/IME insets.
+            ViewCompat.setOnApplyWindowInsetsListener(this) { view, insets ->
+                val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or
+                    WindowInsetsCompat.Type.displayCutout())
+                val keyboard = insets.getInsets(WindowInsetsCompat.Type.ime())
+                view.setPadding(
+                    dp(10), dp(14) + bars.top, dp(10),
+                    dp(6) + maxOf(bars.bottom, keyboard.bottom)
+                )
+                insets
+            }
         }
         fun subtitle(): TextView = text("Already purchased · only received quantities enter stock", 12f).apply {
             setPadding(dp(4), dp(3), dp(4), dp(8))
@@ -234,6 +248,7 @@ internal class FinanceExpenseStockScreen(private val activity: Activity) {
                 background = GradientDrawable().apply { setColor(green); cornerRadius = dp(10).toFloat() }
             }, LinearLayout.LayoutParams(-1, dp(52)))
             dialog.setContentView(root)
+            ViewCompat.requestApplyInsets(root)
         }
 
         openPicker = {
@@ -276,8 +291,18 @@ internal class FinanceExpenseStockScreen(private val activity: Activity) {
                 onReview = { openReview() }
             )
             dialog.setContentView(root)
+            ViewCompat.requestApplyInsets(root)
         }
         dialog.show()
+        dialog.window?.let { window ->
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            window.statusBarColor = Color.TRANSPARENT
+            window.navigationBarColor = Color.TRANSPARENT
+            WindowCompat.getInsetsController(window, window.decorView).apply {
+                isAppearanceLightStatusBars = true
+                isAppearanceLightNavigationBars = true
+            }
+        }
         dialog.window?.setLayout(-1, -1)
         dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         openPicker()
