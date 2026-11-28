@@ -281,28 +281,45 @@ class HotelPurchaseSimpleDeliveryScreen(private val activity: Activity) {
         content.addView(summary)
         redrawSummary()
         content.addView(gap(14))
-        content.addView(text(if (first) "Bill amount (₹)" else "Check final bill amount (₹)", 14f, true))
+        // Receiving goods never requires an invoice amount.
+        val previousAmount = saved.updates.lastOrNull { it.billAmount != null }?.billAmount
+        val invoiceReceived = CheckBox(activity).apply {
+            text = "Vendor invoice received"
+            textSize = 14f
+            setTextColor(ink)
+            isChecked = previousAmount != null
+        }
+        content.addView(invoiceReceived)
+        val invoiceLabel = text("Invoice amount (₹)", 14f, true)
+        content.addView(invoiceLabel)
         val amount = EditText(activity).apply {
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             setSingleLine(true)
-            hint = "Enter amount"
-            setText(saved.updates.lastOrNull()?.billAmount?.let { fmt(it) } ?: "")
+            hint = "Enter actual invoice amount"
+            setText(previousAmount?.let { fmt(it) } ?: "")
             textSize = 19f
             setPadding(dp(14), dp(10), dp(14), dp(10))
             background = rounded(offWhite, lineColor)
         }
         content.addView(amount, LinearLayout.LayoutParams(-1, dp(52)))
         content.addView(gap(8))
-        content.addView(text(if (saved.updates.isNotEmpty())
-            "Previous amount: ${money(saved.updates.last().billAmount)} · Keep or correct it."
-            else "Only a delivery reference. Expenses and payments stay in Finance.", 11f, false, soft))
+        content.addView(text("No invoice? Leave unchecked. Goods receipts and their dates are saved regardless.",
+            11f, false, soft))
         val verifiedAmount = CheckBox(activity).apply {
-            text = "I checked the final amount against the vendor bill"
+            text = "I checked the amount against the vendor invoice"
             textSize = 13f
             setTextColor(ink)
             isChecked = false
         }
         content.addView(verifiedAmount)
+        fun updateInvoiceFields() {
+            val visible = if (invoiceReceived.isChecked) View.VISIBLE else View.GONE
+            invoiceLabel.visibility = visible
+            amount.visibility = visible
+            verifiedAmount.visibility = visible
+        }
+        invoiceReceived.setOnCheckedChangeListener { _, _ -> updateInvoiceFields() }
+        updateInvoiceFields()
         content.addView(gap(16))
         val footer = row()
         val cancel = pill("Back", soft) { dialog.dismiss() }
@@ -330,8 +347,11 @@ class HotelPurchaseSimpleDeliveryScreen(private val activity: Activity) {
         dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
 
         save.setOnClickListener {
-            val finalBill = amount.text?.toString()?.trim()?.toDoubleOrNull()
-            if (finalBill == null || !finalBill.isFinite() || finalBill < 0) { amount.error = "Enter the bill amount"; return@setOnClickListener }
+            val finalBill = if (invoiceReceived.isChecked) amount.text.toString().trim().toDoubleOrNull() else null
+            if (invoiceReceived.isChecked && (finalBill == null || !finalBill.isFinite() || finalBill < 0.0)) {
+                amount.error = "Enter the actual invoice amount"
+                return@setOnClickListener
+            }
             val latest = receipts.forOrder(order.id)
             if (latest.map { it.id } != earlier.map { it.id } || closures.get(order.id) != saved) {
                 toast("This order changed. Reopen it for the latest quantities.")
@@ -377,12 +397,13 @@ class HotelPurchaseSimpleDeliveryScreen(private val activity: Activity) {
                     unavailable.forEach { (id, qty) -> this[id] = (this[id] ?: 0.0) + qty }
                 }
                 val complete = residual.all { (id, qty) -> kotlin.math.abs(qty - (unavailable[id] ?: 0.0)) < 0.000001 }
-                if (complete && !verifiedAmount.isChecked) {
-                    toast("Confirm that you checked the final bill amount")
+                if (complete && finalBill != null && !verifiedAmount.isChecked) {
+                    toast("Confirm that you checked the vendor invoice amount")
                     return@setOnClickListener
                 }
                 val message = when {
-                    complete -> "Final bill: ${money(finalBill)}. Close this order? All received and unavailable quantities will be retained in history."
+                    complete && finalBill != null -> "Final invoice: ${money(finalBill)}. Close this order? Received and unavailable quantities stay in history."
+                    complete -> "Goods are accounted for. Complete the physical delivery and move this order to Pending Invoice? Receipt dates and shortage history stay intact."
                     first -> "Save this delivery and share the missing quantities with the vendor?"
                     else -> "Save received quantities and keep this order under Short Delivered?"
                 }
@@ -401,7 +422,7 @@ class HotelPurchaseSimpleDeliveryScreen(private val activity: Activity) {
                             if (complete) closures.close(order, receipts.forOrder(order.id), totalUnavailable, finalBill)
                             dialog.dismiss()
                             onChanged()
-                            toast(if (complete) "Order delivered and closed" else "Short delivery saved")
+                            toast(if (complete && finalBill == null) "Goods received · Pending Invoice" else if (complete) "Order delivered and invoice recorded" else "Short delivery saved")
                             if (!complete) shareShort(order, receipts.forOrder(order.id))
                         } catch (error: Exception) {
                             toast(error.message ?: "Unable to save delivery")
@@ -429,6 +450,67 @@ class HotelPurchaseSimpleDeliveryScreen(private val activity: Activity) {
         activity.startActivity(Intent.createChooser(intent, "Share missing goods with vendor"))
     }
 
+    /** Enter the supplier invoice later. Existing physical receipt dates never change. */
+    fun showPendingInvoice(order: HotelPurchaseOrder, onChanged: () -> Unit = {}) {
+        val pending = closures.get(order.id)
+        if (!pending.invoicePending) {
+            toast("This order is not awaiting an invoice")
+            return
+        }
+        val body = col().apply { setPadding(dp(18), dp(12), dp(18), dp(12)) }
+        body.addView(text(order.vendorName, 16f, true))
+        body.addView(gap(6))
+        val date = SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(pending.closedAtMillis))
+        body.addView(text("Goods reconciled on $date. Physical receipt dates stay unchanged.", 12f, false, soft))
+        body.addView(gap(8))
+        receipts.forOrder(order.id).forEachIndexed { index, receipt ->
+            val day = SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault()).format(Date(receipt.receivedAtMillis))
+            body.addView(text("Receipt ${index + 1} · $day · ${receipt.lines.size} item(s)", 12f, false, soft))
+        }
+        body.addView(gap(14))
+        body.addView(text("Actual vendor invoice amount (₹)", 14f, true))
+        val amount = EditText(activity).apply {
+            hint = "Enter amount from received invoice"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setSingleLine(true)
+            textSize = 19f
+        }
+        body.addView(amount)
+        val verified = CheckBox(activity).apply {
+            text = "I checked this amount against the vendor invoice"
+            textSize = 13f
+        }
+        body.addView(verified)
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle("Invoice Received")
+            .setView(ScrollView(activity).apply { addView(body) })
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Record Invoice & Close", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val finalAmount = amount.text.toString().trim().toDoubleOrNull()
+                if (finalAmount == null || !finalAmount.isFinite() || finalAmount < 0.0) {
+                    amount.error = "Enter the actual invoice amount"
+                    return@setOnClickListener
+                }
+                if (!verified.isChecked) {
+                    toast("Confirm that you checked the vendor invoice")
+                    return@setOnClickListener
+                }
+                try {
+                    closures.recordInvoice(order.id, finalAmount)
+                    dialog.dismiss()
+                    onChanged()
+                    toast("Invoice recorded · Order completed")
+                } catch (error: Exception) {
+                    toast(error.message ?: "Unable to record invoice")
+                }
+            }
+        }
+        dialog.show()
+    }
+
     fun showHistory(order: HotelPurchaseOrder) {
         val record = closures.get(order.id)
         val history = receipts.forOrder(order.id)
@@ -451,14 +533,23 @@ class HotelPurchaseSimpleDeliveryScreen(private val activity: Activity) {
             content.addView(rule(), LinearLayout.LayoutParams(-1, dp(1)))
         }
         content.addView(gap(13))
-        content.addView(text("Final bill: " + (record.finalAmount?.let(::money) ?: "Not captured (legacy order)"), 18f, true, green))
+        content.addView(text("Final bill: " + (record.finalAmount?.let(::money) ?: if (record.invoicePending) "Pending Invoice" else "Not captured (legacy order)"), 18f, true, green))
         content.addView(gap(11))
         content.addView(text("Delivery history", 14f, true))
         history.forEachIndexed { index, receipt ->
             val entry = receipt.lines.joinToString(", ") { "${it.itemName} ${fmt(it.receivedQuantity)} ${it.unit}" }
-            content.addView(text("${index + 1}. $entry", 12f, false, soft))
+            val date = SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault()).format(Date(receipt.receivedAtMillis))
+            content.addView(text("${index + 1}. $date · $entry", 12f, false, soft))
         }
-        record.updates.forEach { update -> content.addView(text("Bill reference: ${money(update.billAmount)}", 12f, false, soft)) }
+        record.updates.forEach { update ->
+            val label = when {
+                update.note == "FINAL_INVOICE_RECEIVED" -> "Final invoice received: " + update.billAmount?.let(::money)
+                update.billAmount == null -> "Physical delivery recorded · Invoice pending"
+                else -> "Bill reference: " + money(update.billAmount)
+            }
+            val date = SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(update.atMillis))
+            content.addView(text("$date · $label", 12f, false, soft))
+        }
         AlertDialog.Builder(activity).setTitle("Delivered Order").setView(ScrollView(activity).apply { addView(content) })
             .setPositiveButton("Close", null).show()
     }

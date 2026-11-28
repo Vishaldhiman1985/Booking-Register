@@ -7,7 +7,7 @@ import org.json.JSONObject
 /** Procurement-only reference values. Does not create a journal entry or alter legacy stores. */
 data class HotelPurchaseDeliveryUpdate(
     val atMillis: Long,
-    val billAmount: Double,
+    val billAmount: Double?,
     val receiptId: String,
     val note: String
 )
@@ -20,6 +20,15 @@ data class HotelPurchaseSimpleClosure(
     val updates: List<HotelPurchaseDeliveryUpdate>
 ) {
     val closed: Boolean get() = closedAtMillis > 0L
+    val invoicePending: Boolean get() = HotelPurchaseInvoicePendingPolicy.isPending(closedAtMillis, finalAmount)
+}
+
+internal object HotelPurchaseInvoicePendingPolicy {
+    fun isPending(closedAtMillis: Long, finalAmount: Double?): Boolean =
+        closedAtMillis > 0L && finalAmount == null
+
+    fun validAmount(amount: Double?): Boolean =
+        amount == null || (amount.isFinite() && amount >= 0.0)
 }
 
 class HotelPurchaseSimpleClosureStore(context: Context) {
@@ -46,7 +55,8 @@ class HotelPurchaseSimpleClosureStore(context: Context) {
                 (0 until history.length()).map { index ->
                     val entry = history.getJSONObject(index)
                     HotelPurchaseDeliveryUpdate(
-                        entry.getLong("atMillis"), entry.getDouble("billAmount"),
+                        entry.getLong("atMillis"),
+                        if (!entry.has("billAmount") || entry.isNull("billAmount")) null else entry.getDouble("billAmount"),
                         entry.optString("receiptId", ""), entry.optString("note", "")
                     )
                 }
@@ -55,9 +65,9 @@ class HotelPurchaseSimpleClosureStore(context: Context) {
         return HotelPurchaseSimpleClosure(orderId, null, 0L, emptyMap(), emptyList())
     }
 
-    fun saveUpdate(orderId: String, amount: Double, receiptId: String, note: String,
+    fun saveUpdate(orderId: String, amount: Double?, receiptId: String, note: String,
                    unavailableNow: Map<String, Double> = emptyMap()) {
-        require(amount.isFinite() && amount >= 0.0) { "Enter a valid bill amount" }
+        require(HotelPurchaseInvoicePendingPolicy.validAmount(amount)) { "Enter a valid invoice amount" }
         val old = get(orderId)
         require(!old.closed) { "Order already closed" }
         require(receiptId.isNotBlank() || note.isNotBlank()) { "Delivery update reference required" }
@@ -74,8 +84,8 @@ class HotelPurchaseSimpleClosureStore(context: Context) {
     }
 
     fun close(order: HotelPurchaseOrder, receipts: List<HotelPurchaseGoodsReceipt>,
-              unavailable: Map<String, Double>, amount: Double) {
-        require(amount.isFinite() && amount >= 0) { "Final bill amount is required" }
+              unavailable: Map<String, Double>, amount: Double?) {
+        require(HotelPurchaseInvoicePendingPolicy.validAmount(amount)) { "Enter a valid invoice amount" }
         val record = get(order.id)
         require(!record.closed) { "Order already closed" }
         require(order.status == "PLACED") { "Only placed orders can be delivered" }
@@ -88,6 +98,19 @@ class HotelPurchaseSimpleClosureStore(context: Context) {
         require(receipts.isNotEmpty() || unavailable.isNotEmpty()) { "Delivery not recorded" }
         require(record.unavailable == unavailable) { "Unavailable item history changed" }
         persist(record.copy(finalAmount = amount, closedAtMillis = System.currentTimeMillis(), unavailable = unavailable))
+    }
+
+    /** Record vendor invoice after physical closure without rewriting receipt history. */
+    fun recordInvoice(orderId: String, amount: Double) {
+        require(amount.isFinite() && amount >= 0.0) { "Enter the actual invoice amount" }
+        val old = get(orderId)
+        require(old.invoicePending) { "This order is not awaiting an invoice" }
+        persist(old.copy(
+            finalAmount = amount,
+            updates = old.updates + HotelPurchaseDeliveryUpdate(
+                System.currentTimeMillis(), amount, "", "FINAL_INVOICE_RECEIVED"
+            )
+        ))
     }
 
     private fun persist(record: HotelPurchaseSimpleClosure) {
@@ -108,7 +131,7 @@ class HotelPurchaseSimpleClosureStore(context: Context) {
                 record.updates.forEach { update ->
                     put(JSONObject().apply {
                         put("atMillis", update.atMillis)
-                        put("billAmount", update.billAmount)
+                        put("billAmount", update.billAmount ?: JSONObject.NULL)
                         put("receiptId", update.receiptId)
                         put("note", update.note)
                     })

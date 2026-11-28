@@ -153,10 +153,15 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
         val drafts: List<HotelPurchaseOrder>,
         val awaitingDelivery: List<HotelPurchaseOrder>,
         val shortages: List<HotelPurchaseOrder>,
+        val pendingInvoice: List<HotelPurchaseOrder>,
         val delivered: List<HotelPurchaseOrder>
     )
 
+    private fun isPendingInvoice(order: HotelPurchaseOrder): Boolean =
+        closures.get(order.id).invoicePending
+
     private fun isDelivered(order: HotelPurchaseOrder): Boolean {
+        if (isPendingInvoice(order)) return false
         if (closures.get(order.id).closed || workflows.get(order.id).archived || order.status == "ARCHIVED") return true
         val history = receipts.forOrder(order.id)
         if (history.isEmpty()) return false
@@ -166,14 +171,15 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
 
     private fun homeBuckets(): HomeBuckets {
         val drafts = orders.all().filter(::isDraft)
-        val placed = orders.all().filter { it.status == "PLACED" && !isDelivered(it) }
+        val placed = orders.all().filter { it.status == "PLACED" && !isDelivered(it) && !isPendingInvoice(it) }
         val shortages = placed.filter { order ->
             val history = receipts.forOrder(order.id)
             history.isNotEmpty() || closures.get(order.id).updates.isNotEmpty()
         }
         val awaitingDelivery = placed.filter { it !in shortages }
+        val pendingInvoice = orders.all().filter(::isPendingInvoice)
         val delivered = orders.all().filter(::isDelivered)
-        return HomeBuckets(drafts, awaitingDelivery, shortages, delivered)
+        return HomeBuckets(drafts, awaitingDelivery, shortages, pendingInvoice, delivered)
     }
 
     private fun sectionScreenHeader(root: LinearLayout, title: String, subtitle: String) {
@@ -243,12 +249,13 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
             "DRAFTS" -> drawDrafts(content)
             "PENDING_DELIVERY" -> drawPendingDelivery(content)
             "SHORT_DELIVERY" -> drawShortDelivery(content)
+            "PENDING_INVOICE" -> drawPendingInvoice(content)
             "DELIVERED" -> drawDelivered(content)
             else -> drawHome(content)
         }
     }
 
-    private fun isArchived(order: HotelPurchaseOrder): Boolean = isDelivered(order)
+    private fun isArchived(order: HotelPurchaseOrder): Boolean = isDelivered(order) || isPendingInvoice(order)
 
     private fun isPlaced(order: HotelPurchaseOrder): Boolean =
         order.status == "PLACED" && !isArchived(order)
@@ -354,6 +361,21 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
 
         root.addView(space(12))
         root.addView(homeCard(
+            title = "Pending Invoice",
+            subtitle = "Goods received · Awaiting vendor bill",
+            count = buckets.pendingInvoice.size,
+            cardColor = orangeCard,
+            borderColor = orangeStroke,
+            accentColor = orange,
+            badgeColor = redBadge,
+            iconGlyph = "🧾"
+        ) {
+            page = "PENDING_INVOICE"
+            renderPage()
+        }, LinearLayout.LayoutParams(-1, -2))
+
+        root.addView(space(12))
+        root.addView(homeCard(
             title = "Delivered",
             subtitle = "Completed orders & bill references",
             count = buckets.delivered.size,
@@ -423,6 +445,29 @@ class HotelPurchaseOrderScreen(private val activity: Activity) {
                 HotelPurchaseSimpleDeliveryScreen(activity).open(order) { renderPage() }
             }, LinearLayout.LayoutParams(-1, dp(58)))
             root.addView(space(8))
+        }
+    }
+
+    private fun drawPendingInvoice(root: LinearLayout) {
+        val queue = homeBuckets().pendingInvoice
+        sectionScreenHeader(root, "Pending Invoice", "Goods reconciled; vendor bill not yet recorded")
+        if (queue.isEmpty()) {
+            root.addView(text("No orders are waiting for invoices.", 14f))
+            return
+        }
+        queue.groupBy { it.vendorId }.forEach { (_, grouped) ->
+            root.addView(text(grouped.first().vendorName, 17f, true))
+            root.addView(space(6))
+            grouped.forEach { order ->
+                val closed = closures.get(order.id)
+                val day = java.text.SimpleDateFormat("dd MMM yyyy", java.util.Locale.getDefault())
+                    .format(java.util.Date(closed.closedAtMillis))
+                root.addView(button("Order ${order.id.take(8)} · Goods $day · Record Invoice  ›") {
+                    HotelPurchaseSimpleDeliveryScreen(activity).showPendingInvoice(order) { renderPage() }
+                }, LinearLayout.LayoutParams(-1, dp(60)))
+                root.addView(space(7))
+            }
+            root.addView(space(12))
         }
     }
 
